@@ -547,9 +547,13 @@ test(
       files: 'read-only',
       network: 'denied',
     });
+    // "New session" stays on an untouched session; a title makes this one a session of its own.
+    await carrier.dispatch({ type: 'rename', id: a, title: 'a' });
     await carrier.dispatch({ type: 'create' });
     const b = carrier.snapshot.session.sessionId!;
     assert.notEqual(a, b);
+    // Leaving an untouched session discards it; B has to outlive the switch back to A.
+    await carrier.dispatch({ type: 'rename', id: b, title: 'b' });
     await carrier.dispatch({
       type: 'sandbox',
       mode: 'host',

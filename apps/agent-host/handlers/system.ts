@@ -45,6 +45,8 @@ export const systemHandlers: Readonly<Record<string, Handler>> = {
       'sessions',
       'session-management',
       'session-recover-v1',
+      // `session.list` answers `started`; a client may only treat a session as untouched when this is offered.
+      'session-started-v1',
       'streaming',
       'message-turns',
       'approval',

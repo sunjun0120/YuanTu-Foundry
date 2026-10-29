@@ -16,6 +16,7 @@ import {
   type HostContext,
 } from '../state.ts';
 import type { Handler } from '../dispatch.ts';
+import type { SessionListPage } from '../../../packages/storage/session-search.ts';
 import { reclaimSpace } from '../space-reclaim.ts';
 
 /** A change to one session's own rows: only that session has to be idle. */
@@ -117,11 +118,12 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
     if (params.query !== undefined && typeof params.query !== 'string')
       throw new Error('Invalid search query');
     // The store validates the page fields; only the ones the caller sent are passed, so an absent field stays absent.
-    const page: { limit?: number; before?: string; id?: string; archived?: boolean } = {};
+    const page: SessionListPage = {};
     if (params.limit !== undefined) page.limit = params.limit as number;
     if (params.before !== undefined) page.before = params.before as string;
     if (params.id !== undefined) page.id = params.id as string;
     if (params.archived !== undefined) page.archived = params.archived as boolean;
+    if (params.started !== undefined) page.started = params.started as boolean;
     return ctx.store.list(params.query as string | undefined, ctx.workspace, page);
   },
   'session.rename': async (ctx, params) => {

@@ -357,10 +357,18 @@ export interface HostMethods {
   /**
    * Newest first. `limit` (1–500) returns one page and `before` (the last id of the previous page) continues it;
    * `id` narrows the answer to that one session, or to nothing when it is gone. With neither, the whole list.
-   * `archived` keeps only archived sessions (`true`) or only the others (`false`); absent, both.
+   * `archived` keeps only archived sessions (`true`) or only the others (`false`); absent, both. `started` does
+   * the same for sessions something has happened in — a message, a title, a run or a task — against untouched ones.
    */
   'session.list': {
-    params: { query?: string; limit?: number; before?: string; id?: string; archived?: boolean };
+    params: {
+      query?: string;
+      limit?: number;
+      before?: string;
+      id?: string;
+      archived?: boolean;
+      started?: boolean;
+    };
     result: SessionInfo[];
   };
   'session.rename': { params: { sessionId: string; title: string }; result: SessionInfo };

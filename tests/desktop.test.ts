@@ -173,7 +173,11 @@ test('desktop service loads persisted sessions after restart and opens another s
   release();
   await send;
   assert.deepEqual(service.snapshot.session.otherRuns, []);
-  assert.equal(service.snapshot.sessions.length, 2);
+  // The new session is still untouched, so the sidebar does not list it yet.
+  assert.deepEqual(
+    service.snapshot.sessions.map((session) => session.id),
+    [first],
+  );
   await service.dispatch({ type: 'load', id: first });
   assert.equal(service.snapshot.session.messages.at(-1)?.content, 'Desktop answer');
   await service.stop();

@@ -64,6 +64,8 @@ test('archiving through the carrier hides the session from the sidebar and moves
   const { root, file, store } = await fixture(t);
   const older = store.create(root);
   store.append(older.id, { role: 'user', content: 'older' });
+  // Appends are buffered in this process; the Host reads the database.
+  store.flush();
   service = new CarrierService({
     nodePath: process.execPath,
     hostPath: path.resolve('apps/agent-host/main.ts'),
@@ -73,6 +75,8 @@ test('archiving through the carrier hides the session from the sidebar and moves
   await service.start();
   await service.dispatch({ type: 'create' });
   const open = service.snapshot.session.sessionId!;
+  // An untouched session is not listed at all; a title is enough to make it one the sidebar shows.
+  await service.dispatch({ type: 'rename', id: open, title: 'open' });
   await service.dispatch({ type: 'archiveSession', id: open, archived: true });
   assert.notEqual(service.snapshot.session.sessionId, open, 'the window left the archived session');
   assert.equal(service.snapshot.session.sessionId, older.id);

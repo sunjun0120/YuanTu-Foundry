@@ -163,6 +163,14 @@ export class CarrierService {
   private restoring = false;
   private managing = false;
   private sessionQuery = '';
+  /**
+   * Sessions "New session" made in this carrier and nobody has written in yet.
+   *
+   * A new session works like a draft: the sidebar does not list it until it holds something, pressing "New
+   * session" again stays on it, and leaving it while it is still untouched deletes it. Only sessions made here
+   * qualify, so an empty session another client opened is never deleted from under it.
+   */
+  private readonly drafts = new Set<string>();
   private currentSession: SessionInfo | null = null;
   private searchVersion = 0;
   private ready = false;
@@ -451,9 +459,53 @@ export class CarrierService {
   }
   /** The newest session the sidebar lists, or a new one when it lists none. */
   private async openNewestListed(): Promise<void> {
-    const remaining = await this.client.request('session.list', { limit: 1, archived: false });
+    const remaining = await this.client.request('session.list', {
+      limit: 1,
+      archived: false,
+      ...this.startedOnly(),
+    });
     if (remaining[0]) await this.controller.load(remaining[0].id);
-    else await this.controller.create();
+    else await this.openNew();
+  }
+  /** The sidebar lists only sessions something has happened in, when the Host can tell them apart. */
+  private startedOnly(): { started?: true } {
+    return this.client.supports('session-started-v1') ? { started: true } : {};
+  }
+  /** Whether nothing has happened in the listed session yet; never true for a Host that cannot tell. */
+  private async untouched(sessionId: string): Promise<boolean> {
+    if (!this.client.supports('session-started-v1')) return false;
+    const found = await this.client.request('session.list', {
+      id: sessionId,
+      started: false,
+      archived: false,
+    });
+    return found.length > 0;
+  }
+  /** "New session": an untouched open session already is one, so only a session with something in it is left. */
+  private async openNew(): Promise<void> {
+    const open = this.controller.sessionId;
+    if (open && (await this.untouched(open))) return;
+    const created = await this.controller.create();
+    if (this.client.supports('session-started-v1')) this.drafts.add(created);
+  }
+  /**
+   * Delete a draft the window just left, when it is still untouched.
+   *
+   * Best effort: the switch already happened, and a draft the Host refuses to delete stays out of the sidebar
+   * anyway because the list only names started sessions.
+   */
+  private async discardDraft(sessionId: string | null): Promise<void> {
+    if (!sessionId || sessionId === this.controller.sessionId || !this.drafts.delete(sessionId))
+      return;
+    try {
+      if (!(await this.untouched(sessionId))) return;
+      await this.client.request('session.delete', { sessionId });
+      this.sandboxSelections.delete(sessionId);
+      this.permissionPolicies.delete(sessionId);
+      this.unconfirmedPolicies.delete(sessionId);
+    } catch {
+      // Left in place, unlisted; see above.
+    }
   }
   /** On demand, like the orphan inventory: the settings page asks for it, every snapshot does not carry it. */
   async archivedSessions(): Promise<SessionInfo[]> {
@@ -708,8 +760,9 @@ export class CarrierService {
       const next = await this.client.request('session.list', {
         ...(this.sessionQuery ? { query: this.sessionQuery } : {}),
         limit: want,
-        // Archived sessions live on their own settings page, not in the sidebar.
+        // Archived sessions live on their own settings page, not in the sidebar, and so do untouched ones.
         archived: false,
+        ...this.startedOnly(),
         ...(page.length ? { before: page.at(-1)!.id } : {}),
       });
       page.push(...next);
@@ -861,7 +914,7 @@ export class CarrierService {
           this.resources = deepFreeze(await this.client.request('resources.list', {}));
           if (open) await this.controller.load(open);
           else if (this.sessions[0]) await this.controller.load(this.sessions[0].id);
-          else await this.controller.create();
+          else await this.openNew();
           await this.refresh();
           await this.refreshModelSelection();
           if (this.client.supports('runtime.ready')) await this.client.request('runtime.ready', {});
@@ -942,7 +995,7 @@ export class CarrierService {
       if (sessionId) await this.controller.load(sessionId);
       else if (this.sessions[0]) await this.controller.load(this.sessions[0].id);
       else {
-        await this.controller.create();
+        await this.openNew();
         await this.refresh();
       }
       await this.refresh();
@@ -1096,6 +1149,7 @@ export class CarrierService {
         }
         case 'deleteSession': {
           await this.client.request('session.delete', { sessionId: command.id });
+          this.drafts.delete(command.id);
           this.sandboxSelections.delete(command.id);
           this.permissionPolicies.delete(command.id);
           // The unconfirmed marker goes with it: both describe a session that no longer exists.
@@ -1129,12 +1183,15 @@ export class CarrierService {
         }
         case 'create':
           this.transcript.close();
-          await this.controller.create();
+          await this.openNew();
           break;
-        case 'load':
+        case 'load': {
           this.transcript.close();
+          const left = this.controller.sessionId;
           await this.controller.load(command.id);
+          await this.discardDraft(left);
           break;
+        }
         case 'loadOlder':
           await this.controller.loadOlder();
           break;

@@ -131,6 +131,8 @@ test('Host scopes session management to its workspace and desktop replaces delet
     foreign = store.create(path.join(root, 'other'));
   store.append(a.id, { role: 'user', content: 'searchable message' });
   store.append(foreign.id, { role: 'user', content: 'foreign secret message' });
+  // Appends are buffered in this process; the Host reads the database.
+  store.flush();
   const foreignChange = store.prepareFileChange(
     foreign.id,
     {
@@ -210,7 +212,8 @@ test('Host scopes session management to its workspace and desktop replaces delet
   await service.dispatch({ type: 'deleteSession', id: a.id });
   assert.ok(service.snapshot.session.sessionId);
   assert.notEqual(service.snapshot.session.sessionId, a.id);
-  assert.equal(service.snapshot.sessions.length, 1);
+  // The replacement is a new, untouched session: open, and not listed until something happens in it.
+  assert.equal(service.snapshot.sessions.length, 0);
 });
 test('concurrent store opens migrate one legacy database without duplicate columns or losing sessions', async (t) => {
   const { root } = await fixture(t);
@@ -418,7 +421,8 @@ test('the desktop list is a window over the newest sessions that grows on reques
     await service?.stop();
   });
   const { root, file, store } = await fixture(t);
-  for (let index = 0; index < 105; index++) store.create(root);
+  // Titled, because the sidebar lists only sessions something has happened in.
+  for (let index = 0; index < 105; index++) store.rename(store.create(root).id, `session ${index}`);
   service = new CarrierService({
     nodePath: process.execPath,
     hostPath: path.resolve('apps/agent-host/main.ts'),
@@ -426,7 +430,7 @@ test('the desktop list is a window over the newest sessions that grows on reques
     db: file,
   });
   await service.start();
-  // Starting opens (or creates) a session of its own, so the workspace holds at least 105.
+  // Starting opens the newest of them, so the workspace holds exactly 105 listed sessions.
   assert.equal(service.snapshot.sessions.length, 100);
   assert.equal(service.snapshot.sessionsHasMore, true);
   const opened = service.snapshot.session.sessionId;

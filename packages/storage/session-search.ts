@@ -18,6 +18,14 @@ export interface SessionListPage {
   id?: string;
   /** `true` lists only archived sessions, `false` only the rest; absent lists both. */
   archived?: boolean;
+  /**
+   * `true` lists only sessions something has happened in, `false` only the untouched ones; absent lists both.
+   *
+   * Untouched is the state "New session" leaves behind: no message, no title, no task, and no run or subagent in
+   * its history — settings recorded while it was opened do not count. The sidebar asks
+   * for the started ones, so a session nobody wrote in does not linger in the list.
+   */
+  started?: boolean;
 }
 
 export interface SessionSearchPort {
@@ -51,7 +59,8 @@ export class SessionSearch {
         (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > MAX_SESSION_PAGE)) ||
       (page.before !== undefined && typeof page.before !== 'string') ||
       (page.id !== undefined && typeof page.id !== 'string') ||
-      (page.archived !== undefined && typeof page.archived !== 'boolean')
+      (page.archived !== undefined && typeof page.archived !== 'boolean') ||
+      (page.started !== undefined && typeof page.started !== 'boolean')
     )
       throw new Error('Invalid session page');
     // Titles and the full-text index are written with the message, so a list or a search has to see the
@@ -76,6 +85,12 @@ export class SessionSearch {
            AND (? IS NULL OR (created_at,rowid) < (SELECT created_at,rowid FROM sessions WHERE id=?))
            AND (? IS NULL OR id=?)
            AND (? IS NULL OR (archived_at IS NOT NULL)=?)
+           AND (? IS NULL OR (coalesce(title,'')<>'' OR active_run IS NOT NULL
+             OR EXISTS (SELECT 1 FROM messages WHERE session_id=sessions.id)
+             OR EXISTS (SELECT 1 FROM tasks WHERE session_id=sessions.id)
+             OR EXISTS (SELECT 1 FROM runs WHERE session_id=sessions.id)
+             OR EXISTS (SELECT 1 FROM session_events WHERE session_id=sessions.id
+               AND (type LIKE 'run.%' OR type LIKE 'subagent.%')))=?)
          ORDER BY created_at DESC,rowid DESC
          LIMIT ?`,
       )
@@ -92,6 +107,8 @@ export class SessionSearch {
         page.id ?? null,
         page.archived === undefined ? null : Number(page.archived),
         page.archived === undefined ? null : Number(page.archived),
+        page.started === undefined ? null : Number(page.started),
+        page.started === undefined ? null : Number(page.started),
         // SQLite reads a negative LIMIT as "no limit".
         page.limit ?? -1,
       ) as unknown as Session[];
