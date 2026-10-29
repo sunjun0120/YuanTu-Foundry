@@ -14,6 +14,7 @@ export type UiFontSize = 'small' | 'medium' | 'large';
 export interface UiSettings {
   language: UiLanguage;
   appearance: UiAppearance;
+  /** Conversation message text only; interface controls and workspace previews stay at their standard size. */
   fontSize: UiFontSize;
   /** System notifications when a run ends or waits on the person; see `main-notifications.ts`. */
   notifications: boolean;

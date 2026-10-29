@@ -16,6 +16,7 @@ import {
   type SessionSidebarController,
 } from './session-model.ts';
 import { SessionRow } from './SessionRow.tsx';
+import { AssetIcon } from '../icons/AssetIcon.tsx';
 
 export function SessionSidebar({
   controller,
@@ -27,37 +28,15 @@ export function SessionSidebar({
   const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const menu = useRef<HTMLDivElement>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const focusFirst = useRef(false);
 
-  const cancelClose = (): void => {
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    closeTimer.current = null;
-  };
-  const scheduleClose = (): void => {
-    cancelClose();
-    const check = (): void => {
-      // While the pointer is on the trigger or inside the popup the menu stays; the timer only measures the time
-      // *after* leaving both. A fixed delay alone closed it under a slow hover-to-click in a loaded window.
-      const over =
-        (anchor?.matches(':hover') ?? false) || (menu.current?.matches(':hover') ?? false);
-      if (over) {
-        closeTimer.current = setTimeout(check, 120);
-        return;
-      }
-      controller.closeMenu();
-    };
-    closeTimer.current = setTimeout(check, 120);
-  };
   const openMenu = (button: HTMLButtonElement, sessionId: string): void => {
     if (state.blocked) return;
-    // A close scheduled by the previous row must not close the menu that is opening now.
-    cancelClose();
     const rect = button.getBoundingClientRect();
     setAnchor(button);
     setPosition({
-      left: Math.max(8, Math.min(rect.right - 160, innerWidth - 168)),
-      top: Math.max(8, Math.min(rect.bottom, innerHeight - 96)),
+      left: Math.max(8, Math.min(rect.right + 8, innerWidth - 125)),
+      top: Math.max(8, Math.min(rect.top, innerHeight - 100)),
     });
     controller.openMenu(sessionId);
   };
@@ -77,6 +56,10 @@ export function SessionSidebar({
       if (!menu.current?.contains(target) && !anchor?.contains(target)) controller.closeMenu();
     };
     const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Tab') {
+        controller.closeMenu();
+        return;
+      }
       if (event.key !== 'Escape') return;
       event.preventDefault();
       const trigger = anchor;
@@ -90,8 +73,6 @@ export function SessionSidebar({
       document.removeEventListener('keydown', onKey);
     };
   }, [state.menuSessionId, anchor, controller]);
-
-  useEffect(() => () => cancelClose(), []);
 
   const showAll = state.expanded || state.searching;
   const foldable = sessionsFoldable(state);
@@ -112,13 +93,13 @@ export function SessionSidebar({
             controller={controller}
             onMenu={(button, sessionId) => {
               focusFirst.current = false;
-              openMenu(button, sessionId);
+              if (state.menuSessionId === sessionId) controller.closeMenu();
+              else openMenu(button, sessionId);
             }}
             onMenuKeyboard={(button, sessionId) => {
               focusFirst.current = true;
               openMenu(button, sessionId);
             }}
-            onMenuLeave={scheduleClose}
           />
         ))}
         {showAll && state.hasMore ? (
@@ -148,16 +129,11 @@ export function SessionSidebar({
         <div
           ref={menu}
           id="session-menu"
-          className="session-menu"
+          className="session-menu entry-action-menu"
           role="menu"
           aria-label={t('session.actions')}
           hidden={!state.menuSessionId}
           style={position ? { left: position.left, top: position.top } : undefined}
-          onMouseEnter={cancelClose}
-          onMouseLeave={scheduleClose}
-          onBlur={(event) => {
-            if (!menu.current?.contains(event.relatedTarget as Node)) scheduleClose();
-          }}
         >
           <button
             type="button"
@@ -167,6 +143,7 @@ export function SessionSidebar({
               if (state.menuSessionId) controller.openDialog('rename', state.menuSessionId);
             }}
           >
+            <AssetIcon name="sidebar-rename" size={16} />
             {t('session.rename')}
           </button>
           <button
@@ -178,6 +155,7 @@ export function SessionSidebar({
               if (state.menuSessionId) controller.openDialog('delete', state.menuSessionId);
             }}
           >
+            <AssetIcon name="sidebar-delete" size={16} />
             {t('session.delete')}
           </button>
         </div>,

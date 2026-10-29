@@ -102,7 +102,7 @@ test(
       assert.equal(await page.locator('select#model').count(), 0);
       assert.equal(
         await page.locator('#chat-page').evaluate((el) => getComputedStyle(el).backgroundColor),
-        theme === 'dark' ? 'rgb(20, 20, 22)' : 'rgb(255, 255, 255)',
+        theme === 'dark' ? 'rgb(20, 20, 22)' : 'rgb(248, 248, 247)',
       );
       assert.equal(await page.locator('.logo-' + theme).isVisible(), true);
       assert.equal(
@@ -124,10 +124,7 @@ test(
     await chooseSelectOption(page, 'ui-language', 'English');
     await page.waitForFunction(() => document.documentElement.lang === 'en-US');
     assert.equal(await page.locator('#general-settings-title').innerText(), 'General');
-    assert.equal(
-      (await page.locator('#settings-back').innerText()).replace(/\s+/g, ' '),
-      '← Back to chat',
-    );
+    assert.equal(await page.locator('#settings-back').getAttribute('aria-label'), 'Back to chat');
     assert.equal(
       (await page.locator('#model-settings').innerText()).replace(/\s+/g, ' '),
       'Models',
@@ -231,7 +228,7 @@ test(
       );
     }
     await page.locator('#settings-back').click();
-    assert.equal(await page.locator('#new-session').innerText(), '＋ New session');
+    assert.equal((await page.locator('#new-session').innerText()).trim(), 'New task');
     assert.equal(
       await page.locator('#prompt').getAttribute('placeholder'),
       'Send a message or describe a task...',
@@ -258,27 +255,18 @@ test(
         sidebar: getComputedStyle(document.querySelector('.settings-sidebar')).backgroundColor,
         chatSidebar: getComputedStyle(document.querySelector('#chat-sidebar')).backgroundColor,
       }));
-      assert.equal(colors.settings, colors.chat);
-      assert.equal(colors.sidebar, colors.chatSidebar);
-      // The Mantine select is a read-only combobox: its field is clicked, its options live in a portal.
+      assert.equal(colors.settings, colors.sidebar);
       const field = page.locator('#ui-appearance');
-      const label = await page.locator('label[for="ui-appearance"]').boundingBox();
+      const label = await page.locator('#ui-appearance-label').boundingBox();
       const box = await field.boundingBox();
-      assert.ok(box && label, 'the select and its label must be laid out');
-      assert.ok(box.height >= 30, 'the select must keep its control height');
-      await field.click();
-      assert.equal(await page.getByRole('listbox').isVisible(), true);
-      await page.keyboard.press('Escape');
-      await page.getByRole('listbox').waitFor({ state: 'hidden' });
-      // Neither pointer nor keyboard focus should add an outer ring.
-      await field.click();
-      assert.equal(await field.evaluate((el) => getComputedStyle(el).outlineStyle), 'none');
-      await page.keyboard.press('Escape');
+      assert.ok(box && label, 'the appearance cards and their heading must be laid out');
+      assert.ok(box.height >= 66, 'the appearance cards must keep their control height');
+      const selected = field.locator(`[data-value="${value}"]`);
+      assert.equal(await selected.getAttribute('aria-pressed'), 'true');
+      await selected.focus();
+      assert.equal(await selected.evaluate((el) => document.activeElement === el), true);
       await page.keyboard.press('Tab');
-      assert.equal(
-        await page.locator('#ui-font-size').evaluate((el) => getComputedStyle(el).outlineStyle),
-        'none',
-      );
+      assert.equal(await page.locator('.settings-dialog').isVisible(), true);
       await page.locator('#general-settings-title').click();
       await mkdir(artifactPath(''), { recursive: true });
       await page.screenshot({ path: artifactPath('settings-general-') + value + '.png' });
@@ -374,11 +362,13 @@ test(
           content &&
           Number(getComputedStyle(content).opacity) === 1 &&
           Number(getComputedStyle(settings).opacity) === 1 &&
-          [...settings.children].every((child) => child === content || child.hidden)
+          [...settings.querySelectorAll('.settings-main > .settings-content')].every(
+            (child) => child === content || child.hidden,
+          )
         );
       }, panel);
       assert.equal(
-        await page.locator('#settings-page > .settings-content:visible').count(),
+        await page.locator('#settings-page .settings-main > .settings-content:visible').count(),
         1,
         tab + ' must display exactly one settings panel',
       );

@@ -122,15 +122,6 @@ export function sessionStatusLabel(activity: SessionActivity | undefined): strin
   return '';
 }
 
-/** The row's tooltip: its title, then the live state when there is one. */
-export function sessionTooltip(
-  item: Pick<SessionInfo, 'id' | 'title'>,
-  activity: SessionActivity | undefined,
-): string {
-  const label = sessionStatusLabel(activity);
-  return `${sessionTitle(item)}${label ? `\n${label}` : ''}`;
-}
-
 export function createSessionSidebarController(deps: {
   select(command: CarrierCommand): Promise<CarrierSnapshot | null>;
 }): SessionSidebarController {

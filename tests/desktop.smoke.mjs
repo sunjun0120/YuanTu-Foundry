@@ -970,7 +970,7 @@ test(
     const original = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.sessionId,
     );
-    await page.getByRole('button', { name: '新建会话', exact: true }).click();
+    await page.getByRole('button', { name: '新建任务', exact: true }).click();
     await page.getByRole('heading', { name: '从一个任务开始。' }).waitFor();
     await page.locator('#chat-title').getByText('新会话', { exact: true }).waitFor();
     await app.close();
@@ -1162,7 +1162,7 @@ test(
     const id = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.sessionId,
     );
-    await page.getByRole('button', { name: '新建会话', exact: true }).click();
+    await page.getByRole('button', { name: '新建任务', exact: true }).click();
     await page.locator(`[data-session-id="${id}"]`).click();
     await page.locator('#messages .turn-changes').waitFor();
     assert.match(await page.locator('.turn-change-row').textContent(), /main.ts/);

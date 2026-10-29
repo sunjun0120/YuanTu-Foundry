@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setLocale, t } from '../apps/desktop/i18n.ts';
+import { setLocale, t, translate } from '../apps/desktop/i18n.ts';
 import { builtinSkills } from '../packages/resources/builtin-skills.ts';
 import {
+  BUILTIN_SKILL_DESCRIPTIONS,
   commandItems,
   commandQuery,
   exportPayload,
@@ -56,7 +57,7 @@ test('filtering matches name, description and value, and includes skills', () =>
 
 test('the built-in analysis description follows the interface language without changing local skills', () => {
   const skills = [
-    ...builtinSkills(),
+    ...builtinSkills({ analysisService: true }),
     { name: 'local-review', description: '项目自定义说明', path: '/workspace/skills/review.md' },
   ];
   try {
@@ -75,6 +76,28 @@ test('the built-in analysis description follows the interface language without c
     );
     setLocale('zh-CN');
     assert.match(paletteItems('/code-analysis', false, skills)[0]!.description, /内置代码分析/);
+  } finally {
+    setLocale('zh-CN');
+  }
+});
+
+test('every built-in skill has a description in both interface languages', () => {
+  const skills = builtinSkills({ analysisService: true });
+  assert.deepEqual(
+    skills.map((skill) => skill.path).sort(),
+    Object.keys(BUILTIN_SKILL_DESCRIPTIONS).sort(),
+  );
+  for (const skill of skills) {
+    const key = BUILTIN_SKILL_DESCRIPTIONS[skill.path]!;
+    assert.match(translate(key, 'zh-CN'), /[一-鿿]/, `${key} in Chinese`);
+    assert.doesNotMatch(translate(key, 'en-US'), /[一-鿿]/, `${key} in English`);
+  }
+  try {
+    setLocale('zh-CN');
+    const office = paletteItems('/office', false, skills).find(
+      (item) => item.value === 'office-documents',
+    );
+    assert.match(office!.description, /演示文稿/);
   } finally {
     setLocale('zh-CN');
   }

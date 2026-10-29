@@ -1,11 +1,12 @@
 /**
- * The project's theme: the existing palette expressed for Mantine, and the two pure mappings the tests pin.
+ * The project's fixed interface theme, palette and appearance/conversation-size mappings.
  *
  * The window already has one source of truth for appearance and text size: the general-settings controller writes
  * `data-theme` (`system|light|dark`) and `data-font-size` (`small|medium|large`) on the document element, and the
- * six legacy sheets read those attributes. Mantine must not add a second store — no `localStorage` colour scheme,
- * no provider-owned settings copy — so the provider subscribes to those same attributes and forces Mantine's
- * scheme from them. `system` resolves through `prefers-color-scheme`, while an explicit light/dark choice must not
+ * stylesheet reads those attributes. Conversation size affects message text through CSS, while Mantine's
+ * interface size stays fixed. Mantine must not add a second appearance store — no `localStorage` colour scheme,
+ * no provider-owned settings copy — so the provider subscribes to the appearance attribute and forces Mantine's
+ * scheme from it. `system` resolves through `prefers-color-scheme`, while an explicit light/dark choice must not
  * move when the system changes.
  *
  * Colours are mapped onto the existing `--surface/--raised/--hover/--line/--ink/--muted/--accent` variables rather
@@ -22,7 +23,7 @@ import {
 export type Appearance = 'system' | 'light' | 'dark';
 export type FontSizeName = 'small' | 'medium' | 'large';
 
-/** The base body size for each choice; the existing interface uses 13/14/16px. */
+/** Conversation text choices; interface controls keep the standard 14px base. */
 const BASE_FONT_SIZE: Record<FontSizeName, number> = { small: 13, medium: 14, large: 16 };
 
 export function resolveColorScheme(appearance: Appearance, systemDark: boolean): 'light' | 'dark' {

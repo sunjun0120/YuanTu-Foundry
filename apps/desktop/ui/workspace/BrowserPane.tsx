@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { BrowserCommand, BrowserState } from '../../browser-contract.ts';
 import { resolveBrowserAddress } from '../../browser-url.ts';
 import { t } from '../../i18n.ts';
+import { Icon } from './Icon.tsx';
 
 function overlayOpen(): boolean {
   for (const node of document.querySelectorAll<HTMLElement>(
@@ -123,7 +124,7 @@ export function BrowserPane({ id, state }: { id: string; state: BrowserState }):
           disabled={!state.canGoBack}
           onClick={() => send({ type: 'back', id })}
         >
-          ←
+          <Icon kind="arrow-left" />
         </button>
         <button
           type="button"
@@ -132,7 +133,7 @@ export function BrowserPane({ id, state }: { id: string; state: BrowserState }):
           disabled={!state.canGoForward}
           onClick={() => send({ type: 'forward', id })}
         >
-          →
+          <Icon kind="arrow-right" />
         </button>
         <button
           type="button"
@@ -141,33 +142,36 @@ export function BrowserPane({ id, state }: { id: string; state: BrowserState }):
           data-loading={state.loading ? 'true' : undefined}
           onClick={() => send({ type: state.loading ? 'stop' : 'reload', id })}
         >
-          {state.loading ? '×' : '⟳'}
+          <Icon kind={state.loading ? 'close' : 'rotate-cw'} />
         </button>
-        <input
-          ref={addressInput}
-          className="browser-address"
-          aria-label={t('browser.addressLabel')}
-          placeholder={t('browser.addressPlaceholder')}
-          value={address}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoComplete="off"
-          onChange={(event) => {
-            setAddress(event.target.value);
-            setAddressError('');
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.stopPropagation();
-              setAddress(state.url);
+        <label className="browser-address-box">
+          <Icon kind="lock" />
+          <input
+            ref={addressInput}
+            className="browser-address"
+            aria-label={t('browser.addressLabel')}
+            placeholder={t('browser.addressPlaceholder')}
+            value={address}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoComplete="off"
+            onChange={(event) => {
+              setAddress(event.target.value);
               setAddressError('');
-              return;
-            }
-            if (event.key !== 'Enter') return;
-            event.preventDefault();
-            submit();
-          }}
-        />
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation();
+                setAddress(state.url);
+                setAddressError('');
+                return;
+              }
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              submit();
+            }}
+          />
+        </label>
         <button
           type="button"
           aria-label={t('browser.openExternal')}
@@ -175,7 +179,7 @@ export function BrowserPane({ id, state }: { id: string; state: BrowserState }):
           disabled={!state.url}
           onClick={() => send({ type: 'open-external', id, url: state.url })}
         >
-          ↗
+          <Icon kind="external" />
         </button>
       </div>
       {addressError ? (

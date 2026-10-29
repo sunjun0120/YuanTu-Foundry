@@ -27,7 +27,7 @@ const SHIELD = 'm12 3 8 4v6c0 4-4 7-8 9-4-2-8-5-8-9V7l8-4Z';
 const ICONS: Record<PermissionReading, string[]> = {
   observe: [`${SHIELD}`, 'm9.2 12.1 1.9 1.9 3.7-3.7'],
   guarded: [`${SHIELD}`, 'm15.1 9.6 1.3 1.3-4.4 4.4-1.9.6.6-1.9z'],
-  auto: [`${SHIELD}`, 'm9 10.2 2 1.8-2 1.8', 'M12.6 14.4h2.6'],
+  auto: ['m13 2-9 12h7l-1 8 10-12h-7l1-8Z'],
   unconfined: [`${SHIELD}`, 'M12 10.2v3.6', 'M12 16.4h.01'],
   custom: [`${SHIELD}`, 'M12 10.2v3.6', 'M12 16.4h.01'],
 };

@@ -174,7 +174,8 @@ test(
       }
     };
     const toChat = async () => {
-      if ((await page.locator('#settings-page').getAttribute('data-page-active')) === 'true')
+      // Settings is a dialog over the chat; it is open exactly when its page is on screen.
+      if (await page.locator('#settings-page').isVisible())
         await page.locator('#settings-back').click();
       await page.locator('#settings-page').waitFor({ state: 'hidden' });
     };

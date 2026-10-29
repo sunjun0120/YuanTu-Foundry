@@ -86,7 +86,7 @@ test(
 // ---- merged from settings-page.smoke.mjs ----
 
 test(
-  'settings is a full page and chat switches saved models without losing session or draft',
+  'settings opens in a card and chat switches saved models without losing session or draft',
   { timeout: 45000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-settings-page-'));
@@ -126,8 +126,9 @@ test(
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator('#open-settings').click();
     assert.equal(await page.locator('#settings-page').isVisible(), true);
-    await page.locator('#chat-page').waitFor({ state: 'hidden' });
-    assert.equal(await page.locator('#chat-page').isVisible(), false);
+    assert.equal(await page.locator('.settings-dialog[role="dialog"]').isVisible(), true);
+    assert.equal(await page.locator('#chat-page').isVisible(), true);
+    assert.equal(await page.locator('#chat-page').getAttribute('inert'), '');
     assert.equal(await page.locator('#general-settings-content').isVisible(), true);
     assert.equal(await page.locator('#model-settings-content').isHidden(), true);
     // The command-isolation form is gone: the composer's chip is the only control that writes either knob.
@@ -204,6 +205,22 @@ test(
     const endpointLabels = await readSelectOptions(page, 'settings-connection');
     assert.equal(new Set(endpointLabels).size, 2);
     assert.ok(endpointLabels.every((label) => !label.includes(url)));
+    await page.locator('#settings-connection').click();
+    const optionGap = await page
+      .getByRole('option')
+      .first()
+      .evaluate((option) => {
+        const dropdown = option.closest('.mantine-Select-dropdown');
+        const menu = dropdown.getBoundingClientRect();
+        const row = option.getBoundingClientRect();
+        // Keep the menu's intended padding, with equal space on both sides of each option.
+        return Math.abs(menu.right - row.right - (row.left - menu.left));
+      });
+    assert.ok(
+      optionGap <= 2,
+      `saved-interface options must fill their dropdown (inset difference ${optionGap}px)`,
+    );
+    await page.keyboard.press('Escape');
     assert.match(await page.locator('#settings-connection').inputValue(), /当前默认$/);
     await page.locator('#settings-back').click();
     await page.locator('#open-settings').click();

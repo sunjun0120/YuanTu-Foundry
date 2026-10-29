@@ -29,8 +29,10 @@ export function workspaceIcon(
     file: 'M14 2H5v20h14V7Zm0 0v5h5M8 12h8M8 16h8',
     markdown: 'M14 2H5v20h14V7Zm0 0v5h5',
     close: 'm6 6 12 12M6 18 18 6',
-    expand: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm3 0v18',
-    collapse: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm11 0v18',
+    expand:
+      'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2ZM9 3v18m7-6-3-3 3-3',
+    collapse:
+      'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2ZM9 3v18m5-12 3 3-3 3',
     fullscreen: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5',
     restore: 'M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5',
     refresh: 'M20 7v5h-5M20 12a8 8 0 1 0-2 6M20 7l-3-3',

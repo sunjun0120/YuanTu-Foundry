@@ -8,7 +8,6 @@ import {
   createSessionSidebarController,
   dialogDescription,
   sessionTitle,
-  sessionTooltip,
   sessionsFoldable,
   visibleSessions,
 } from '../apps/desktop/ui/sessions/session-model.ts';
@@ -72,11 +71,6 @@ test('workspace switches isolate sidebar drafts and close a dialog for a collidi
 
 test('an untitled session shows the untitled label, never its id', () => {
   assert.equal(sessionTitle(session('abcdef12')), t('ui.untitledSession'));
-  assert.equal(sessionTooltip(session('abcdef12'), undefined), t('ui.untitledSession'));
-  assert.doesNotMatch(
-    sessionTooltip(session('abcdef12'), { running: true, waiting: 0 }),
-    /abcdef12/,
-  );
   const { controller, fill } = fixture();
   fill();
   controller.openDialog('rename', 'b');

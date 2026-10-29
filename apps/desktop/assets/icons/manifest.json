@@ -1,0 +1,146 @@
+{
+  "fileKey": "G3Yr3736UY32vUTEDc5pkd",
+  "nodeId": "17:2",
+  "source": "Figma get_design_context direct export",
+  "assets": [
+    {
+      "name": "brand-sidebar",
+      "nodeId": "22:151",
+      "file": "brand-sidebar.svg"
+    },
+    {
+      "name": "sidebar-collapse",
+      "nodeId": "24:97",
+      "file": "sidebar-collapse.svg"
+    },
+    {
+      "name": "search",
+      "nodeId": "24:101",
+      "file": "search.svg"
+    },
+    {
+      "name": "new-task",
+      "nodeId": "24:7",
+      "file": "new-task.svg"
+    },
+    {
+      "name": "capability-mask",
+      "nodeId": "24:300",
+      "file": "capability-mask.svg"
+    },
+    {
+      "name": "capability-center",
+      "nodeId": "24:303",
+      "file": "capability-center.svg"
+    },
+    {
+      "name": "projects",
+      "nodeId": "24:131",
+      "file": "projects.svg"
+    },
+    {
+      "name": "graph",
+      "nodeId": "24:47",
+      "file": "graph.svg"
+    },
+    {
+      "name": "automation",
+      "nodeId": "24:60",
+      "file": "automation.svg"
+    },
+    {
+      "name": "knowledge",
+      "nodeId": "24:68",
+      "file": "knowledge.svg"
+    },
+    {
+      "name": "more",
+      "nodeId": "24:72",
+      "file": "more.svg"
+    },
+    {
+      "name": "folder",
+      "nodeId": "24:189",
+      "file": "folder.svg"
+    },
+    {
+      "name": "project-chevron",
+      "nodeId": "17:104",
+      "file": "project-chevron.svg"
+    },
+    {
+      "name": "brand-hero",
+      "nodeId": "22:29",
+      "file": "brand-hero.svg"
+    },
+    {
+      "name": "workspace",
+      "nodeId": "24:192",
+      "file": "workspace.svg"
+    },
+    {
+      "name": "permissions",
+      "nodeId": "24:161",
+      "file": "permissions.svg"
+    },
+    {
+      "name": "attach",
+      "nodeId": "17:163",
+      "file": "attach.svg"
+    },
+    {
+      "name": "model-chevron",
+      "nodeId": "17:175",
+      "file": "model-chevron.svg"
+    },
+    {
+      "name": "send",
+      "nodeId": "24:139",
+      "file": "send.svg"
+    },
+    {
+      "name": "repository",
+      "nodeId": "25:512",
+      "file": "repository.svg"
+    },
+    {
+      "name": "vulnerability",
+      "nodeId": "27:627",
+      "file": "vulnerability.svg"
+    },
+    {
+      "name": "license",
+      "nodeId": "27:615",
+      "file": "license.svg"
+    },
+    {
+      "name": "dependencies",
+      "nodeId": "27:630",
+      "file": "dependencies.svg"
+    },
+    {
+      "name": "trust",
+      "nodeId": "27:648",
+      "file": "trust.svg"
+    },
+    {
+      "name": "entryMore",
+      "nodeId": "64:61",
+      "file": "sidebar-entry-more.svg"
+    },
+    {
+      "name": "entryRename",
+      "nodeId": "65:116",
+      "file": "sidebar-rename.svg"
+    },
+    {
+      "name": "entryDelete",
+      "nodeId": "64:91",
+      "file": "sidebar-delete.svg"
+    },
+    {
+      "file": "settings.svg",
+      "nodeId": "123:24"
+    }
+  ]
+}

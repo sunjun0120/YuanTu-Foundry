@@ -54,6 +54,11 @@ export async function choosePermissionPreset(page, preset) {
  * same save (中文 becomes "Chinese"), so a value comparison would wait forever.
  */
 export async function chooseSelectOption(page, id, label) {
+  // Appearance and font size now expose the same values as visible option buttons.
+  if ((await page.locator(`#${id}`).getAttribute('role')) === 'group') {
+    await page.locator(`#${id}`).getByRole('button', { name: label, exact: true }).click();
+    return;
+  }
   await page.locator(`#${id}`).click();
   await page.getByRole('option', { name: label, exact: true }).click();
   await page.getByRole('listbox').waitFor({ state: 'hidden' });

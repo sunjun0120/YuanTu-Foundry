@@ -96,6 +96,9 @@ export const conversationMessages: Record<string, [string, string]> = {
     'Send a message or describe a task...',
   ],
   'ui.newSession': ['新建会话', 'New session'],
+  'ui.newTask': ['新建任务', 'New task'],
+  'ui.collapseSidebar': ['收起侧边栏', 'Collapse sidebar'],
+  'ui.expandSidebar': ['展开侧边栏', 'Expand sidebar'],
   'ui.untitledSession': ['新会话', 'New session'],
   'ui.workspace': ['工作区', 'Workspace'],
   'ui.changeFolder': ['更换目录', 'Change folder'],
@@ -255,6 +258,10 @@ export const conversationMessages: Record<string, [string, string]> = {
   'skill.codeAnalysisReportDescription': [
     '用内置代码分析服务分析源码包或 GitHub 仓库，并写出有据可查的分析报告。',
     'Analyse source archives or GitHub repositories with the built-in code analysis service and write evidence-based reports.',
+  ],
+  'skill.officeDocumentsDescription': [
+    '用 office_create、office_edit 和 office_preview 规划、撰写并检查 Word 报告、Excel 工作簿和 PowerPoint 演示文稿。',
+    'Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.',
   ],
   'ui.copy': ['复制代码', 'Copy code'],
   'ui.copied': ['已复制', 'Copied'],

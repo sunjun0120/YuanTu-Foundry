@@ -137,6 +137,19 @@ function Probe() {
       <select id="react-native-select" defaultValue="a">
         <option value="a">A</option>
       </select>
+      <div className="chat-page">
+        <section className="conversation">
+          <article className="message user"><p id="font-user">User message</p></article>
+          <article className="message assistant"><div className="markdown"><p id="font-assistant">Assistant message</p></div></article>
+          <div className="message assistant" id="font-live">Streaming reply</div>
+        </section>
+        <textarea className="prompt" id="font-prompt" defaultValue="Draft" />
+      </div>
+      <div className="workspace-panel">
+        <div className="workspace-tree" id="font-tree">File tree</div>
+        <pre className="workspace-preview-text" id="font-preview">File content</pre>
+        <div className="workspace-preview-markdown" id="font-markdown">Document preview</div>
+      </div>
       <Dialog opened={dialogOpen} onClose={() => setDialogOpen(false)} title={t('ui.settings')}>
         <Text id="dialog-body">{t('ui.newSession')}</Text>
       </Dialog>
@@ -620,30 +633,49 @@ test('the React layer mounts into the product document', { skip: electronSkip },
     'an explicit dark choice ignores the system preference',
   );
 
-  // Text size scales Mantine's variables from the same attribute the settings page writes.
-  const fontSizeVariable = () =>
-    page.evaluate(() =>
-      getComputedStyle(document.documentElement).getPropertyValue('--mantine-font-size-md').trim(),
+  // Text size belongs to conversation messages. It must not resize global controls or file previews.
+  const fixedFonts = () =>
+    page.evaluate(() => {
+      const font = (selector) => getComputedStyle(document.querySelector(selector)).fontSize;
+      return {
+        body: font('body'),
+        label: font('label[for="react-input"]'),
+        input: font('#react-input'),
+        button: font('#react-button'),
+        prompt: font('#font-prompt'),
+        tree: font('#font-tree'),
+        preview: font('#font-preview'),
+        markdown: font('#font-markdown'),
+        mantine: getComputedStyle(document.documentElement)
+          .getPropertyValue('--mantine-font-size-md')
+          .trim(),
+      };
+    });
+  const originalFonts = await fixedFonts();
+  for (const [choice, expected] of [
+    ['large', '16px'],
+    ['small', '13px'],
+    ['medium', '14px'],
+  ]) {
+    await page.evaluate((value) => {
+      document.documentElement.dataset.fontSize = value;
+    }, choice);
+    await page.waitForFunction(
+      (size) => getComputedStyle(document.getElementById('font-assistant')).fontSize === size,
+      expected,
     );
-  await page.evaluate(() => {
-    document.documentElement.dataset.fontSize = 'large';
-  });
-  await page.waitForFunction(
-    () =>
-      getComputedStyle(document.documentElement)
-        .getPropertyValue('--mantine-font-size-md')
-        .trim() === '16px',
-  );
-  await page.evaluate(() => {
-    document.documentElement.dataset.fontSize = 'small';
-  });
-  await page.waitForFunction(
-    () =>
-      getComputedStyle(document.documentElement)
-        .getPropertyValue('--mantine-font-size-md')
-        .trim() === '13px',
-  );
-  assert.equal(await fontSizeVariable(), '13px');
+    for (const id of ['font-user', 'font-assistant', 'font-live']) {
+      assert.equal(
+        await page.locator('#' + id).evaluate((el) => getComputedStyle(el).fontSize),
+        expected,
+      );
+    }
+    assert.deepEqual(
+      await fixedFonts(),
+      originalFonts,
+      choice + ' must only change conversation text',
+    );
+  }
 
   // Language: the walker translates the legacy node, React re-renders through useLocale, and the walker leaves
   // the React-owned raw text exactly as React rendered it.
@@ -814,16 +846,19 @@ test(
     const page = await settingsPage(t);
     if (!page) return;
     await page.waitForSelector('#ui-appearance');
-    assert.equal(await page.locator('#ui-appearance').inputValue(), '跟随系统');
-    await page.locator('#ui-appearance').click();
-    await page.getByRole('option', { name: '深色', exact: true }).click();
+    const system = page.locator('#ui-appearance button[data-value="system"]');
+    assert.equal(await system.getAttribute('aria-pressed'), 'true');
+    await page.locator('#ui-appearance').getByRole('button', { name: '深色', exact: true }).click();
     const alert = page.locator('[data-settings-error]');
     await alert.waitFor();
     assert.match(await alert.innerText(), /save refused by test/);
     // The form must never show a value that is not stored: the refusal puts the control back.
     await page.waitForFunction(
-      () => document.querySelector('#ui-appearance')?.value === '跟随系统',
+      () =>
+        document
+          .querySelector('#ui-appearance button[data-value="system"]')
+          ?.getAttribute('aria-pressed') === 'true',
     );
-    assert.equal(await page.locator('#ui-appearance').inputValue(), '跟随系统');
+    assert.equal(await system.getAttribute('aria-pressed'), 'true');
   },
 );

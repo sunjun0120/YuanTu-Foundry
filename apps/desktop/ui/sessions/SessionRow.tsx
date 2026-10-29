@@ -13,7 +13,6 @@ import {
   sessionAge,
   sessionStatusLabel,
   sessionTitle,
-  sessionTooltip,
   type SessionActivity,
   type SessionSidebarController,
   type SessionSidebarState,
@@ -51,14 +50,12 @@ export function SessionRow({
   controller,
   onMenu,
   onMenuKeyboard,
-  onMenuLeave,
 }: {
   item: SessionInfo;
   state: SessionSidebarState;
   controller: SessionSidebarController;
   onMenu(anchor: HTMLButtonElement, sessionId: string): void;
   onMenuKeyboard(anchor: HTMLButtonElement, sessionId: string): void;
-  onMenuLeave(): void;
 }): ReactNode {
   const activity: SessionActivity | undefined = state.activity.get(item.id);
   const label = sessionStatusLabel(activity);
@@ -116,22 +113,15 @@ export function SessionRow({
         className={`session-item${selected ? ' selected' : ''}`}
         data-session-id={item.id}
         disabled={state.blocked}
-        title={sessionTooltip(item, activity)}
         aria-current={selected ? 'true' : 'false'}
+        data-sidebar-tooltip={sessionTitle(item)}
+        data-sidebar-tooltip-overflow=""
         onClick={() => void controller.selectSession(item.id)}
       >
-        <strong translate="no">{sessionTitle(item)}</strong>
-        <small
-          title={new Date(item.createdAt).toLocaleString(locale(), {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
-        >
-          {sessionAge(item.createdAt, locale())}
-        </small>
+        <strong translate="no" data-tooltip-text="">
+          {sessionTitle(item)}
+        </strong>
+        <small>{sessionAge(item.createdAt, locale())}</small>
         {activity?.running || activity?.waiting ? (
           <span
             className={`session-status ${activity.waiting ? 'waiting' : 'running'}`}
@@ -151,8 +141,7 @@ export function SessionRow({
         aria-haspopup="menu"
         aria-controls="session-menu"
         aria-expanded={state.menuSessionId === item.id}
-        onMouseEnter={(event) => onMenu(event.currentTarget, item.id)}
-        onMouseLeave={() => onMenuLeave()}
+        data-sidebar-tooltip={t('session.actions')}
         onClick={(event) => onMenu(event.currentTarget, item.id)}
         onKeyDown={(event) => {
           if (event.key !== 'ArrowDown') return;

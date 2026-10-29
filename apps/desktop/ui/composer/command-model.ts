@@ -56,6 +56,16 @@ export function commandQuery(text: string): string | undefined {
   return match?.[1]?.toLowerCase();
 }
 
+/**
+ * Interface-language descriptions of the skills this build ships, by catalogue path. A built-in skill's own
+ * description is written once, in the language its body uses; the menu speaks the interface's. A workspace skill
+ * is shown as its author wrote it.
+ */
+export const BUILTIN_SKILL_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  'builtin:code-analysis-report': 'skill.codeAnalysisReportDescription',
+  'builtin:office-documents': 'skill.officeDocumentsDescription',
+};
+
 export function paletteItems(
   text: string,
   dismissed: boolean,
@@ -67,8 +77,8 @@ export function paletteItems(
     kind: 'skill',
     name: skill.name,
     description:
-      skill.path === 'builtin:code-analysis-report'
-        ? t('skill.codeAnalysisReportDescription')
+      skill.path in BUILTIN_SKILL_DESCRIPTIONS
+        ? t(BUILTIN_SKILL_DESCRIPTIONS[skill.path]!)
         : skill.description,
     value: skill.name,
   }));

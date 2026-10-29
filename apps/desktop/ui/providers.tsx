@@ -5,8 +5,9 @@
  * instance here rather than one per island. A second provider would mean a second theme and a second motion
  * configuration, and the two would drift the moment one of them was edited.
  *
- * Appearance and text size are read from the same document attributes the legacy settings controller writes.
- * Subscribing to those attributes is what keeps the React layer free of a second settings store: no extra
+ * Appearance is read from the document attribute the settings controller writes. Conversation text size is
+ * handled by CSS; the interface theme stays at its standard size. Subscribing to appearance keeps the React
+ * layer free of a second settings store: no extra
  * `uiSettings` request, no `localStorage` colour scheme, no copy of the preference that can disagree with the one
  * the rest of the window already uses.
  *
@@ -24,11 +25,8 @@ import {
   appearanceFromDocument,
   createDesktopTheme,
   desktopCssVariablesResolver,
-  fontSizeFromDocument,
   resolveColorScheme,
-  resolveFontSize,
   type Appearance,
-  type FontSizeName,
 } from './theme.ts';
 import type { DesktopActions } from './actions.ts';
 import type { DesktopRuntime } from './runtime.ts';
@@ -47,13 +45,6 @@ function useAppearance(): Appearance {
   );
 }
 
-function useFontSizeName(): FontSizeName {
-  return useSyncExternalStore(
-    (listener) => subscribeAttribute('data-font-size', listener),
-    () => fontSizeFromDocument(document),
-  );
-}
-
 export function DesktopProviders({
   runtime,
   actions,
@@ -64,12 +55,10 @@ export function DesktopProviders({
   children: ReactNode;
 }): ReactNode {
   const appearance = useAppearance();
-  const fontSizeName = useFontSizeName();
-  const base = resolveFontSize(fontSizeName);
   // `false` until the media query has an answer: an explicit light/dark choice does not consult it at all.
   const systemDark = useMediaQuery('(prefers-color-scheme: dark)') ?? false;
   const colorScheme = resolveColorScheme(appearance, systemDark);
-  const theme = useMemo(() => createDesktopTheme(base), [base]);
+  const theme = useMemo(() => createDesktopTheme(14), []);
   return (
     <MantineProvider
       getStyleNonce={() => UI_STYLE_NONCE}

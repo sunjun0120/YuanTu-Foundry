@@ -11,6 +11,7 @@ export const navigation = createStore({
   workspaceOpen: false,
   workspaceFullscreen: false,
   workspaceWidth: 560,
+  sidebarWidth: 272,
   chatScroll: 0,
 });
 

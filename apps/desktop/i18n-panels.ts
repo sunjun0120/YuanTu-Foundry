@@ -189,10 +189,7 @@ export const panelMessages: Record<string, [string, string]> = {
     '窗口不在前台时，会话完成或需要你审批、回答时弹出系统通知。',
     'When the window is in the background, notify when a session finishes or needs your approval or answer.',
   ],
-  'general.fontSizeNote': [
-    '调整聊天内容和操作界面的基础字号。',
-    'Adjust the base size of chat and interface text.',
-  ],
+  'general.fontSizeNote': ['只调整会话内容的字号。', 'Adjust conversation text size only.'],
   'sandboxSetup.exitUnconfirmed': [
     '初始化尚未结束，清理状态未确认。重新打开应用后请检查沙箱账户状态。',
     'Initialization is still pending and cleanup is unconfirmed. Check sandbox account status after reopening the app.',

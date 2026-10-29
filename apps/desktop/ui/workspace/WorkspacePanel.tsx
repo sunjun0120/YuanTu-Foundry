@@ -16,16 +16,17 @@ import { BrowserPane } from './BrowserPane.tsx';
 import { FilePreview } from './FilePreview.tsx';
 import { FileTree } from './FileTree.tsx';
 import { Icon } from './Icon.tsx';
+import { BrowserCardArt, FileCardArt } from './NewTabArt.tsx';
 import { fileName, type WorkspaceController } from './workspace-model.ts';
 
 const STEP = 24;
 /** The reading column never drops below this while there is room for it: the composer's readings stay on one line. */
 const MIN_CHAT_WIDTH = 620;
 
-function widthLimits(viewportWidth: number): { min: number; max: number } {
+function widthLimits(viewportWidth: number, sidebarWidth: number): { min: number; max: number } {
   // At the window's minimum size the panel has to shrink with it; above that the chat column wins the space it needs.
-  const minChat = Math.max(320, Math.min(MIN_CHAT_WIDTH, viewportWidth - 272 - 280));
-  const available = Math.max(0, viewportWidth - 272 - minChat);
+  const minChat = Math.max(320, Math.min(MIN_CHAT_WIDTH, viewportWidth - sidebarWidth - 280));
+  const available = Math.max(0, viewportWidth - sidebarWidth - minChat);
   // A narrow window leaves less than the normal minimum for the panel; it may still grow from a smaller floor.
   const minPanel = available < 320 ? Math.min(180, available) : 320;
   return { min: minPanel, max: available };
@@ -40,11 +41,14 @@ export function WorkspacePanel({
 }): ReactNode {
   useLocale();
   const state = useReadable(controller.store);
+  const { sidebarWidth } = useReadable(navigation);
   const [width, setWidth] = useState(() => Math.min(560, window.innerWidth * 0.42));
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
-  const [tooltip, setTooltip] = useState<{ text: string; left: number; top: number } | null>(null);
+  const [tooltip, setTooltip] = useState<{ text: string; right: number; top: number } | null>(null);
   const [newTabError, setNewTabError] = useState('');
+  const [copied, setCopied] = useState(false);
   const panel = useRef<HTMLElement>(null);
+  const tip = useRef<HTMLDivElement>(null);
   const previewBody = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
   const drag = useRef<{
@@ -56,9 +60,20 @@ export function WorkspacePanel({
   // The scroll of a tab is captured before leaving it: programmatic scroll events can land after the click that
   // switched tabs, and a preview that was already replaced cannot report where it was.
   const rememberScroll = (): void => {
-    if (selected !== null && previewBody.current)
+    if (showingFile && selected !== null && previewBody.current)
       controller.setTabScroll(selected, previewBody.current.scrollTop);
   };
+
+  // The tip's right edge lines up with its control's, on one line; it moves right only if it would leave the window.
+  useLayoutEffect(() => {
+    const element = tip.current;
+    if (!element || !tooltip) return;
+    const width = element.offsetWidth;
+    element.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, tooltip.right - width))}px`;
+  }, [tooltip]);
+
+  // A "copied" check belongs to the file it was given for.
+  useEffect(() => setCopied(false), [state.selected, state.active.kind]);
 
   // The chat column's minimum is a function of the window width, so a resize has to re-run the clamp.
   useEffect(() => {
@@ -67,7 +82,7 @@ export function WorkspacePanel({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  const limits = widthLimits(viewportWidth);
+  const limits = widthLimits(viewportWidth, sidebarWidth);
   const actualWidth = Math.round(Math.min(limits.max, Math.max(limits.min, width)));
   const fullscreen = state.fullscreen;
   const selected = state.selected;
@@ -172,12 +187,15 @@ export function WorkspacePanel({
     const bounds = control.getBoundingClientRect();
     setTooltip({
       text: label,
-      left: Math.max(8, Math.min(window.innerWidth - 200, bounds.right - 40)),
+      right: bounds.right,
       top: Math.min(window.innerHeight - 40, bounds.bottom + 8),
     });
   };
 
   const active = state.active;
+  const showingFile = active.kind === 'file';
+  const shown = showingFile ? tab?.shown : undefined;
+  const copyText = shown?.kind === 'text' && shown.text ? shown.text : null;
   const activeBrowser = active.kind === 'browser' ? state.browserTabs.get(active.id) : undefined;
   const separator = workspacePath(selected, state.workspace);
   const projectName = workspaceName(state.workspace);
@@ -447,22 +465,11 @@ export function WorkspacePanel({
               )}
               onClick={() => controller.setFullscreen(!fullscreen)}
             >
-              <Icon kind={fullscreen ? 'restore' : 'fullscreen'} />
-            </button>
-            <button
-              id="workspace-refresh"
-              type="button"
-              aria-label={t('workspace.refreshTitle')}
-              data-tooltip={t('workspace.refreshTitle')}
-              onClick={() => {
-                rememberScroll();
-                controller.refresh();
-              }}
-            >
-              <Icon kind="refresh" />
+              <Icon kind={fullscreen ? 'minimize' : 'maximize'} />
             </button>
             <button
               id="workspace-close"
+              className="workspace-close"
               type="button"
               aria-label={t('workspace.closeTitle')}
               data-tooltip={t('workspace.closeTitle')}
@@ -475,43 +482,33 @@ export function WorkspacePanel({
             </button>
           </div>
         </header>
-        <div
-          id="workspace-location"
-          hidden={active.kind !== 'file'}
-          className="workspace-location"
-          translate="no"
-          title={separator}
-          aria-label={t('workspace.pathLabel')}
-        >
-          {separator}
-        </div>
         <section
           id="workspace-new-tab-page"
           className="workspace-new-tab-page"
           aria-label={t('workspace.newTab')}
           hidden={active.kind !== 'new'}
         >
-          <h2>{t('workspace.newTab')}</h2>
-          {state.workspace ? (
-            <p className="workspace-new-tab-context">
-              {t('workspace.currentWorkspace', { name: projectName })}
-            </p>
-          ) : null}
+          <div className="workspace-new-tab-heading">
+            <span className="workspace-new-tab-emblem" aria-hidden="true">
+              <Icon kind="square-plus" />
+            </span>
+            <h2>{t('workspace.newTab')}</h2>
+          </div>
           <div className="workspace-new-tab-options">
             <button
               id="workspace-new-files"
               type="button"
               className="workspace-new-tab-option"
+              aria-label={t('workspace.filesTab')}
               onClick={() => controller.openFiles()}
             >
-              <Icon kind="folder" />
-              <span className="workspace-new-tab-title">{t('workspace.filesTab')}</span>
-              <span className="workspace-new-tab-hint">{t('workspace.filesTabHint')}</span>
+              <FileCardArt label={t('workspace.open')} />
             </button>
             <button
               id="workspace-new-browser"
               type="button"
               className="workspace-new-tab-option"
+              aria-label={t('workspace.browserTab')}
               onClick={() => {
                 setNewTabError('');
                 void controller
@@ -521,9 +518,7 @@ export function WorkspacePanel({
                   );
               }}
             >
-              <Icon kind="globe" />
-              <span className="workspace-new-tab-title">{t('workspace.browserTab')}</span>
-              <span className="workspace-new-tab-hint">{t('workspace.browserTabHint')}</span>
+              <BrowserCardArt label={t('workspace.browserTab')} />
             </button>
           </div>
           {newTabError ? (
@@ -535,39 +530,84 @@ export function WorkspacePanel({
         {active.kind === 'browser' && activeBrowser ? (
           <BrowserPane id={active.id} state={activeBrowser} />
         ) : null}
-        <FileTree
-          state={state}
-          controller={controller}
-          hidden={active.kind !== 'files'}
-          onBeforeSelect={rememberScroll}
-        />
-        <section
-          id="workspace-preview"
-          className="workspace-preview"
-          aria-label={selected ?? t('workspace.imageAlt')}
-          hidden={active.kind !== 'file'}
+        {/* Files and a file share one layout, like the reference: the tree on the left, the reading pane beside it. */}
+        <div
+          className="workspace-files"
+          data-view={active.kind}
+          hidden={active.kind !== 'files' && active.kind !== 'file'}
         >
-          <div
-            id="workspace-preview-body"
-            className="workspace-preview-body"
-            ref={previewBody}
-            onScroll={(event) => {
-              if (selected !== null)
-                controller.setTabScroll(selected, event.currentTarget.scrollTop);
-            }}
+          <FileTree
+            state={state}
+            controller={controller}
+            hidden={false}
+            onBeforeSelect={rememberScroll}
+          />
+          <section
+            id="workspace-preview"
+            className="workspace-preview"
+            aria-label={(showingFile ? selected : null) ?? t('workspace.open')}
           >
-            {selected !== null && tab ? (
-              <FilePreview path={selected} tab={tab} actions={markdownActions} />
-            ) : null}
-          </div>
-        </section>
+            <div id="workspace-location" className="workspace-location">
+              <span
+                className="workspace-location-name"
+                translate="no"
+                title={showingFile ? separator : state.workspace}
+                aria-label={showingFile ? t('workspace.pathLabel') : undefined}
+              >
+                {showingFile && selected !== null ? fileName(selected) : projectName}
+              </span>
+              <span className="workspace-location-actions">
+                {copyText !== null ? (
+                  <button
+                    type="button"
+                    aria-label={t(copied ? 'workspace.copied' : 'workspace.copyContent')}
+                    data-tooltip={t(copied ? 'workspace.copied' : 'workspace.copyContent')}
+                    onClick={() => {
+                      void navigator.clipboard.writeText(copyText).then(() => setCopied(true));
+                    }}
+                  >
+                    <Icon kind={copied ? 'check' : 'copy'} />
+                  </button>
+                ) : null}
+                <button
+                  id="workspace-refresh"
+                  type="button"
+                  aria-label={t('workspace.refreshTitle')}
+                  data-tooltip={t('workspace.refreshTitle')}
+                  onClick={() => {
+                    rememberScroll();
+                    controller.refresh();
+                  }}
+                >
+                  <Icon kind="rotate-cw" />
+                </button>
+              </span>
+            </div>
+            <div
+              id="workspace-preview-body"
+              className="workspace-preview-body"
+              ref={previewBody}
+              onScroll={(event) => {
+                if (showingFile && selected !== null)
+                  controller.setTabScroll(selected, event.currentTarget.scrollTop);
+              }}
+            >
+              {showingFile && selected !== null && tab ? (
+                <FilePreview path={selected} tab={tab} actions={markdownActions} />
+              ) : (
+                <p className="workspace-note workspace-preview-empty">{t('workspace.pickFile')}</p>
+              )}
+            </div>
+          </section>
+        </div>
       </aside>
       <div
         id="workspace-tooltip"
         className="workspace-tooltip"
         role="tooltip"
         hidden={!tooltip}
-        style={tooltip ? { left: tooltip.left, top: tooltip.top } : undefined}
+        ref={tip}
+        style={tooltip ? { left: tooltip.right, top: tooltip.top } : undefined}
       >
         {tooltip?.text ?? ''}
       </div>
@@ -583,7 +623,7 @@ export function workspacePath(selected: string | null, workspace: string): strin
   return selected ?? workspace;
 }
 
-/** The workspace's last path segment, for the new-tab page's context line. */
+/** The workspace's last path segment, named in the files bar while no file is open. */
 export function workspaceName(workspace: string): string {
   const normalized = workspace.replace(/[\\/]+$/u, '');
   return normalized.split(/[\\/]/u).pop() || normalized;

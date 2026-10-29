@@ -54,7 +54,16 @@ function CodeHost({ text, language }: { text: string; language: string }): React
     container.replaceChildren(code);
     return () => code.remove();
   }, [code]);
-  return <pre ref={host} className="workspace-preview-text workspace-preview-code" />;
+  // The gutter sits beside the `<pre>`, not in it, so the code element's text stays exactly the file's text.
+  const lines = useMemo(() => text.replace(/\r?\n$/, '').split(/\r?\n/).length, [text]);
+  return (
+    <div className="workspace-code-view">
+      <div className="workspace-line-numbers" aria-hidden="true">
+        {Array.from({ length: lines }, (_, index) => index + 1).join('\n')}
+      </div>
+      <pre ref={host} className="workspace-preview-text workspace-preview-code" />
+    </div>
+  );
 }
 
 function OfficeFrame({ html, title }: { html: string; title: string }): ReactNode {

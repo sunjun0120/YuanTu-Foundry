@@ -71,6 +71,7 @@ export function ModelPicker(): ReactNode {
           id="model"
           aria-label={t('ui.switchModel')}
           className="model"
+          classNames={{ dropdown: 'model-picker-dropdown' }}
           value={selectedValue}
           placeholder={t('settings.noModel')}
           disabled={state.locked}

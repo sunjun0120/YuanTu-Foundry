@@ -129,7 +129,7 @@ export function ProjectSearch({
             type="button"
             className="project-search-button"
             aria-label={t('projects.search')}
-            title={t('projects.search')}
+            data-sidebar-tooltip={t('projects.search')}
             aria-controls="session-search"
             aria-expanded={opened}
             onClick={() => {
@@ -158,7 +158,7 @@ export function ProjectSearch({
             id="clear-session-search"
             type="button"
             aria-label={t('ui.closeSearch')}
-            title={t('ui.closeSearch')}
+            data-sidebar-tooltip={t('ui.closeSearch')}
             onClick={close}
           >
             <Icon kind="close" />

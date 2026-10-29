@@ -12,16 +12,21 @@ import type { UiAppearance, UiFontSize, UiLanguage } from '../../ui-settings.ts'
 import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
 import { Alert, Select, Stack, Switch } from '../primitives.tsx';
+import { AssetIcon } from '../icons/AssetIcon.tsx';
 import type { GeneralSettingsController } from './settings-model.ts';
 
 const languageData = (): { value: UiLanguage; label: string }[] => [
   { value: 'zh-CN', label: t('general.languageZh') },
   { value: 'en-US', label: t('general.languageEn') },
 ];
-const appearanceData = (): { value: UiAppearance; label: string }[] => [
-  { value: 'system', label: t('general.appearanceSystem') },
-  { value: 'light', label: t('general.appearanceLight') },
-  { value: 'dark', label: t('general.appearanceDark') },
+const appearanceData = (): {
+  value: UiAppearance;
+  label: string;
+  icon: 'sun' | 'moon' | 'monitor';
+}[] => [
+  { value: 'light', label: t('general.appearanceLight'), icon: 'sun' },
+  { value: 'dark', label: t('general.appearanceDark'), icon: 'moon' },
+  { value: 'system', label: t('general.appearanceSystem'), icon: 'monitor' },
 ];
 const fontSizeData = (): { value: UiFontSize; label: string }[] => [
   { value: 'small', label: t('general.fontSmall') },
@@ -37,48 +42,67 @@ export function GeneralSettings({
   useLocale();
   const state = useReadable(controller.store);
   return (
-    <Stack gap={0} className="settings-form-rows settings-card">
-      <Select
-        id="ui-language"
-        className="settings-row"
-        label={t('general.language')}
-        description={t('general.languageNote')}
-        data={languageData()}
-        value={state.draft.language}
-        allowDeselect={false}
-        onChange={(value) => {
-          if (value) controller.change({ language: value as UiLanguage });
-        }}
-      />
-      <Select
-        id="ui-appearance"
-        className="settings-row"
-        label={t('general.appearance')}
-        description={t('general.appearanceNote')}
-        data={appearanceData()}
-        value={state.draft.appearance}
-        allowDeselect={false}
-        onChange={(value) => {
-          if (value) controller.change({ appearance: value as UiAppearance });
-        }}
-      />
-      <Select
-        id="ui-font-size"
-        className="settings-row"
-        label={t('general.fontSize')}
-        description={t('general.fontSizeNote')}
-        data={fontSizeData()}
-        value={state.draft.fontSize}
-        allowDeselect={false}
-        onChange={(value) => {
-          if (value) controller.change({ fontSize: value as UiFontSize });
-        }}
-      />
+    <Stack gap={0} className="settings-form-rows general-settings-form">
+      <section className="settings-group">
+        <Select
+          id="ui-language"
+          className="settings-language"
+          label={t('general.language')}
+          data={languageData()}
+          value={state.draft.language}
+          allowDeselect={false}
+          onChange={(value) => {
+            if (value) controller.change({ language: value as UiLanguage });
+          }}
+        />
+      </section>
+      <section className="settings-group">
+        <h3 id="ui-appearance-label">{t('general.appearance')}</h3>
+        <div
+          id="ui-appearance"
+          className="appearance-options"
+          role="group"
+          aria-labelledby="ui-appearance-label"
+        >
+          {appearanceData().map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              aria-pressed={state.draft.appearance === item.value}
+              data-value={item.value}
+              onClick={() => controller.change({ appearance: item.value })}
+            >
+              <AssetIcon name={item.icon} size={19} />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className="settings-group">
+        <h3 id="ui-font-size-label">{t('general.fontSize')}</h3>
+        <div
+          id="ui-font-size"
+          className="font-options"
+          role="group"
+          aria-labelledby="ui-font-size-label"
+        >
+          {fontSizeData().map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              aria-pressed={state.draft.fontSize === item.value}
+              data-value={item.value}
+              onClick={() => controller.change({ fontSize: item.value })}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </section>
       <Switch
         id="ui-notifications"
-        className="settings-row-switch"
+        className="settings-group settings-notification"
         label={t('general.notifications')}
-        description={t('general.notificationsNote')}
         checked={state.draft.notifications}
         onChange={(event) => controller.change({ notifications: event.currentTarget.checked })}
       />

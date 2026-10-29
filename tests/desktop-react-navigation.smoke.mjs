@@ -99,8 +99,12 @@ for (const reduced of [false, true]) {
               const element = document.getElementById(id);
               return {
                 id,
-                opacity: Number(getComputedStyle(element).opacity),
-                hidden: element.hidden,
+                opacity: Number(
+                  getComputedStyle(
+                    id === 'settings-page' ? element.closest('.settings-dialog') : element,
+                  ).opacity,
+                ),
+                hidden: element.getClientRects().length === 0,
                 inert: element.inert,
                 active: element.dataset.pageActive,
               };
@@ -141,11 +145,8 @@ for (const reduced of [false, true]) {
         );
       await page.screenshot({ path: path.join(dir, 'settings.png') });
       await page.getByRole('button', { name: '返回对话' }).click();
-      await page.waitForFunction(
-        () =>
-          document.getElementById('settings-page').hidden &&
-          Number(getComputedStyle(document.getElementById('chat-page')).opacity) === 1,
-      );
+      await page.locator('.settings-dialog').waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => !document.getElementById('chat-page').inert);
       assert.equal(
         await page.getByRole('textbox', { name: '任务描述' }).inputValue(),
         'A draft survives page navigation',

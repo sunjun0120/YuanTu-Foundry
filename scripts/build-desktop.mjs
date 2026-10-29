@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { mkdir, copyFile, writeFile } from 'node:fs/promises';
+import { mkdir, copyFile, cp, writeFile } from 'node:fs/promises';
 import { SCHEMA_VERSION } from '../packages/storage/sqlite.ts';
 import { commonJsModuleUrl } from './commonjs-module-url.mjs';
 import { rendererBuildOptions } from './desktop-renderer-options.mjs';
@@ -30,6 +30,8 @@ await copyFile('packages/office/automation.ps1', 'dist/packages/office/automatio
 await copyFile('apps/desktop/index.html', 'dist/desktop/index.html');
 // The React layer's own stylesheet: the project palette and the rules for the DOM islands React only wraps.
 await copyFile('apps/desktop/ui/styles.css', 'dist/desktop/ui.css');
+await cp('apps/desktop/assets/icons', 'dist/desktop/assets/icons', { recursive: true });
+await cp('apps/desktop/assets/new-tab', 'dist/desktop/assets/new-tab', { recursive: true });
 // Runs under ordinary bundled Node, including from a copied maintenance directory.
 await build({
   entryPoints: ['apps/desktop/upgrade-worker.ts'],

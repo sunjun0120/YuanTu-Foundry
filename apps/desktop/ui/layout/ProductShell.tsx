@@ -1,6 +1,10 @@
+import { Modal } from '@mantine/core';
+import { AssetIcon } from '../icons/AssetIcon.tsx';
+import { usePrefersReducedMotion } from '../reduced-motion.ts';
+import { EASING_CSS, MOTION } from '../motion-tokens.ts';
 import { chrome } from '../chrome.ts';
 import { PageTransition } from '../transitions.tsx';
-import { useLayoutEffect, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
 import { t } from '../../i18n.ts';
 import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
@@ -8,9 +12,11 @@ import { navigation } from '../navigation.ts';
 import { ViewSlot } from '../views.tsx';
 import { PanelSlot } from '../slots.tsx';
 import { DesktopShell } from './DesktopShell.tsx';
+import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, useSidebarWidth } from './sidebar-resize.ts';
 import { ModelPicker } from '../settings/ModelPicker.tsx';
 import { modelPicker } from '../settings/model-picker-state.ts';
 import { ProjectSidebar } from '../projects/ProjectSidebar.tsx';
+import { SidebarTooltip } from '../icons/SidebarTooltip.tsx';
 
 /** Product chrome is owned by React. Child panel containers remain stable across navigation. */
 export function ProductShell(): ReactNode {
@@ -18,6 +24,18 @@ export function ProductShell(): ReactNode {
   const view = useReadable(navigation);
   const status = useReadable(chrome);
   const picker = useReadable(modelPicker);
+  const reduced = usePrefersReducedMotion();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebar = useSidebarWidth();
+  const sidebarWidth = sidebarCollapsed ? 56 : sidebar.width;
+  // The workspace panel sizes itself against what the sidebar leaves of the window.
+  useEffect(() => {
+    if (navigation.getSnapshot().sidebarWidth !== sidebarWidth)
+      navigation.set({ ...navigation.getSnapshot(), sidebarWidth });
+  }, [sidebarWidth]);
+  const closeSettings = (): void => {
+    document.getElementById('settings-back')?.click();
+  };
   useLayoutEffect(() => {
     document.body.dataset.page = view.page;
     if (view.page === 'chat')
@@ -26,113 +44,86 @@ export function ProductShell(): ReactNode {
   return (
     <>
       <DesktopShell
-        navbarWidth={272}
+        navbarWidth={sidebarWidth}
         asideWidth={view.workspaceWidth}
         asideVisible={view.workspaceOpen && view.page === 'chat'}
         navbar={
           <>
-            <aside id="chat-sidebar" className="sidebar chat-sidebar" hidden={view.page !== 'chat'}>
+            <aside
+              id="chat-sidebar"
+              className="sidebar chat-sidebar"
+              data-collapsed={sidebarCollapsed}
+              inert={view.page !== 'chat'}
+            >
               <div className="brand">
-                <div className="brand-logo" role="img" aria-label={t('ui.appName')}>
-                  <img className="logo-light" src="./img/logo-light.png" alt="" />
-                  <img className="logo-dark" src="./img/logo-dark.png" alt="" />
+                <div className="brand-logo" role="img" aria-label={t('ui.brandName')}>
+                  <img className="brand-mark" src="./assets/icons/brand-sidebar.svg" alt="" />
+                  <span className="brand-name" aria-hidden="true">
+                    {t('ui.brandName')}
+                  </span>
                 </div>
+                <button
+                  id="toggle-sidebar"
+                  type="button"
+                  className="sidebar-toggle"
+                  aria-label={t(sidebarCollapsed ? 'ui.expandSidebar' : 'ui.collapseSidebar')}
+                  data-sidebar-tooltip={t(
+                    sidebarCollapsed ? 'ui.expandSidebar' : 'ui.collapseSidebar',
+                  )}
+                  aria-expanded={!sidebarCollapsed}
+                  aria-controls="sidebar-content"
+                  onClick={() => setSidebarCollapsed((value) => !value)}
+                >
+                  <AssetIcon name="sidebar-collapse" />
+                </button>
               </div>
-              <button id="new-session" className="new-session" disabled={!status.canCreate}>
-                <span aria-hidden="true">＋</span> {t('ui.newSession')}
+              <button
+                id="new-session"
+                className="new-session"
+                aria-label={t('ui.newTask')}
+                data-sidebar-tooltip={sidebarCollapsed ? t('ui.newTask') : undefined}
+                disabled={!status.canCreate}
+              >
+                <AssetIcon name="new-task" />{' '}
+                <span className="new-session-label">{t('ui.newTask')}</span>
               </button>
-              <ProjectSidebar
-                canChange={status.canSelectProject}
-                legacyCanChange={status.canChangeWorkspace}
+
+              <div id="sidebar-content" className="sidebar-content">
+                <ProjectSidebar
+                  collapsed={sidebarCollapsed}
+                  canChange={status.canSelectProject}
+                  legacyCanChange={status.canChangeWorkspace}
+                />
+              </div>
+              <div
+                id="sidebar-resize"
+                className="sidebar-resize"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={t('ui.resizeSidebar')}
+                aria-valuemin={SIDEBAR_MIN_WIDTH}
+                aria-valuemax={SIDEBAR_MAX_WIDTH}
+                aria-valuenow={sidebar.width}
+                tabIndex={0}
+                hidden={sidebarCollapsed}
+                onPointerDown={sidebar.startDrag}
+                onKeyDown={sidebar.onKeyDown}
               />
               <div className="sidebar-footer">
                 <button
                   id="open-settings"
                   className="settings-entry"
                   type="button"
+                  aria-label={t('ui.settings')}
+                  data-sidebar-tooltip={sidebarCollapsed ? t('ui.settings') : undefined}
                   disabled={picker.locked}
                 >
-                  <span aria-hidden="true">⚙</span>
-                  <span id="settings-label">{t('ui.settings')}</span>
+                  <AssetIcon name="settings" />
+                  <span id="settings-label" className="settings-label">
+                    {t('ui.settings')}
+                  </span>
                 </button>
               </div>
-            </aside>
-            <aside className="settings-sidebar" hidden={view.page !== 'settings'}>
-              <button
-                id="settings-back"
-                className="settings-back"
-                type="button"
-                disabled={picker.locked}
-              >
-                <span aria-hidden="true">←</span>
-                {t('ui.backToChat')}
-              </button>
-              <h1>{t('ui.settings')}</h1>
-              <nav aria-label={t('shell.settingsMenu')}>
-                <button
-                  id="general-settings"
-                  type="button"
-                  aria-current={view.panel === 'general-settings-content' ? 'page' : undefined}
-                >
-                  <span aria-hidden="true">
-                    <svg
-                      className="settings-nav-icon"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      focusable="false"
-                    >
-                      <path d="M4 7h7m6 0h3M4 17h3m6 0h7"></path>
-                      <circle cx="14" cy="7" r="3"></circle>
-                      <circle cx="10" cy="17" r="3"></circle>
-                    </svg>
-                  </span>
-                  {t('ui.general')}
-                </button>
-                <button
-                  id="model-settings"
-                  type="button"
-                  aria-current={view.panel === 'model-settings-content' ? 'page' : undefined}
-                >
-                  <span aria-hidden="true">
-                    <svg
-                      className="settings-nav-icon"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      focusable="false"
-                    >
-                      <rect x="6" y="6" width="12" height="12" rx="2"></rect>
-                      <path d="M9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3"></path>
-                      <rect x="9" y="9" width="6" height="6" rx="1"></rect>
-                    </svg>
-                  </span>
-                  {t('ui.models')}
-                </button>
-                <button id="workspace-maintenance-settings" type="button" hidden>
-                  <span aria-hidden="true">
-                    <svg
-                      className="settings-nav-icon"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                    >
-                      <rect x="3" y="4" width="18" height="5" rx="1"></rect>
-                      <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"></path>
-                    </svg>
-                  </span>
-                  <span id="workspace-maintenance-label" className="workspace-maintenance-label">
-                    {t('archived.title')}
-                  </span>
-                </button>
-              </nav>
             </aside>
           </>
         }
@@ -399,7 +390,7 @@ export function ProductShell(): ReactNode {
                       aria-label={t('ui.addAttachment')}
                       title={t('ui.addAttachment')}
                     >
-                      +
+                      <AssetIcon name="attach" size={20} />
                     </button>
                     <div id="permission-root" className="permission-root">
                       <ViewSlot name="permission-chip" />
@@ -466,46 +457,126 @@ export function ProductShell(): ReactNode {
                 </button>
               </footer>
             </PageTransition>
-            <PageTransition
-              viewKey="settings-page"
-              kind="page"
-              active={view.page === 'settings'}
-              focusId="settings-back"
-              id="settings-page"
-              className="settings-page"
+            {/* Keep hosts mounted synchronously for the existing controller bindings. The shell owns scrolling. */}
+            <Modal
+              opened={view.page === 'settings'}
+              onClose={closeSettings}
+              keepMounted
+              keepMountedMode="display-none"
+              withinPortal={false}
+              lockScroll={false}
+              centered
+              withCloseButton={false}
+              closeOnEscape={!picker.locked}
+              closeOnClickOutside={!picker.locked}
+              trapFocus
+              returnFocus
+              padding={0}
+              size="1080px"
+              classNames={{
+                content: 'settings-dialog',
+                inner: 'settings-dialog-inner',
+                body: 'settings-dialog-body',
+                overlay: 'settings-dialog-overlay',
+              }}
+              overlayProps={{ backgroundOpacity: 0.28, blur: 4 }}
+              transitionProps={{
+                transition: 'fade',
+                duration: reduced ? 0 : MOTION.modal.enter,
+                exitDuration: reduced ? 0 : MOTION.modal.exit,
+                timingFunction: EASING_CSS,
+              }}
               aria-label={t('shell.settingsPage')}
             >
-              <PageTransition
-                viewKey="workspace-maintenance-content"
-                kind="settings"
-                active={view.page === 'settings' && view.panel === 'workspace-maintenance-content'}
-                id="workspace-maintenance-content"
-                className="settings-content"
-                aria-labelledby="archived-sessions-title"
-              >
-                <ViewSlot name="workspace-settings" />
-              </PageTransition>
-              <PageTransition
-                viewKey="general-settings-content"
-                kind="settings"
-                active={view.page === 'settings' && view.panel === 'general-settings-content'}
-                id="general-settings-content"
-                className="settings-content"
-                aria-labelledby="general-settings-title"
-              >
-                <ViewSlot name="general-settings" />
-              </PageTransition>
-              <PageTransition
-                viewKey="model-settings-content"
-                kind="settings"
-                active={view.page === 'settings' && view.panel === 'model-settings-content'}
-                id="model-settings-content"
-                className="settings-content"
-                aria-labelledby="settings-title"
-              >
-                <ViewSlot name="model-settings" />
-              </PageTransition>
-            </PageTransition>
+              <div id="settings-page" className="settings-page">
+                <aside className="settings-sidebar">
+                  <h1>{t('ui.settings')}</h1>
+                  <nav aria-label={t('shell.settingsMenu')}>
+                    <button
+                      id="general-settings"
+                      type="button"
+                      aria-current={view.panel === 'general-settings-content' ? 'page' : undefined}
+                    >
+                      <AssetIcon name="sliders-horizontal" size={17} />
+                      {t('ui.general')}
+                    </button>
+                    <button
+                      id="model-settings"
+                      type="button"
+                      aria-current={view.panel === 'model-settings-content' ? 'page' : undefined}
+                    >
+                      <AssetIcon name="cpu" size={17} />
+                      {t('ui.models')}
+                    </button>
+                    <button id="workspace-maintenance-settings" type="button" hidden>
+                      <span aria-hidden="true">
+                        <svg
+                          className="settings-nav-icon"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                        >
+                          <rect x="3" y="4" width="18" height="5" rx="1"></rect>
+                          <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"></path>
+                        </svg>
+                      </span>
+                      <span
+                        id="workspace-maintenance-label"
+                        className="workspace-maintenance-label"
+                      >
+                        {t('archived.title')}
+                      </span>
+                    </button>
+                  </nav>
+                </aside>
+                <div className="settings-main">
+                  <button
+                    id="settings-back"
+                    type="button"
+                    className="settings-close"
+                    disabled={picker.locked}
+                    aria-label={t('ui.backToChat')}
+                    title={t('ui.backToChat')}
+                    data-autofocus
+                  >
+                    <AssetIcon name="x" size={20} />
+                  </button>
+                  <PageTransition
+                    viewKey="workspace-maintenance-content"
+                    kind="settings"
+                    active={
+                      view.page === 'settings' && view.panel === 'workspace-maintenance-content'
+                    }
+                    id="workspace-maintenance-content"
+                    className="settings-content"
+                    aria-labelledby="archived-sessions-title"
+                  >
+                    <ViewSlot name="workspace-settings" />
+                  </PageTransition>
+                  <PageTransition
+                    viewKey="general-settings-content"
+                    kind="settings"
+                    active={view.page === 'settings' && view.panel === 'general-settings-content'}
+                    id="general-settings-content"
+                    className="settings-content"
+                    aria-labelledby="general-settings-title"
+                  >
+                    <ViewSlot name="general-settings" />
+                  </PageTransition>
+                  <PageTransition
+                    viewKey="model-settings-content"
+                    kind="settings"
+                    active={view.page === 'settings' && view.panel === 'model-settings-content'}
+                    id="model-settings-content"
+                    className="settings-content"
+                    aria-labelledby="settings-title"
+                  >
+                    <ViewSlot name="model-settings" />
+                  </PageTransition>
+                </div>
+              </div>
+            </Modal>
           </>
         }
         aside={
@@ -515,6 +586,7 @@ export function ProductShell(): ReactNode {
         }
       />
       <ViewSlot name="turn-changes" />
+      <SidebarTooltip />
       <div id="session-dialog-root">
         <ViewSlot name="session-dialog" />
       </div>

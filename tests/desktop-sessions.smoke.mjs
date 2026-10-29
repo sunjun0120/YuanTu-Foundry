@@ -17,7 +17,7 @@ import { waitForPage } from './page-wait.mjs';
 // ---- merged from session-management.smoke.mjs ----
 
 test(
-  'sidebar hover menus rename and delete the targeted session without switching or losing drafts',
+  'sidebar click menus rename and delete the targeted session without switching or losing drafts',
   { timeout: 60000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-session-ui-'));
@@ -130,7 +130,7 @@ test(
       page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     const open = async (id, name) => {
       await idle();
-      await more(id).hover();
+      await more(id).click();
       await page.getByRole('menuitem', { name, exact: true }).click();
     };
     // Rename edits the row in place: Enter saves and the field gives the row back.
@@ -158,10 +158,27 @@ test(
     assert.equal(await page.getByRole('menu').isVisible(), false);
     await page.locator('#prompt').fill('未发送的草稿');
     await more(other.id).hover();
+    assert.equal(
+      await page.locator('#session-menu').isVisible(),
+      false,
+      'hover must not open session actions',
+    );
+    await more(other.id).click();
     await page.getByRole('menuitem', { name: '重命名', exact: true }).waitFor();
-    if (process.env.YUANTU_QA_DIR)
-      await page.screenshot({ path: artifactPath('session-menu.png') });
+    assert.equal(
+      await page.locator('#sidebar-icon-tooltip').count(),
+      0,
+      'the action tip must close when its menu opens',
+    );
+    await mkdir(artifactPath(''), { recursive: true });
+    await page.screenshot({ path: artifactPath('session-menu.png') });
     await page.locator('#prompt').hover();
+    assert.equal(
+      await page.getByRole('menu').isVisible(),
+      true,
+      'moving away does not close a clicked menu',
+    );
+    await page.locator('#prompt').click();
     await page.getByRole('menu').waitFor({ state: 'hidden' });
     await more(other.id).focus();
     await page.keyboard.press('ArrowDown');
@@ -243,7 +260,8 @@ test(
     await open(source.id, '删除');
     await confirm();
     assert.equal(await row(source.id).count(), 0);
-    assert.equal(await page.locator('#sessions .session-item').count(), 1);
+    // The window moves to a new session, which stays out of the list until something happens in it.
+    assert.equal(await page.locator('#sessions .session-item').count(), 0);
     assert.equal(await page.locator('#messages .message').count(), 0);
     assert.equal(await readFile(path.join(root, 'keep.txt'), 'utf8'), 'current file state');
     const check = new SessionStore(db);
@@ -1014,8 +1032,8 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   );
   assert.equal(
     await page.locator('#workspace-tree').isVisible(),
-    false,
-    'the file is a single reading pane',
+    true,
+    'the file is read beside the tree',
   );
   const fillsPanel = () =>
     page.locator('#workspace-preview-body').evaluate((body) => {
