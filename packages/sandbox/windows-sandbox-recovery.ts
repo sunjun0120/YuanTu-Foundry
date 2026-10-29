@@ -81,7 +81,7 @@ function run(
 const aclHelper =
   typeof __dirname === 'string'
     ? path.resolve(__dirname, '../packages/sandbox/windows-sandbox/acl.ps1')
-    : fileURLToPath(new URL('./windows-sandbox/acl.ps1', import.meta.url));
+    : fileURLToPath(new URL('../sandbox/windows-sandbox/acl.ps1', import.meta.url));
 // Capture trusted application code once. Guest workspace edits must never become host cleanup code.
 // Read on first use rather than at import: every Host imports this module, most never prepare a Windows sandbox,
 // and a read at import time ties module loading to a file path a bundler moves. The helper ships with the

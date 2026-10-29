@@ -1052,6 +1052,10 @@ test(
         ?.textContent.includes('wait.cjs'),
     );
     assert.match(await group.locator(':scope > summary').innerText(), /wait\.cjs/);
+    // The host backend leaves the network unrestricted, so auto mode requires this approval.
+    await page.locator('#approvals .approval').waitFor();
+    assert.match(await page.locator('#approvals .approval-subject').innerText(), /node wait\.cjs/);
+    await page.locator('#approvals').getByRole('button', { name: '允许一次', exact: true }).click();
     await writeFile(path.join(root, 'release-command'), 'ready');
     try {
       await page.waitForFunction(() =>

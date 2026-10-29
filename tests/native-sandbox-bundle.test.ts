@@ -22,6 +22,60 @@ async function bundleTo(options: BuildOptions) {
   return result;
 }
 
+for (const [format, relative] of [
+  ['esm', 'dist/packages/tools/host.bundle.mjs'],
+  ['esm', 'dist/packages/sandbox/account.mjs'],
+  ['cjs', 'dist/desktop/account.cjs'],
+] as const) {
+  test(
+    `${relative} reads the sandbox helper from a clean packaged layout`,
+    { skip: process.platform !== 'win32' && 'Windows account backend needs Windows' },
+    async (t) => {
+      const root = await tempRoot(t, 'yuantu-helper-layout-');
+      const assets = path.join(root, 'dist/packages/sandbox/windows-sandbox');
+      await mkdir(assets, { recursive: true });
+      // Replace only the external helper invocation with a read of its real resolved path.
+      // No account initialization, ACL changes or machine-wide sandbox state are involved.
+      await writeFile(
+        path.join(assets, 'yuantu-sandbox.exe'),
+        JSON.stringify({
+          version: 1,
+          ready: true,
+          problems: [],
+          details: [],
+          accounts: [
+            { account: 'offline', sid: 'S-1-5-21-1-2-3-1001' },
+            { account: 'online', sid: 'S-1-5-21-1-2-3-1002' },
+          ],
+          group: 'S-1-5-21-1-2-3-1003',
+          readRoots: [],
+        }),
+      );
+      const entry = path.join(root, relative);
+      await bundleTo({
+        stdin: {
+          contents: `import { readFile } from 'node:fs/promises';
+            import { configureAccountBackend, windowsAccountSandboxProvider } from './packages/sandbox/sandbox-account.ts';
+            configureAccountBackend({ run: helper => readFile(helper, 'utf8') });
+            void windowsAccountSandboxProvider.available().then(result => console.log(JSON.stringify(result)));`,
+          resolveDir: process.cwd(),
+          sourcefile: 'helper-layout-entry.ts',
+          loader: 'ts',
+        },
+        outfile: entry,
+        bundle: true,
+        platform: 'node',
+        format,
+        target: 'node24',
+        ...(format === 'cjs' ? commonJsModuleUrl : {}),
+        logLevel: 'silent',
+      });
+      const { stdout } = await promisify(execFile)(process.execPath, [entry], { cwd: tmpdir() });
+      assert.equal(JSON.parse(stdout), null, 'the packaged helper must answer the readiness check');
+    },
+  );
+}
+
 test('CommonJS desktop bundle loads native providers and their packaged helper', async (t) => {
   const root = await tempRoot(t, 'yuantu-native-bundle-');
   const desktop = path.join(root, 'dist/desktop');

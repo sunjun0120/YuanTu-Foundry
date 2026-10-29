@@ -245,6 +245,13 @@ test(
     );
     await page.locator('#prompt').fill('Verify the output file');
     await page.locator('#send').click();
+    // Host commands have unrestricted network access and ask even under the auto preset.
+    await page.locator('#approvals .approval').waitFor();
+    assert.match(
+      await page.locator('#approvals .approval-subject').innerText(),
+      /OUTPUT_CHECK_PASSED/,
+    );
+    await page.locator('#approvals').getByRole('button', { name: '允许一次', exact: true }).click();
     await waitForPage(
       page,
       async () =>

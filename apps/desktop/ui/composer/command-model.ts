@@ -66,7 +66,10 @@ export function paletteItems(
   const skillItems: PaletteItem[] = skills.map((skill) => ({
     kind: 'skill',
     name: skill.name,
-    description: skill.description,
+    description:
+      skill.path === 'builtin:code-analysis-report'
+        ? t('skill.codeAnalysisReportDescription')
+        : skill.description,
     value: skill.name,
   }));
   return [...commandItems(), ...skillItems].filter((item) =>

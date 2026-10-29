@@ -252,6 +252,10 @@ export const conversationMessages: Record<string, [string, string]> = {
     '只读探索后给出计划，人工批准才执行',
     'Read-only exploration, then a plan that needs human approval to run',
   ],
+  'skill.codeAnalysisReportDescription': [
+    '用内置代码分析服务分析源码包或 GitHub 仓库，并写出有据可查的分析报告。',
+    'Analyse source archives or GitHub repositories with the built-in code analysis service and write evidence-based reports.',
+  ],
   'ui.copy': ['复制代码', 'Copy code'],
   'ui.copied': ['已复制', 'Copied'],
   'ui.copyFailed': ['复制失败', 'Copy failed'],

@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import { atomicWriteFile } from '../packages/platform/write-all.ts';
 import { workspaceSandboxSid } from '../packages/sandbox/windows-sandbox-recovery.ts';
 import { toolEnvironment } from '../packages/platform/child-environment.ts';
@@ -22,6 +23,54 @@ const executeFile = promisify(execFile);
 const run = (executable: string, args: string[]) =>
   executeFile(executable, args, { env: toolEnvironment() });
 const windows = { skip: process.platform !== 'win32' && 'needs Windows' };
+
+test(
+  'the ESM Host layout loads the packaged recovery script without legacy assets',
+  windows,
+  async (t) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'yuantu-recovery-bundle-'));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const assets = path.join(directory, 'dist/packages/sandbox/windows-sandbox');
+    const entry = path.join(directory, 'dist/packages/tools/recovery.mjs');
+    const workspace = path.join(directory, 'workspace');
+    const journals = path.join(directory, 'journals');
+    for (const folder of [assets, path.dirname(entry), workspace, journals])
+      await mkdir(folder, { recursive: true });
+    // This private script records the requested operation; it never reads or changes an ACL.
+    await writeFile(
+      path.join(assets, 'acl.ps1'),
+      `param($Operation, $Root, $Journal, $Sid, $ControlRoots)
+      [IO.File]::WriteAllText((Join-Path $Root 'restored.txt'), $Operation)
+      [IO.File]::Delete($Journal)`,
+    );
+    await writeFile(
+      path.join(journals, 'fixture.json'),
+      JSON.stringify({ root: workspace, sid: 'S-1-5-21-1-2-3-1001' }),
+    );
+    const bundled = await build({
+      stdin: {
+        contents: `import { recoverWindowsSandboxLeases } from './packages/sandbox/windows-sandbox-recovery.ts';
+        console.log(JSON.stringify((await recoverWindowsSandboxLeases(process.argv[2])).restored));`,
+        resolveDir: process.cwd(),
+        sourcefile: 'recovery-layout-entry.ts',
+        loader: 'ts',
+      },
+      outfile: entry,
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      target: 'node24',
+      write: false,
+      logLevel: 'silent',
+    });
+    await writeFile(entry, bundled.outputFiles![0]!.contents);
+    const { stdout } = await run(process.execPath, [entry, journals]);
+    assert.deepEqual(JSON.parse(stdout), [workspace]);
+    assert.equal(await readFile(path.join(workspace, 'restored.txt'), 'utf8'), 'restore');
+    await assert.rejects(stat(path.join(journals, 'fixture.json')), { code: 'ENOENT' });
+  },
+);
+
 function aclEvidence(stdout: string): string {
   // icacls separates the ACL/mandatory-label block from its localized process
   // summary by an empty line. Keep every security entry, omit only that footer.

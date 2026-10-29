@@ -35,10 +35,11 @@ import {
 } from './sandbox-provider.ts';
 import { quoteWindowsArgument, windowsProgramNeedsShell } from './windows-command.ts';
 
+// Source modules in sandbox/ and the ESM Host bundle in tools/ use this sibling package.
 const assetRoot =
   typeof __dirname === 'string'
     ? path.resolve(__dirname, '../packages/sandbox/windows-sandbox')
-    : fileURLToPath(new URL('./windows-sandbox/', import.meta.url));
+    : fileURLToPath(new URL('../sandbox/windows-sandbox/', import.meta.url));
 
 /** Runs the helper with fixed arguments and answers its stdout; replaced in tests. */
 export type HelperRunner = (

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setLocale, t } from '../apps/desktop/i18n.ts';
+import { builtinSkills } from '../packages/resources/builtin-skills.ts';
 import {
   commandItems,
   commandQuery,
@@ -51,6 +52,32 @@ test('filtering matches name, description and value, and includes skills', () =>
   );
   // A dismissed menu stays closed until the next keystroke resets it.
   assert.deepEqual(paletteItems('/', true, []), []);
+});
+
+test('the built-in analysis description follows the interface language without changing local skills', () => {
+  const skills = [
+    ...builtinSkills(),
+    { name: 'local-review', description: '项目自定义说明', path: '/workspace/skills/review.md' },
+  ];
+  try {
+    setLocale('en-US');
+    const english = paletteItems('/', false, skills);
+    const analysis = english.find((item) => item.value === 'code-analysis-report');
+    assert.ok(analysis);
+    assert.match(analysis.description, /analys/i);
+    assert.doesNotMatch(analysis.description, /[\u4e00-\u9fff]/);
+    assert.equal(
+      english.find((item) => item.value === 'local-review')?.description,
+      '项目自定义说明',
+    );
+    assert.ok(
+      paletteItems('/analyse', false, skills).some((item) => item.value === 'code-analysis-report'),
+    );
+    setLocale('zh-CN');
+    assert.match(paletteItems('/code-analysis', false, skills)[0]!.description, /内置代码分析/);
+  } finally {
+    setLocale('zh-CN');
+  }
 });
 
 test('a chosen row leaves the text a person expects', () => {
