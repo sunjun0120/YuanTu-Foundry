@@ -77,6 +77,17 @@ export function emptyRequestTiming(): RequestTiming {
     lengthCount: 0,
   };
 }
+/**
+ * What a token budget counts: output, plus the input the provider did not serve from its prompt cache.
+ *
+ * A cached read is the prefix an earlier round already paid for, replayed; counting it makes a budget run out in
+ * proportion to rounds × context rather than to new work. A provider that reports no cache figure has every input
+ * token counted, which is the conservative reading of "unknown".
+ */
+export function billableTokens(usage: Usage): number {
+  const cached = Math.max(0, Math.min(usage.cachedInputTokens ?? 0, usage.inputTokens));
+  return usage.inputTokens - cached + usage.outputTokens;
+}
 export function emptyStatistics(): SessionStatistics {
   return {
     turns: 0,

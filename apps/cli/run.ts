@@ -4,6 +4,7 @@ import type { PermissionPolicy } from '../../packages/protocol/permission-policy
 import type { SessionStore } from '../../packages/storage/sqlite.ts';
 import type { Approver, Plan, Questioner } from '../../packages/protocol/index.ts';
 import { runGoalRounds } from '../../packages/core/goal-driver.ts';
+import { billableTokens } from '../../packages/protocol/statistics.ts';
 import {
   GOAL_CONTINUATIONS_PER_REQUEST,
   GOAL_TOKENS_PER_REQUEST,
@@ -324,7 +325,7 @@ export async function runAgentCommand(
           return {
             status: result.status,
             toolCalls: progress.substantiveToolCalls,
-            tokens: result.usage.inputTokens + result.usage.outputTokens,
+            tokens: billableTokens(result.usage),
           };
         },
       });

@@ -83,15 +83,18 @@ export interface RunDefaults {
   investigationMs: number;
   questionTimeoutMs: number;
   /**
-   * A run's total budget: rounds, wall-clock milliseconds and model tokens (input + output, every round). `0`
-   * turns that one off.
+   * A run's total budget: rounds, wall-clock milliseconds less the time spent waiting on a person, and model
+   * tokens (output plus the input not served from the provider's prompt cache, every round). `0` turns that one
+   * off.
    *
    * A backstop rather than a size for the task. The round loop deliberately has no round count of its own (see
    * `packages/core/agent.ts`), and the goal's budget only counts the rounds a goal asked for; nothing bounded an
    * ordinary run that kept calling tools — a background wake or an unattended task with nobody to press Stop
    * could spend for as long as the endpoint answered. The defaults are generous enough that interactive work
-   * does not meet them. The token count is cumulative, so it grows with rounds × context: it is the cap on what
-   * a runaway run can bill, not a measure of work done. A run that reaches one ends `limited`, at a round
+   * does not meet them. The token count is cumulative, but cached reads are left out of it: counting them made
+   * it grow with rounds × context, so a long task with a large conversation met it after a hundred-odd rounds
+   * of ordinary work. It is the cap on what a runaway run can bill, not a measure of work done; a provider
+   * that reports no cache figure is counted in full. A run that reaches one ends `limited`, at a round
    * boundary, with every finished tool result already recorded.
    *
    * Rounds are off by default (`0`), and that is the same decision the loop's comment records: a default of 256

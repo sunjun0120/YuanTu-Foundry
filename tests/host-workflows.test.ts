@@ -232,19 +232,18 @@ test('Host workflow preserves summary constraints in repaired files and full his
   /**
    * The window this fixture compacts under, and the arithmetic the two numbers below are chosen from.
    *
-   * `resolveCompactionSpec` resolves **no proactive policy at all** unless the window can carry this
-   * request's output reservation plus 65,536 tokens of headroom, so the old 24,000 did not compact "too
-   * eagerly" — it never resolved a policy, and compaction was left to the request that stops fitting. The
-   * summary request meanwhile has to carry the main system prompt, the tool catalogue (deferred by default since
-   * `load_tools`, so smaller than the ~55 KB it was) *and* the batch, so at 24,000 the fixed ~19.3 K tokens left no
-   * room for a single ~41.6 KB pair and every batch was refused. With 128,000 declared: the threshold is
-   * min(0.8 × 128,000, 128,000 − 4,096 − 65,536) = 58,368 tokens, retention keeps 16% of 123,904 = 19,824
+   * The summary request has to carry the main system prompt, the tool catalogue (deferred by default since
+   * `load_tools`, so smaller than the ~55 KB it was) *and* the batch, so at a 24,000 window the fixed ~19.3 K
+   * tokens left no room for a single ~41.6 KB pair and every batch was refused. With 128,000 declared the
+   * computed threshold would be min(0.8 × 128,000, 128,000 − 4,096 − 19,200 headroom) = 102,400, past what the
+   * seeded pairs reach, so the threshold is set explicitly to 58,368; retention keeps 16% of 123,904 = 19,824
    * tokens verbatim, the three seeded pairs (4,200 repeats each, sized with room to spare so a smaller tool catalogue does not drop the round below the threshold) put it above 58,368 estimated tokens (above the threshold,
    * still inside the window), and a batch plus the fixed part fits with room to spare.
    */
   const client = clientFor(root, url, {
     YUANTU_MAX_CONTEXT_TOKENS: '128000',
     YUANTU_MAX_OUTPUT_TOKENS: '4096',
+    YUANTU_AUTO_COMPACT_TOKENS: '58368',
   });
   const events: AgentEvent[] = [];
   const approvals: Promise<unknown>[] = [];

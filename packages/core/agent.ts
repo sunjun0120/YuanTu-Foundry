@@ -11,7 +11,7 @@ import type {
 } from '../protocol/index.ts';
 import { validateUserInput } from '../protocol/images.ts';
 import { resolveRunLimits } from '../protocol/settings.ts';
-import { emptyStatistics } from '../protocol/statistics.ts';
+import { billableTokens, emptyStatistics } from '../protocol/statistics.ts';
 import { loadInstructions } from '../tools/instructions.ts';
 import { discoverSkills } from '../resources/skills.ts';
 import { builtinServiceConfigured } from '../builtin-services/manifest.ts';
@@ -301,6 +301,7 @@ export class Agent {
        */
       let approveTool!: Approver;
       let askTool!: Questioner;
+      let humanWaitMs: () => number = () => 0;
       let planning: PlanningTools | undefined;
       if (input.planPhase) {
         planning = createPlanningTools({
@@ -432,7 +433,11 @@ export class Agent {
        * the decision itself (see `run/interaction.ts`). `readOnly` is passed as a getter because the run can
        * tighten it mid-flight, and the adapter must read the value in force when a call arrives.
        */
-      ({ approve: approveTool, ask: askTool } = createRunInteraction({
+      ({
+        approve: approveTool,
+        ask: askTool,
+        humanWaitMs,
+      } = createRunInteraction({
         store,
         sessionId: input.sessionId,
         queue,
@@ -708,11 +713,16 @@ export class Agent {
            * recorded, so stopping here leaves nothing half done. This is the backstop the comment above leaves
            * room for — not a guess at the task's size, but the ceiling an operator set on what one run may spend
            * when nobody is watching it (`RunDefaults.maxRunRounds`; `0` turns a budget off).
+           *
+           * Both measures leave out what is not the run's own spending. Time a person took to answer an approval
+           * or a question is theirs: a run left waiting overnight has not run for a night. And input the provider
+           * served from its prompt cache is the same conversation counted again — summing it made the budget run
+           * out in proportion to rounds × context, so a long task failed for having talked a lot.
            */
           const exhausted = runBudgetExhausted(limits, {
             rounds: round,
-            elapsedMs: Date.now() - loopStartedAt,
-            tokens: usage.inputTokens + usage.outputTokens,
+            elapsedMs: Date.now() - loopStartedAt - humanWaitMs(),
+            tokens: billableTokens(usage),
           });
           if (exhausted) throw new RunFailure('run-budget', exhausted);
           /**

@@ -681,7 +681,8 @@ async function setup(t: test.TestContext) {
  *
  * 6 900 tokens measured: the largest single batch costs about 6.2K with the fixed part and the instruction, and
  * the whole history about 7.5K, so the window has room on either side. `maxContextChars` is a ceiling here, not
- * the trigger — the window is.
+ * the trigger — the window is. With a 128-token answer the policy resolves a 5 520-token threshold (headroom is
+ * 15% of a window this small) and keeps about 1 083 tokens verbatim.
  */
 const SUMMARY_WINDOW_TOKENS = 6900;
 
@@ -696,7 +697,8 @@ test('overflow summaries retain project constraints and persist without deleting
       // The summary reaches the round as the first message rather than as part of the prompt, so "the model was
       // told about the constraint" is a claim about the conversation now.
       assert.match(JSON.stringify(request.messages), /blue theme/);
-      assert.ok(JSON.stringify(request.messages).length + request.system.length < 6000);
+      // The covered tool result is what the summary replaced; only the user turn the tail is anchored to returns.
+      assert.doesNotMatch(JSON.stringify(request.messages), /old source old source/);
       return reply2('Continued with the blue theme.');
     },
   };
@@ -719,8 +721,9 @@ test('overflow summaries retain project constraints and persist without deleting
   const reopened = new SessionStore(db);
   try {
     assert.match(reopened.contextSurface(session.id)!.summary, /blue theme/);
-    // The covered prefix includes the runtime's skill announcement, which is a persisted user-role message.
-    assert.equal(reopened.contextSurface(session.id)!.coveredMessages, 5);
+    // The retained ~1 083 tokens reach back past the run's own announcements and prompt to the closing assistant
+    // turn, so the summary covers the seeded user turn, the read and its result.
+    assert.equal(reopened.contextSurface(session.id)!.coveredMessages, 3);
   } finally {
     reopened.close();
   }
@@ -1031,6 +1034,10 @@ test('compaction replays the opaque provider continuation instead of rewriting t
       output: [{ type: 'reasoning', encrypted_content: 'opaque-marker-' + 'x'.repeat(2500) }],
     },
   });
+  // A later turn bigger than the ~1 083-token verbatim tail, so the continuation falls in what is summarised
+  // rather than in what is kept — the replay is only observable on a message a batch carries.
+  store.append(session.id, { role: 'user', content: 'Next detail. ' + 'later '.repeat(600) });
+  store.append(session.id, { role: 'assistant', content: 'Noted.', toolCalls: [] });
   let summaries = 0;
   /** What each summary request was shown, so the replay can be compared with the transcript afterwards. */
   const batches: ModelRequest['messages'][] = [];
@@ -1855,7 +1862,9 @@ test('a route correction sizes the retained tail in the tokens the endpoint bill
    * session's learned correction says each message costs three times the heuristic's guess.
    *
    * The numbers are the policy's own: a 120 000-token window with a 40 000-token answer reserve leaves 80 000 for
-   * messages, 12 800 of which (16%) stay verbatim, and the 65 536-token headroom caps the threshold at 14 464. The
+   * messages, 12 800 of which (16%) stay verbatim. The threshold is pinned at 14 464 rather than computed (it would
+   * be 62 000, with headroom scaled to 15% of the window), because what is under test is the retention rule and
+   * not when compression starts; the explicit threshold leaves the message budget and retention unchanged. The
    * seeded conversation is just over that threshold and its turns are small, so the tail the budget lands on is
    * also comfortably under it: one compaction, no convergence pass, and what is counted below is the retention
    * rule rather than a second pass over an already compacted conversation.
@@ -1879,6 +1888,7 @@ test('a route correction sizes the retained tail in the tokens the endpoint bill
       signal: new AbortController().signal,
       maxOutputTokens: 40_000,
       maxContextTokens: 120_000,
+      autoCompactTokens: 14_464,
       summaryTimeoutMs: 5_000,
       ...(calibration ? { calibration } : {}),
       onUsage: () => {},

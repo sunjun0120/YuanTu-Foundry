@@ -21,6 +21,11 @@ for (const mode of ['prune', 'shrink'] as const) {
     const original = history();
     for (const message of original) store.append(session.id, message);
     let spills = 0;
+    /**
+     * The pass point is 20% of the 80,000-token threshold a 100K window with a 1K answer resolves to: 16,000. The
+     * 80,000-character result is about 27,700 with the answer at factor 1 (above it, so the pass runs) and about
+     * 14,300 at factor 0.5 (below it, which is the falling pressure the projection must survive).
+     */
     const prepare = (owner: SessionStore, factor: number) =>
       prepareContext({
         store: owner,
@@ -44,7 +49,7 @@ for (const mode of ['prune', 'shrink'] as const) {
                 policy: { thresholdChars: 1000, headChars: 400, tailChars: 200 },
                 keepRecent: 0,
               },
-              prunePercent: 50,
+              prunePercent: 20,
             }
           : {
               shrink: {
@@ -55,7 +60,7 @@ for (const mode of ['prune', 'shrink'] as const) {
                   return { path: 'full.txt', bytes: 80_000, lines: 1 };
                 },
               },
-              shrinkPercent: 50,
+              shrinkPercent: 20,
             }),
         onUsage() {},
         onCompaction() {},

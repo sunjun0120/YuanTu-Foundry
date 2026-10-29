@@ -51,6 +51,13 @@ export interface RunInteractionOptions {
 export interface RunInteraction {
   approve: Approver;
   ask: Questioner;
+  /**
+   * Wall time this run has spent waiting on a person, so far.
+   *
+   * Overlapping waits (two parallel calls each asking) are counted once: what is measured is how long the run
+   * was held by somebody else, not how many prompts were open. A wait still open counts up to now.
+   */
+  humanWaitMs: () => number;
 }
 
 export function createRunInteraction(options: RunInteractionOptions): RunInteraction {
@@ -65,6 +72,19 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
   const approvedCommands = new Set<string>();
   /** Approvals this run refused without asking a person, so the registry can report policy rather than "user no". */
   const readOnlyRefusals = new WeakSet<Approval>();
+  /** The person-held clock behind `humanWaitMs`: open waits, when the first of them opened, and closed time. */
+  let openWaits = 0;
+  let waitOpenedAt = 0;
+  let closedWaitMs = 0;
+  const waitingOnPerson = async <T>(wait: () => Promise<T>): Promise<T> => {
+    if (openWaits++ === 0) waitOpenedAt = Date.now();
+    try {
+      return await wait();
+    } finally {
+      if (--openWaits === 0) closedWaitMs += Date.now() - waitOpenedAt;
+    }
+  };
+  const humanWaitMs = (): number => closedWaitMs + (openWaits > 0 ? Date.now() - waitOpenedAt : 0);
   const commandKey = (approval: Approval): string | undefined => {
     if (approval.toolCall.name !== 'run_command') return undefined;
     const args = approval.toolCall.arguments as { command?: unknown; cwd?: unknown } | undefined;
@@ -112,9 +132,8 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
       return false;
     }
     try {
-      const allowed = await options.approve?.(
-        approval,
-        AbortSignal.any([approvalSignal, steering]),
+      const allowed = await waitingOnPerson(async () =>
+        options.approve?.(approval, AbortSignal.any([approvalSignal, steering])),
       );
       /**
        * Why the wait ended, which is not the same question as what the answer was.
@@ -164,7 +183,10 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
     emit('question.required', { request });
     store.recordEvent(sessionId, 'question.required', { request });
     try {
-      const outcome = await options.question(request, AbortSignal.any([questionSignal, steering]));
+      const question = options.question;
+      const outcome = await waitingOnPerson(() =>
+        question(request, AbortSignal.any([questionSignal, steering])),
+      );
       // Recorded the same way an approval is: the pair is what makes "never answered" mean interrupted.
       store.recordEvent(sessionId, 'question.answered', { request, outcome });
       emit('question.answered', { request, outcome });
@@ -191,5 +213,5 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
    */
   approve.decisionSource = (approval) =>
     readOnlyRefusals.has(approval) ? 'policy' : options.approve?.decisionSource?.(approval);
-  return { approve, ask };
+  return { approve, ask, humanWaitMs };
 }

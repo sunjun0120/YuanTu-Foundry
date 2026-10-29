@@ -16,7 +16,7 @@ import { storeFixture } from './temp-fixture.ts';
 async function loopingRun(
   t: test.TestContext,
   budget: Partial<AgentOptions>,
-  shape: { tokensPerRound?: number } = {},
+  shape: { tokensPerRound?: number; cachedPerRound?: number; permission?: boolean } = {},
 ) {
   const { store, session } = await storeFixture(t, 'yuantu-run-budget-');
   const tools = new ToolRegistry();
@@ -25,6 +25,7 @@ async function loopingRun(
     name: 'probe',
     description: 'Does nothing, forever if asked',
     inputSchema: { type: 'object', properties: {} },
+    ...(shape.permission ? { permission: 'write' as const } : {}),
     async execute() {
       executed++;
       return { isError: false, content: 'again' };
@@ -45,7 +46,13 @@ async function loopingRun(
           text: '',
           finishReason: 'tool_calls',
           toolCalls: [{ id: `call-${requests}`, name: 'probe', arguments: {} }],
-          usage: { inputTokens: input, outputTokens: 10 },
+          usage: {
+            inputTokens: input,
+            outputTokens: 10,
+            ...(shape.cachedPerRound === undefined
+              ? {}
+              : { cachedInputTokens: shape.cachedPerRound }),
+          },
         };
       },
     },
@@ -68,6 +75,36 @@ test('the token budget counts every round, input and output', async (t) => {
   assert.equal(result.status, 'limited', result.error);
   assert.match(result.error ?? '', /3000 model tokens/);
   assert.equal(requests, 3);
+});
+
+test('the token budget leaves out input the provider served from its prompt cache', async (t) => {
+  // 1,010 billed a round, 900 of it cached: 110 a round counts, so a 3,000 budget outlasts a 5-round cap.
+  const { result, requests } = await loopingRun(
+    t,
+    { maxRunRounds: 5, maxRunTokens: 3_000 },
+    { cachedPerRound: 900 },
+  );
+  assert.match(result.error ?? '', /budget of 5 model rounds/);
+  assert.equal(requests, 5);
+});
+
+test('the wall-clock budget leaves out time spent waiting on a person', async (t) => {
+  // Every round waits 150 ms for an approval; three of them are well past a 200 ms budget of the run's own time.
+  const { result, requests, executed } = await loopingRun(
+    t,
+    {
+      maxRunRounds: 3,
+      maxRunMs: 200,
+      approve: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return true;
+      },
+    },
+    { permission: true },
+  );
+  assert.match(result.error ?? '', /budget of 3 model rounds/);
+  assert.equal(requests, 3);
+  assert.equal(executed, 3, 'every waited-for approval was granted and its call ran');
 });
 
 test('budgets default on, generous, and zero turns one off', () => {

@@ -47,8 +47,26 @@ test('the ratio wins on a window with room to spare, and the budget wins on a ti
     contextWindow: 200_000,
     reservedCompletionTokens: 100_000,
   });
-  assert.equal(tight.thresholdTokens, Math.min(160_000, 100_000 - 65_536));
-  assert.equal(tight.thresholdTokens, 34_464);
+  // 15% of a 200K window is 30,000, below the 64K cap, so that is the headroom.
+  assert.equal(tight.thresholdTokens, Math.min(160_000, 100_000 - 30_000));
+  assert.equal(tight.thresholdTokens, 70_000);
+});
+
+test('headroom scales with a window too small for the 64K cap, so small windows still compress early', () => {
+  // 128K with a 32K answer: a fixed 64K put the threshold at 30,464 — a quarter of the window.
+  const mid = resolveCompactionSpec({ contextWindow: 128_000, reservedCompletionTokens: 32_000 });
+  assert.equal(mid.pressureBudgetTokens, 96_000 - 19_200);
+  assert.equal(mid.thresholdTokens, 76_800);
+  // 64K with an 8K answer: a fixed 64K left nothing to compress towards, so no proactive policy resolved at all.
+  const small = resolveCompactionSpec({ contextWindow: 64_000, reservedCompletionTokens: 8_192 });
+  assert.equal(small.thresholdTokens, 64_000 - 8_192 - 9_600);
+  assert.ok(small.retainTokens < small.thresholdTokens);
+  // A large window keeps the cap: the share would be more than 64K.
+  const large = resolveCompactionSpec({
+    contextWindow: 1_000_000,
+    reservedCompletionTokens: 32_000,
+  });
+  assert.equal(large.pressureBudgetTokens, 968_000 - 65_536);
 });
 
 test('an operator threshold replaces the computed one rather than adding a second ceiling', () => {
@@ -79,10 +97,10 @@ test('a window that cannot carry the reservation and the headroom is refused, wi
     () => resolveCompactionSpec({ contextWindow: 100_000, reservedCompletionTokens: 100_000 }),
     /leaving no room for messages/,
   );
-  // Messages have room, but not enough for the headroom on top of it.
+  // Messages have room, but not enough for the headroom (15% of 70,000 = 10,500) on top of it.
   assert.throws(
-    () => resolveCompactionSpec({ contextWindow: 70_000, reservedCompletionTokens: 8_192 }),
-    /headroom tokens/,
+    () => resolveCompactionSpec({ contextWindow: 70_000, reservedCompletionTokens: 62_000 }),
+    /10500 headroom tokens/,
   );
   assert.throws(
     () => resolveCompactionSpec({ contextWindow: 0, reservedCompletionTokens: 0 }),

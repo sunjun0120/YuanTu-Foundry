@@ -18,6 +18,7 @@ import type { InvariantViolation } from '../../packages/protocol/invariants.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
 import { PermissionPolicy } from '../../packages/protocol/permission-policy.ts';
 import { runGoalRounds } from '../../packages/core/goal-driver.ts';
+import { billableTokens } from '../../packages/protocol/statistics.ts';
 import { RoundEvidence } from '../../packages/core/goal-progress.ts';
 import { executionPolicy as callExecutionPolicy } from '../../packages/sandbox/execution-policy.ts';
 import { reconcilePendingFileChanges } from '../../packages/tools/file-undo.ts';
@@ -409,7 +410,7 @@ export async function startRun(
           return {
             status: outcome.status,
             toolCalls: substantiveToolCalls,
-            tokens: outcome.usage.inputTokens + outcome.usage.outputTokens,
+            tokens: billableTokens(outcome.usage),
           };
         },
       });

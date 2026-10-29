@@ -8,8 +8,8 @@ import { estimateMessageTokens } from './budget.ts';
  * and the part that was kept was whatever happened to start at the previous user turn.
  *
  * The defaults are the ones DeepSeek Harness resolves for a routed model, restated here as one object:
- * compress at 80% of the window, but never with less than 64K of headroom on top of the output this request
- * already reserved; keep the newest 16% of the message budget verbatim; after a compression that did not get
+ * compress at 80% of the window, but never with less than 64K of headroom (15% of a window too small for that)
+ * on top of the output this request already reserved; keep the newest 16% of the message budget verbatim; after a compression that did not get
  * the conversation under the threshold, try once more.
  *
  * The output reservation is subtracted first because it is not available to messages: a request that fills the
@@ -20,8 +20,17 @@ import { estimateMessageTokens } from './budget.ts';
 export const COMPACTION_DEFAULTS = {
   /** Share of the window at which compression starts. */
   thresholdRatio: 0.8,
-  /** Room kept free beyond the request's own output reservation. */
+  /** Room kept free beyond the request's own output reservation, at most. */
   headroomTokens: 65_536,
+  /**
+   * The same room as a share of the window, which is what it is on a window too small for the cap.
+   *
+   * A fixed 64K was a large window's number applied to every window: on 128K with a 32K answer it put the
+   * threshold at a quarter of the window, so the conversation was summarised every few turns, and on 64K it left
+   * no room at all, so nothing was compressed until the endpoint refused a request. Scaling it keeps the same
+   * "a compression must buy at least this much" promise in proportion to what the window can hold.
+   */
+  headroomRatio: 0.15,
   /** Share of the message budget kept verbatim at the tail. */
   retainRatio: 0.16,
   /**
@@ -77,10 +86,14 @@ export function resolveCompactionSpec(input: {
       `The request reserves ${reserved} output tokens of a ${contextWindow}-token window, leaving no room ` +
         "for messages; lower the model's output cap or declare a larger window",
     );
-  const pressureBudgetTokens = messageBudgetTokens - Math.max(0, policy.headroomTokens);
+  const headroomTokens = Math.max(
+    0,
+    Math.min(policy.headroomTokens, Math.floor(contextWindow * policy.headroomRatio)),
+  );
+  const pressureBudgetTokens = messageBudgetTokens - headroomTokens;
   if (pressureBudgetTokens <= 0)
     throw new Error(
-      `The request reserves ${reserved} output tokens and ${policy.headroomTokens} headroom tokens of a ` +
+      `The request reserves ${reserved} output tokens and ${headroomTokens} headroom tokens of a ` +
         `${contextWindow}-token window, leaving nothing to compress towards; lower the output cap, lower the ` +
         'headroom, or declare a larger window',
     );

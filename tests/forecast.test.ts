@@ -310,9 +310,9 @@ test('a conversation the window cannot take is compressed before the request is 
 
 test('a conversation above the threshold is compressed while it would still fit', async (t) => {
   const { store: database, id } = await store(t);
-  // About 30,000 estimated tokens in a 100,000-token window: this request would be accepted as it stands, so a
+  // About 83,500 estimated tokens in a 100,000-token window: this request would be accepted as it stands, so a
   // policy that only reacted to "does it not fit" would send it unchanged.
-  for (const message of transcript(9, 5000)) database.append(id, message);
+  for (const message of transcript(25, 5000)) database.append(id, message);
   database.append(id, user('Continue.'));
   const calls: ModelRequest[] = [];
   const prepared = await prepareContext({
@@ -331,7 +331,8 @@ test('a conversation above the threshold is compressed while it would still fit'
     maxOutputTokens: 8_000,
     /**
      * The policy's own arithmetic, so the test fails loudly if any term moves:
-     * messageBudget 92,000; pressureBudget 26,464; threshold min(80,000, 26,464) = 26,464; retain ≈ 14,720.
+     * messageBudget 92,000; headroom min(65,536, 15,000) = 15,000; pressureBudget 77,000;
+     * threshold min(80,000, 77,000) = 77,000; retain ≈ 14,720.
      */
     maxContextTokens: 100_000,
     shrinkPercent: 100,
@@ -346,17 +347,18 @@ test('a conversation above the threshold is compressed while it would still fit'
   // Compression happens before the conversation is anywhere near the window, which is what leaves the summary
   // request itself room to be sent.
   assert.ok(
-    prepared.forecast.inputTokens < 26_464,
+    prepared.forecast.inputTokens < 77_000,
     `expected the compacted surface under the threshold, got ${prepared.forecast.inputTokens}`,
   );
 });
 
 test('compression converges: a retry is allowed, and then it stops', async (t) => {
   const { store: database, id } = await store(t);
-  for (const message of transcript(6, 5000)) database.append(id, message);
-  // One trailing result bigger than the retention budget: the tail cannot be made small enough by the first
-  // compression alone, so the policy pays for one more attempt instead of leaving the round at the wall.
-  database.append(id, user(`Huge ${'z'.repeat(120_000)}`));
+  for (const message of transcript(3, 5000)) database.append(id, message);
+  // One trailing turn that alone is above the 77,000-token threshold (about 79,000) yet inside the 92,000 the
+  // messages may use: the tail cannot be made small enough by the first compression alone, so the policy pays
+  // for one more attempt instead of leaving the round at the wall.
+  database.append(id, user(`Huge ${'z'.repeat(237_000)}`));
   const calls: ModelRequest[] = [];
   const prepared = await prepareContext({
     store: database,
@@ -405,10 +407,10 @@ test('the retry holds the compaction lock while its own summary is in flight', a
    * exactly that way — one never reached the retry at all, the other sampled too early.
    */
   const { store: database, id } = await store(t);
-  for (const message of transcript(6, 5000)) database.append(id, message);
-  // A tail far larger than the retention budget, so one compression cannot get the conversation under the
-  // threshold and the policy pays for the retry. The window still has room for it, or the round refuses first.
-  database.append(id, user(`Huge ${'z'.repeat(120_000)}`));
+  for (const message of transcript(3, 5000)) database.append(id, message);
+  // A tail that alone is above the threshold, so one compression cannot get the conversation under it and the
+  // policy pays for the retry. The window still has room for it, or the round refuses first.
+  database.append(id, user(`Huge ${'z'.repeat(237_000)}`));
   // The lock only exists inside a run: `claimCompaction` returns immediately when the session has no lease
   // (`sqlite.ts:1875`), so the fixture has to hold one for the question to be askable at all.
   const runId = database.beginRun(id);
