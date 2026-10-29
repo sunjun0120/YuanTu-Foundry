@@ -612,6 +612,57 @@ test('a failed threshold compaction waits a few rounds before it is tried again'
   // Round 0 tries and fails; rounds 1-3 wait; round 4 tries again; round 5 waits.
   assert.equal(summaries, 2);
 });
+test('the wait after a failed compaction carries into the next run of the session', async (t) => {
+  const { store, session } = await fixture(t);
+  const tools = new ToolRegistry();
+  tools.register({
+    name: 'noop',
+    description: 'Does nothing',
+    inputSchema: { type: 'object', properties: {} },
+    async execute() {
+      return { isError: false, content: 'ok' };
+    },
+  });
+  /** The round of its own run each summary request was made before, per run. */
+  const summaryRounds: number[][] = [];
+  const run = async (answerAt: number) => {
+    let rounds = 0;
+    const attempts: number[] = [];
+    summaryRounds.push(attempts);
+    const result = await thresholdAgent(
+      store,
+      session.id,
+      {
+        async complete(request) {
+          if (isSummaryRequest(request)) {
+            attempts.push(rounds);
+            throw new Error('summary unavailable');
+          }
+          rounds++;
+          return rounds <= answerAt
+            ? {
+                text: '',
+                toolCalls: [
+                  { id: `call-${summaryRounds.length}-${rounds}`, name: 'noop', arguments: {} },
+                ],
+                finishReason: 'tool_calls',
+                usage: { inputTokens: 13000, outputTokens: 3 },
+              }
+            : reply(13000);
+        },
+      },
+      tools,
+    ).run({ sessionId: session.id, prompt: 'Continue.' });
+    assert.equal(result.status, 'completed', result.error);
+  };
+  // Two rounds: round 0 tries and fails, round 1 waits, and the run ends with two rounds of the wait unspent.
+  await run(1);
+  assert.deepEqual(summaryRounds[0], [0]);
+  assert.equal(store.newestPayload(session.id, 'context.compaction.deferred')?.remainingRounds, 2);
+  // The next run — a goal continuation, a follow-up — spends those two before it tries again, at its round 2.
+  await run(3);
+  assert.deepEqual(summaryRounds[1], [2], 'the new run did not retry the failed summary at once');
+});
 test('a small explicit context window clips default output instead of rejecting a short prompt', async (t) => {
   const { store, session } = await fixture(t);
   let allowance = 0;

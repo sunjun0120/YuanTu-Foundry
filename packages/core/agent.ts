@@ -16,6 +16,7 @@ import { loadInstructions } from '../tools/instructions.ts';
 import { discoverSkills } from '../resources/skills.ts';
 import { builtinServiceConfigured } from '../builtin-services/manifest.ts';
 import { goalTools } from '../tools/goal.ts';
+import type { SessionStore } from '../storage/sqlite.ts';
 import type { AgentOptions, AgentRunInput } from './agent-options.ts';
 import { admitVisibleBackground } from './background-deliveries.ts';
 import { TokenCalibration, calibrationRoute } from './context/calibration.ts';
@@ -75,6 +76,21 @@ let messageCounter = 0;
  * still compressed immediately; only the early, threshold-driven attempt waits.
  */
 const COMPACTION_RETRY_ROUNDS = 3;
+/**
+ * The rounds of a compaction wait the session's previous run left unspent, `0` when there is none.
+ *
+ * Read from the log rather than kept in memory, because the next run is often a new one — a goal continuation, a
+ * follow-up — and that is exactly the run that would otherwise retry the summary that just failed. Clamped to the
+ * wait's own length, so a malformed record can defer at most what one failure would have.
+ */
+export function inheritedCompactionWait(
+  store: Pick<SessionStore, 'newestPayload'>,
+  sessionId: string,
+): number {
+  const remaining = store.newestPayload(sessionId, 'context.compaction.deferred')?.remainingRounds;
+  if (typeof remaining !== 'number' || !Number.isFinite(remaining)) return 0;
+  return Math.min(COMPACTION_RETRY_ROUNDS, Math.max(0, Math.floor(remaining)));
+}
 
 /** Which of a run's total budgets is spent, said the way the run's error reads; `undefined` while none is. */
 export function runBudgetExhausted(
@@ -565,6 +581,18 @@ export class Agent {
       }
       // The step the log has open, its timing, and the one way it closes (see `run/steps.ts`).
       const steps = new RunSteps({ store, sessionId: input.sessionId, runId, statistics, emit });
+      /**
+       * The compaction wait this run inherits and leaves (see `COMPACTION_RETRY_ROUNDS`).
+       *
+       * `retryRound` is the first round of *this* run that may start a threshold compaction; a previous run that
+       * ended inside its wait hands the remainder over through `context.compaction.deferred`.
+       */
+      const compactionWait = {
+        inherited: inheritedCompactionWait(store, input.sessionId),
+        retryRound: 0,
+        roundsStarted: 0,
+      };
+      compactionWait.retryRound = compactionWait.inherited;
       try {
         signal.throwIfAborted();
         const instructions = loadInstructions(workspace);
@@ -703,11 +731,10 @@ export class Agent {
          * nothing else. Every round still opens a step, so a visit to this loop is visible in the log: the
          * count is not a limit, but it is a fact.
          */
-        /** The first round that may again start a threshold compaction after one failed (see `COMPACTION_RETRY_ROUNDS`). */
-        let compactionRetryRound = 0;
         const loopStartedAt = Date.now();
         for (let round = 0; ; round++) {
           signal.throwIfAborted();
+          compactionWait.roundsStarted = round + 1;
           /**
            * The run's total budget, checked where a round begins: every tool result of the round before is already
            * recorded, so stopping here leaves nothing half done. This is the backstop the comment above leaves
@@ -858,10 +885,10 @@ export class Agent {
             committedSummaryUsage,
             emit,
           });
-          if (round < compactionRetryRound) contextInput.deferThresholdCompaction = true;
+          if (round < compactionWait.retryRound) contextInput.deferThresholdCompaction = true;
           const context = await prepareContext(contextInput);
           if (context.compactionProblem !== undefined)
-            compactionRetryRound = round + 1 + COMPACTION_RETRY_ROUNDS;
+            compactionWait.retryRound = round + 1 + COMPACTION_RETRY_ROUNDS;
           signal.throwIfAborted();
           // Recorded as the round is decided on it, from the prompt `prepareContext` returned (see `run/envelope.ts`).
           const recordEnvelope = (prepared: PreparedContext): void =>
@@ -1096,6 +1123,13 @@ export class Agent {
         ({ status, error, code, endpointFailure } = outcome);
       } finally {
         resetQueryPhase();
+        const remainingWait = Math.max(0, compactionWait.retryRound - compactionWait.roundsStarted);
+        // Written only when there is a wait to hand over, or an inherited one to clear: most runs record nothing.
+        if (remainingWait > 0 || compactionWait.inherited > 0)
+          store.recordEvent(input.sessionId, 'context.compaction.deferred', {
+            runId,
+            remainingRounds: remainingWait,
+          });
         result = await finalizeRun({
           agent: this.options,
           store,

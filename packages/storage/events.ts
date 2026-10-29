@@ -230,6 +230,16 @@ export const SESSION_EVENT_TYPES = [
    */
   'context.calibration',
   /**
+   * How many rounds a threshold compaction still waits after one failed, as the run that failed it left them.
+   *
+   * The wait used to live only in the run's memory, so a goal continuation — a new run seconds later — retried
+   * the summary that had just failed on its first round, paying for it and up to the summary deadline again.
+   * Written when a run ends inside the wait (and once more, as `0`, when a run consumed an inherited one), and
+   * read by the next run. Only the early, threshold-driven attempt waits; a request that stops fitting is still
+   * compressed at once.
+   */
+  'context.compaction.deferred',
+  /**
    * Which instruction files and skills this run loaded, recorded when it loaded them.
    *
    * The live frame of the same name used to be the only record of it, and a live frame is gone the moment the
@@ -337,6 +347,8 @@ export const IGNORABLE_SESSION_EVENTS: readonly string[] = [
   'tool.execution.started',
   'tool.execution.finished',
   'context.summary.retry',
+  // A scheduling hint for the next run; without it, that run only retries a failed summary sooner.
+  'context.compaction.deferred',
   // Request measurements are diagnostic; their absence cannot change the model transcript.
   'provider.request.finished',
   /**
