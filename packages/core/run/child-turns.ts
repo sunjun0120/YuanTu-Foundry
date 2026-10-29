@@ -12,7 +12,7 @@ import type { ToolRegistry } from '../../tools/registry.ts';
 import type { WorkspaceBinding } from '../../protocol/workspaces.ts';
 import type { WorkspaceResults } from '../../workspaces/results.ts';
 import type { TreeWalkProgress } from '../../workspaces/snapshot.ts';
-import type { SessionStatistics } from '../../protocol/statistics.ts';
+import { billableTokens, type SessionStatistics } from '../../protocol/statistics.ts';
 import type { ResidentChildInput } from '../subagents/residency.ts';
 import type { ChildTurns } from './subagents.ts';
 import type { RunEmit } from './emit.ts';
@@ -211,11 +211,10 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
            * resident child's second turn does not start its card back at zero.
            */
           const reportProgress = (): void => {
-            const spent =
-              settledUsage.inputTokens +
-              liveUsage.inputTokens +
-              settledUsage.outputTokens +
-              liveUsage.outputTokens;
+            // The budget counts what the child spent, not the prefix its provider replayed from cache: a long-context
+            // child (a fork above all) re-reads its history every round, and summing that ran the budget out in
+            // proportion to rounds × context — the same rule the parent's own run budget applies.
+            const spent = billableTokens(settledUsage) + billableTokens(liveUsage);
             if (maxTokens > 0 && spent > maxTokens && !overBudget.signal.aborted)
               overBudget.abort(new Error(budgetMessage(maxTokens)));
             const timing = store.turnTiming(childSession.id);
@@ -226,18 +225,28 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
               usage: {
                 inputTokens: settledUsage.inputTokens + liveUsage.inputTokens,
                 outputTokens: settledUsage.outputTokens + liveUsage.outputTokens,
+                cachedInputTokens:
+                  (settledUsage.cachedInputTokens ?? 0) + (liveUsage.cachedInputTokens ?? 0),
               },
             });
           };
           if (event.type === 'run.started') {
             const stats = store.statistics(childSession.id);
-            settledUsage = { inputTokens: stats.inputTokens, outputTokens: stats.outputTokens };
+            settledUsage = {
+              inputTokens: stats.inputTokens,
+              outputTokens: stats.outputTokens,
+              cachedInputTokens: stats.cachedInputTokens,
+            };
             liveUsage = { inputTokens: 0, outputTokens: 0 };
             reportProgress();
           } else if (event.type === 'statistics.updated') {
             const stats = event.data.statistics as SessionStatistics | undefined;
             if (stats) {
-              liveUsage = { inputTokens: stats.inputTokens, outputTokens: stats.outputTokens };
+              liveUsage = {
+                inputTokens: stats.inputTokens,
+                outputTokens: stats.outputTokens,
+                cachedInputTokens: stats.cachedInputTokens,
+              };
               reportProgress();
             }
           } else if (event.type === 'run.finished') {
@@ -433,13 +442,30 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
         }
         // A turn the budget stopped says so, rather than the anonymous "Run cancelled" its signal produced.
         const budgetError = overBudget.signal.aborted ? budgetMessage(maxTokens) : undefined;
+        /**
+         * A turn held to a caller's schema that never submitted it did not do what it was asked.
+         *
+         * Reporting it as completed would hand the caller a success with no object in it — a workflow script reads
+         * `status` and then finds `data` missing. The prose is kept (it is still in `text`), but the status says the
+         * contract was not met.
+         */
+        const missingAnswer =
+          !budgetError &&
+          reportRequired &&
+          input_.reportSchema !== undefined &&
+          result.status === 'completed' &&
+          result.data === undefined
+            ? 'The sub-agent ended without submitting the result its schema asked for; its prose answer is in the transcript.'
+            : undefined;
         return {
           usage: result.usage,
           text: result.text,
-          status: budgetError ? 'failed' : result.status,
+          status: budgetError || missingAnswer ? 'failed' : result.status,
           ...(result.report ? { report: result.report } : {}),
           ...(result.data !== undefined ? { data: result.data } : {}),
-          ...(budgetError || result.error ? { error: budgetError ?? result.error } : {}),
+          ...(budgetError || missingAnswer || result.error
+            ? { error: budgetError ?? missingAnswer ?? result.error }
+            : {}),
           rounds,
           toolCalls,
         };

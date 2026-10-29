@@ -9,6 +9,7 @@ import {
   SUBAGENT_ERROR_CHARS,
   SUBAGENT_REPORT_CHARS,
   SubAgentCoordinator,
+  report,
   resolveSubAgentOptions,
   type SubAgentOptions,
 } from '../packages/core/subagents/delegation.ts';
@@ -522,6 +523,13 @@ test('a child that keeps working past its token budget is stopped and says why',
   const id = coordinator.summaries[0]!.id;
   coordinator.progress(id, { inputTokens: 500, outputTokens: 100 });
   assert.equal(coordinator.summaries[0]!.status, 'running', 'under budget, the child keeps going');
+  // Input served from the provider's cache is the same prefix replayed, not new spending.
+  coordinator.progress(id, { inputTokens: 5000, cachedInputTokens: 4600, outputTokens: 150 });
+  assert.equal(
+    coordinator.summaries[0]!.status,
+    'running',
+    'cached input does not count against the budget',
+  );
   coordinator.progress(id, { inputTokens: 900, outputTokens: 200 });
   await call;
   await coordinator.settle();
@@ -566,6 +574,9 @@ test('a cancelled delegation call stops the children it admitted', async () => {
   assert.equal(childSignals[0]!.aborted, true, 'the admitted child was told to stop');
   assert.equal(childSignals[0]!.reason, reason, 'and with the reason the call was cancelled with');
   assert.equal(ended, true, 'the call stopped waiting for children it had just stopped');
+  await coordinator.settle();
+  // The cause it reports is the call, not a run that ended without collecting it.
+  assert.match(coordinator.summaries[0]!.error ?? '', /the call that started this sub-agent/);
 });
 
 test('a handed-off delegation is not tied to the call that started it', async () => {
@@ -2077,4 +2088,43 @@ test('delegate_task rejects malformed task lists before any child starts', async
   const blank = await agent.run({ sessionId: session.id, prompt: 'blank' });
   assert.match(blank.text, /non-empty objective|Invalid arguments/);
   assert.equal(blank.subagents, undefined);
+});
+
+test('structured findings count against the report bound, not only the prose', () => {
+  // A report at its schema's limits: a long summary and ten findings with long evidence and four paths each.
+  const long = (n: number) => 'y'.repeat(n);
+  const full = {
+    summary: long(1200),
+    findings: Array.from({ length: 10 }, () => ({
+      statement: long(300),
+      evidence: long(300),
+      paths: [long(200), long(200), long(200), long(200)],
+    })),
+    unverified: Array.from({ length: 6 }, () => long(200)),
+    blockers: Array.from({ length: 6 }, () => long(200)),
+  };
+  const results = Array.from({ length: 4 }, (_, index) => ({
+    summary: {
+      id: `t${index}`,
+      role: 'explore' as const,
+      objective: 'Sweep',
+      sessionId: `s${index}`,
+      status: 'completed' as const,
+      rounds: 1,
+      toolCalls: 1,
+      usage: { inputTokens: 1, outputTokens: 1 },
+      report: full,
+    },
+    text: long(10_000),
+  }));
+  const rendered = report(
+    results,
+    results.map(() => ({ objective: 'Sweep' })),
+  );
+  assert.ok(
+    rendered.content.length <= SUBAGENT_REPORT_CHARS,
+    `four full reports stay within the bound (${rendered.content.length})`,
+  );
+  assert.match(rendered.content, /\[report truncated;/);
+  assert.match(rendered.content, /findings:/, 'the findings come first and survive');
 });

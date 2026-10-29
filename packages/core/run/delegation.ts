@@ -45,7 +45,7 @@ export function registerRunReport(
     tools.replace({
       name: 'submit_report',
       description: custom
-        ? 'Submit the structured result this task asked for and end this run. The arguments are the object described by this tool’ own schema: include every required field, and use the field descriptions to decide what belongs in each. Call this exactly once, when you can answer or you are blocked.'
+        ? 'Submit the structured result this task asked for and end this run. The arguments are the object described by this tool’s own schema: include every required field, and use the field descriptions to decide what belongs in each. Call this exactly once, when you can answer or you are blocked.'
         : SUBMIT_REPORT_DESCRIPTION,
       inputSchema: schema,
       execute: async (args, context) => {

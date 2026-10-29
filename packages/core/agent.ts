@@ -309,6 +309,8 @@ export class Agent {
         emit(type, data),
       );
       const reportHolder = registerRunReport(tools, input);
+      /** Whether this run already reminded a schema-bound child that its answer has to be submitted. */
+      let reportReminded = false;
       /**
        * The two seams a person is on the other end of, declared before the planning tools can capture `askTool`.
        *
@@ -961,6 +963,31 @@ export class Agent {
           signal.throwIfAborted();
           if (response.toolCalls.length === 0) {
             if (queue.hasSteer || consume('follow-up')) {
+              steps.end(round, 'queued-input');
+              continue;
+            }
+            /**
+             * A child whose caller declared a schema answers with that object, not with prose.
+             *
+             * The caller asked for fields precisely so it would not have to read them out of text, so an answer
+             * that ends in prose has delivered nothing. One reminder, because a model that forgot the tool usually
+             * calls it when told; a second prose answer ends the run, and the child's turn reports it as failed.
+             */
+            if (
+              input.reportSchema !== undefined &&
+              reportHolder.data === undefined &&
+              !reportReminded
+            ) {
+              reportReminded = true;
+              injectContext(
+                store,
+                input.sessionId,
+                emit,
+                '<runtime-context source="report-required">\n' +
+                  'This task asked for a structured result. Call submit_report now with an object that matches its schema; an answer written as prose is not delivered to the parent. If you are blocked, submit what you have.\n' +
+                  '</runtime-context>',
+                { source: 'report-required', round },
+              );
               steps.end(round, 'queued-input');
               continue;
             }

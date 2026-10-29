@@ -18,7 +18,10 @@ import type { SessionStore } from '../../storage/sqlite.ts';
 
 /** A child whose work is still arriving, as the emission path sees it. */
 export interface RunProgressSink {
-  progress(id: string, usage?: { inputTokens: number; outputTokens: number }): void;
+  progress(
+    id: string,
+    usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number },
+  ): void;
 }
 
 /** The run's own counters and collections that emission reads or writes. */
@@ -131,7 +134,8 @@ export function createRunEmit(options: RunEmitOptions): RunEmit {
         state.coordinator.progress(String(data.id ?? ''));
       else if (type === 'subagent.progress') {
         const id = String(data.id ?? '');
-        const reported = data.usage as { inputTokens?: number; outputTokens?: number } | undefined;
+        const reported = data.usage as
+          { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number } | undefined;
         const produced = Number(reported?.outputTokens);
         const previous = state.childOutputTokens.get(id);
         if (Number.isFinite(produced) && (previous === undefined || produced > previous)) {
@@ -140,6 +144,7 @@ export function createRunEmit(options: RunEmitOptions): RunEmit {
           state.coordinator.progress(id, {
             inputTokens: Number(reported?.inputTokens) || 0,
             outputTokens: produced,
+            cachedInputTokens: Number(reported?.cachedInputTokens) || 0,
           });
         }
       }

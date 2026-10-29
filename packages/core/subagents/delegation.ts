@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { SubAgentSummary, Tool, Usage } from '../../protocol/index.ts';
 import { failure } from '../../tools/registry.ts';
+import { billableTokens } from '../../protocol/statistics.ts';
 import type { SubAgentOutcome, SubAgentRequestOptions } from './providers.ts';
 import {
   EXPLORE_TOOLS,
@@ -64,6 +65,19 @@ export {
   SubAgentProviderRegistry,
   UnknownSubAgentProviderError,
 } from './providers.ts';
+
+/**
+ * Why a child was stopped by its own controller: the call that started it, or the run ending around it.
+ *
+ * One function because a child reaped before it started and one stopped mid-turn are told about the same cause,
+ * and two copies of the sentence is how one of them came to name the run for a call's deadline.
+ */
+function cancellationReason(scheduled: ScheduledSubAgent, runAborted: boolean): string {
+  // A cancelled run cancels the tool call inside it too; the run is the cause then, not the call.
+  return scheduled.callerStopped && !runAborted
+    ? 'Cancelled: the call that started this sub-agent was stopped or ran out of time'
+    : 'Cancelled: the run that started this sub-agent ended without collecting it';
+}
 
 /**
  * Sub-agent delegation.
@@ -238,7 +252,11 @@ export class SubAgentCoordinator {
        * them, because that is the signal the children were built with.
        */
       const stop = () => {
-        for (const task of scheduled) task.controller.abort(signal.reason);
+        for (const task of scheduled) {
+          // Named as the call's stop, not the run's: the reason a child reports is read from this flag.
+          task.callerStopped = true;
+          task.controller.abort(signal.reason);
+        }
       };
       if (signal.aborted) stop();
       else signal.addEventListener('abort', stop, { once: true });
@@ -567,14 +585,18 @@ export class SubAgentCoordinator {
    * The caller decides which frames are progress, not this method: a frame that says nothing about *work* must
    * not re-arm anything, and the frame that reports a running clock is the one that matters most there.
    */
-  progress(id: string, usage?: Pick<Usage, 'inputTokens' | 'outputTokens'>): void {
+  progress(
+    id: string,
+    usage?: Pick<Usage, 'inputTokens' | 'outputTokens' | 'cachedInputTokens'>,
+  ): void {
     if (!id) return;
     const scheduled = this.scheduled.find(
       (task) => task.active && (task.id === id || task.summary.sessionId === id),
     );
     if (!scheduled) return;
     const budget = this.deps.options.maxTokens;
-    const spent = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
+    // Cached input is not counted, for the reason the child's own budget check gives (`run/child-turns.ts`).
+    const spent = usage ? billableTokens(usage) : 0;
     if (budget > 0 && spent > budget && !scheduled.budgetController.signal.aborted) {
       scheduled.budgetController.abort(new Error(budgetMessage(budget)));
       return;
@@ -684,9 +706,7 @@ export class SubAgentCoordinator {
       : scheduled.budgetController.signal.aborted
         ? budgetMessage(this.deps.options.maxTokens)
         : scheduled.controller.signal.aborted
-          ? scheduled.callerStopped
-            ? 'Cancelled: the call that started this sub-agent was stopped or ran out of time'
-            : 'Cancelled: the run that started this sub-agent ended without collecting it'
+          ? cancellationReason(scheduled, this.deps.signal.aborted)
           : outcome.error;
     summary.error = boundedError(failure);
     if (signal.aborted) summary.status = 'cancelled';
@@ -894,7 +914,7 @@ export class SubAgentCoordinator {
     // Nothing to release: a child that never ran cost nothing, and the slot it would have used was never
     // taken (a cancelled task is reaped before the semaphore admits it).
     summary.status = 'cancelled';
-    summary.error = 'Cancelled: the run that started this sub-agent ended without collecting it';
+    summary.error = cancellationReason(scheduled, this.deps.signal.aborted);
     scheduled.settleTask();
     this.deps.emit('subagent.finished', {
       ...summary,

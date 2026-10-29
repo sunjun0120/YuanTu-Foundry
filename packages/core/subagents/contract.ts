@@ -10,7 +10,7 @@ import type { AdmittedTask, SubAgentResult } from './delegation.ts';
  * The delegation contract: the task and report schemas, their normalisation, the role and task prompts, and how
  * a child's result is rendered for its parent.
  *
- * Split out of `./subagents.ts`, which keeps the coordinator that schedules children. Everything here is a pure
+ * Split out of `./delegation.ts`, which keeps the coordinator that schedules children. Everything here is a pure
  * function of its arguments or a constant, so it can be read, tested and changed without the scheduler.
  */
 /**
@@ -178,7 +178,7 @@ function answerSchema(value: unknown): Record<string, unknown> {
 export function subAgentRolePrompt(role: SubAgentRole): string {
   const shared =
     'You are a sub-agent delegated by a parent agent. Your transcript is private to you: the parent sees only the final report you write, so state findings explicitly instead of referring to "the file above". ' +
-    'You cannot ask the parent questions, you cannot delegate further, and no human is reading along. Work autonomously until you can answer the objective, then stop.';
+    'You cannot ask the parent questions and you cannot delegate further. The user is not following your work: ask_user_question does reach them, so keep it for a decision you genuinely cannot make from the objective and the workspace, and otherwise work autonomously until you can answer the objective, then stop.';
   return role === 'explore'
     ? `${shared} You are read-only: tools that change the workspace or run commands are not available, and every permission-requiring operation is refused. Investigate, verify with evidence, and report what should change rather than changing it.`
     : `${shared} You may change the workspace and run commands, but every write, command and external operation still asks the user for permission, and a refusal is final. Your file changes are recorded against the parent session, so they stay visible and undoable there. Prefer the smallest change that satisfies the objective.`;
@@ -420,6 +420,16 @@ export function boundedError(text: string | undefined): string | undefined {
   return `${text.slice(0, SUBAGENT_ERROR_CHARS - ERROR_TRUNCATION_MARK.length)}${ERROR_TRUNCATION_MARK}`;
 }
 export const SUBAGENT_REPORT_CHARS = 24_000;
+/** What a block keeps for its answer however much of its share the header took. */
+const MIN_ANSWER_CHARS = 400;
+const TRUNCATED_REPORT =
+  '[report truncated; the sub-agent session above holds the full transcript]';
+const OMITTED_PROSE = '[final prose omitted; it is in the sub-agent session]';
+/** `text` within `budget` characters, the truncation notice included, so the notice cannot push it over. */
+function fitted(text: string, budget: number): string {
+  if (text.length <= budget) return text;
+  return `${text.slice(0, Math.max(0, budget - TRUNCATED_REPORT.length - 1))}\n${TRUNCATED_REPORT}`;
+}
 export function report(
   results: readonly SubAgentResult[],
   tasks: readonly { objective: string }[],
@@ -442,22 +452,30 @@ export function report(
             : ' (the whole conversation so far)'),
       );
     if (summary.error) lines.push(`error: ${summary.error}`);
+    /**
+     * The share bounds the whole block, not only the prose.
+     *
+     * A structured report is bounded by its schema, but that bound is per child and generous (a summary and ten
+     * findings with evidence and paths), so rendering it outside the share let a few children put several times
+     * `SUBAGENT_REPORT_CHARS` into the parent's context. The header, the findings and the prose come out of one
+     * allowance, in that order: the findings are the part the parent can cite. A small floor keeps a long
+     * objective from leaving nothing at all for the answer.
+     */
+    let budget = Math.max(MIN_ANSWER_CHARS, share - lines.join('\n').length);
     // A task that declared its own schema is answered in that shape, rendered as the object it is: the caller
     // defined the fields precisely so it would not have to read them out of prose.
-    if (data !== undefined) lines.push(renderAnswer(data, share));
-    else lines.push(...renderFindings(summary.report));
-    const text = raw.trim();
-    lines.push(
-      data !== undefined
-        ? ''
-        : text
-          ? text.length > share
-            ? `${text.slice(0, share)}\n[report truncated; the sub-agent session above holds the full transcript]`
-            : text
-          : summary.report
-            ? ''
-            : '(the sub-agent produced no final report)',
-    );
+    if (data !== undefined) lines.push(renderAnswer(data, budget));
+    else {
+      const findings = renderFindings(summary.report).join('\n');
+      if (findings) {
+        const kept = fitted(findings, budget);
+        lines.push(kept);
+        budget = Math.max(0, budget - kept.length - 1);
+      }
+      const text = raw.trim();
+      if (text) lines.push(budget > TRUNCATED_REPORT.length ? fitted(text, budget) : OMITTED_PROSE);
+      else if (!summary.report) lines.push('(the sub-agent produced no final report)');
+    }
     return lines.filter((line) => line !== '').join('\n');
   });
   const failed = results.filter(({ summary }) => summary.status !== 'completed').length;

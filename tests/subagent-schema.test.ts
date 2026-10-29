@@ -152,6 +152,48 @@ test('the caller’s schema is enforced where every other tool argument is', asy
   assert.ok(!output.includes('"extra"'), 'nothing that violated the schema reached the parent');
 });
 
+test('a schema child that answers in prose is reminded once, and then submits', async (t) => {
+  let childRound = 0;
+  const provider: Provider = {
+    async complete(request) {
+      if (isChild(request)) {
+        childRound++;
+        if (childRound === 1) return reply('I checked a.ts and it looks clean.');
+        return submit('late', { files: ['a.ts'], verdict: 'clean' });
+      }
+      if (request.messages.some((message) => message.role === 'tool')) return reply('Done');
+      return delegate([{ objective: 'List the files you checked', schema: FILES_SCHEMA }]);
+    },
+  };
+  const { store, session, agent } = await fixture(t, provider);
+  const result = await agent.run({ sessionId: session.id, prompt: 'Check' });
+  assert.equal(result.status, 'completed');
+  assert.equal(childRound, 2, 'the prose answer bought one reminder round');
+  assert.equal(result.subagents?.[0]?.status, 'completed');
+  assert.match(toolResults(store, session.id), /"verdict": "clean"/);
+});
+
+test('a schema child that never submits is reported as failed, not completed', async (t) => {
+  let childRound = 0;
+  const provider: Provider = {
+    async complete(request) {
+      if (isChild(request)) {
+        childRound++;
+        return reply('Everything looks fine to me.');
+      }
+      if (request.messages.some((message) => message.role === 'tool')) return reply('Done');
+      return delegate([{ objective: 'List the files you checked', schema: FILES_SCHEMA }]);
+    },
+  };
+  const { store, session, agent } = await fixture(t, provider);
+  const result = await agent.run({ sessionId: session.id, prompt: 'Check' });
+  assert.equal(childRound, 2, 'one reminder, then the run ends');
+  const child = result.subagents?.[0];
+  assert.equal(child?.status, 'failed');
+  assert.match(child?.error ?? '', /without submitting the result its schema asked for/);
+  assert.match(toolResults(store, session.id), /failed/);
+});
+
 test('a task with a schema and a task without one are answered in their own shapes', async (t) => {
   const provider: Provider = {
     async complete(request) {
