@@ -1,7 +1,8 @@
 // @test-serial desktop-ui: Launches real Electron windows.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile, mkdtemp, cp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, mkdir, cp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
@@ -41,8 +42,11 @@ test(
       path.resolve(source),
       path.join(root, `tree-${index}`),
     ]);
+    // The upgrade smoke uninstalls the upgraded application when it ends; rollback restores from the backup inside
+    // the upgrade directory and never reads the install directory, so a missing one is cloned as empty.
     for (const [source, target] of mappings)
-      await cp(source, target, { recursive: true, dereference: true });
+      if (existsSync(source)) await cp(source, target, { recursive: true, dereference: true });
+      else await mkdir(target, { recursive: true });
     mappings.sort((a, b) => b[0].length - a[0].length);
     const relocate = (value) => {
       if (typeof value === 'string' && path.isAbsolute(value)) {

@@ -126,7 +126,9 @@ jobs:
         timeout-minutes: 15
         shell: pwsh
         run: |
-          $env:UPGRADE_TEST_JOURNAL = (Get-ChildItem '.scratch/p1/upgrade-*/用户 profile/upgrades/*/upgrade.json' | Select-Object -First 1).FullName
+          # The upgrade smoke keeps its evidence in the system temp directory (`mkdtemp(tmpdir(), 'yuantu-upgrade-')`).
+          $journals = Join-Path ([IO.Path]::GetTempPath()) 'yuantu-upgrade-*/用户 profile/upgrades/*/upgrade.json'
+          $env:UPGRADE_TEST_JOURNAL = (Get-ChildItem $journals | Select-Object -First 1).FullName
           if (-not $env:UPGRADE_TEST_JOURNAL) { throw 'Upgrade recovery record was not created' }
           node --test --test-force-exit tests/desktop-rollback.smoke.mjs
       - uses: actions/upload-artifact@v4
