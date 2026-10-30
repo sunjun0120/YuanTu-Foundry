@@ -102,10 +102,15 @@ async function main() {
       const deadline = Date.now() + 120000;
       while (Date.now() < deadline) {
         if (existsSync(`${j.journal}.ready`)) {
-          const ready = JSON.parse(readFileSync(`${j.journal}.ready`, 'utf8')) as {
-            version: string;
-          };
-          return ready.version === j.manifest.version;
+          // A desktop that writes the marker in place can be caught between creating and filling it.
+          try {
+            const ready = JSON.parse(readFileSync(`${j.journal}.ready`, 'utf8')) as {
+              version: string;
+            };
+            return ready.version === j.manifest.version;
+          } catch (error) {
+            if (!(error instanceof SyntaxError)) throw error;
+          }
         }
         await delay(200);
       }

@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { closeSync, openSync } from 'node:fs';
-import { copyFile, readFile, writeFile } from 'node:fs/promises';
+import { closeSync, existsSync, openSync } from 'node:fs';
+import { copyFile, readFile, rename, writeFile } from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { app, dialog } from 'electron';
@@ -44,10 +44,16 @@ export async function confirmUpgradeStartup(): Promise<void> {
   const release = await desktopRelease();
   if (journal.phase !== 'starting' || journal.manifest.version !== release.version)
     throw new Error('Upgrade version did not match the installed application');
-  await writeFile(`${file}.ready`, JSON.stringify({ version: release.version, pid: process.pid }), {
-    flag: 'wx',
-    mode: 0o600,
-  });
+  // The worker reads the marker as soon as it exists, so it appears whole: written aside, then renamed into place.
+  // A worker from an already released version reads it without retrying, so this side has to be the atomic one.
+  const marker = `${file}.ready`;
+  if (existsSync(marker)) throw new Error('Upgrade startup was already confirmed');
+  await writeFile(
+    `${marker}.partial`,
+    JSON.stringify({ version: release.version, pid: process.pid }),
+    { flag: 'wx', mode: 0o600 },
+  );
+  await rename(`${marker}.partial`, marker);
 }
 
 /**

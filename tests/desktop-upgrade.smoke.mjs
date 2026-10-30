@@ -85,24 +85,44 @@ test(
     };
     let app = await launch();
     let newPid;
+    let journalFile;
     t.after(async () => {
-      await app?.close().catch(() => {});
+      // Every step here is bounded: a desktop or uninstaller that never returns would keep the runner up long
+      // after the test failed, and the job would end on its step timeout with the failure buried.
+      let timer;
+      await Promise.race([
+        app?.close().catch(() => {}),
+        new Promise((resolve) => (timer = setTimeout(resolve, 30_000))),
+      ]);
+      clearTimeout(timer);
+      // The upgraded desktop the worker launched holds the install directory open; the uninstaller waits on it.
+      newPid ??= await readFile(`${journalFile}.pid`, 'utf8')
+        .then((text) => JSON.parse(text).pid)
+        .catch(() => undefined);
       if (newPid) {
         try {
           process.kill(newPid, 0);
           await closeWindow(newPid);
-        } catch {}
+        } catch {
+          await promisify(execFile)('taskkill', ['/PID', String(newPid), '/T', '/F']).catch(
+            () => {},
+          );
+        }
       }
-      await promisify(execFile)('powershell.exe', [
-        '-NoProfile',
-        '-File',
-        path.resolve('scripts/verify-windows-install.ps1'),
-        '-Installer',
-        'unused',
-        '-InstallDirectory',
-        installed,
-        '-Uninstall',
-      ]).catch(() => {});
+      await promisify(execFile)(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-File',
+          path.resolve('scripts/verify-windows-install.ps1'),
+          '-Installer',
+          'unused',
+          '-InstallDirectory',
+          installed,
+          '-Uninstall',
+        ],
+        { timeout: 120_000 },
+      ).catch(() => {});
       // Keep this isolated evidence directory and snapshots for inspection; do not prune rollback evidence.
     });
     let page = await app.firstWindow();
@@ -137,7 +157,6 @@ test(
       Menu.getApplicationMenu().items[0].submenu.items[0].click();
     }, process.env.UPGRADE_TEST_INSTALLER);
     const directoryRoot = path.join(profile, 'upgrades');
-    let journalFile;
     let journal;
     const deadline = Date.now() + 240000;
     while (Date.now() < deadline) {
