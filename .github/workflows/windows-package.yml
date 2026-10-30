@@ -31,15 +31,6 @@ jobs:
         with:
           workspaces: packages/sandbox/windows-sandbox/native -> target
       - run: npm run build:windows-sandbox
-      # Experiment: a Host that timed out on shutdown had finished its JavaScript `exit`, loaded no addons and
-      # left only its main thread in a kernel wait, which points at real-time scanning holding file closes during
-      # process rundown. Excluding the test files and Node from Defender shows whether those timeouts go away.
-      - name: Exclude test files from Defender scanning
-        shell: pwsh
-        run: |
-          Get-MpComputerStatus | Select-Object AMServiceEnabled,RealTimeProtectionEnabled,OnAccessProtectionEnabled | Format-List
-          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE,$env:TEMP,$env:RUNNER_TEMP -ExclusionProcess node.exe
-          Get-MpPreference | Select-Object ExclusionPath,ExclusionProcess | Format-List
       # Report every failing file, as the CI gate does; the exit code is still non-zero on any failure.
       # Host teardown and the source index compete for I/O on hosted Windows runners.
       - run: npm test -- --shard=${{ matrix.shard }}/3 --concurrency=2 --timings=.scratch/windows-package-tests.ndjson

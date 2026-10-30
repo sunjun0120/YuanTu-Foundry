@@ -10,6 +10,29 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { _electron as electron } from 'playwright';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 
+// Wait for a usable composer; when it never comes, print what the desktop says it is doing before failing.
+async function waitForPrompt(page, label) {
+  try {
+    await page.waitForFunction(() => document.querySelector('#prompt')?.disabled === false);
+  } catch (error) {
+    const state = await page
+      .evaluate(async () => {
+        const snapshot = await window.yuantu.invoke({ type: 'snapshot' });
+        const { startupStage, ready, configured, host, hostPid, recovery, error, errorDetail } =
+          snapshot.state ?? {};
+        return {
+          ok: snapshot.ok,
+          error: snapshot.error,
+          state: { startupStage, ready, configured, host, hostPid, recovery, error, errorDetail },
+          text: document.body.innerText.slice(0, 2000),
+        };
+      })
+      .catch((reason) => String(reason));
+    console.error(`${label} snapshot:`, JSON.stringify(state));
+    throw error;
+  }
+}
+
 test(
   'the installed desktop upgrades through its native confirmation and confirms the new Host before retaining its session and encrypted settings',
   {
@@ -80,7 +103,7 @@ test(
     });
     let page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
-    await page.waitForFunction(() => document.querySelector('#prompt')?.disabled === false);
+    await waitForPrompt(page, 'Old desktop startup');
     const saved = await page.evaluate(
       (url) =>
         window.yuantu.settings({
@@ -131,7 +154,7 @@ test(
     assert.deepEqual(await readFile(path.join(profile, 'model-settings.json')), settings);
     app = await launch();
     page = await app.firstWindow();
-    await page.waitForFunction(() => document.querySelector('#prompt')?.disabled === false);
+    await waitForPrompt(page, 'Upgraded desktop startup');
     await page.getByText('UPGRADE_PRESERVED_REPLY', { exact: true }).waitFor();
     const retained = await page.evaluate(() => window.yuantu.settings({ type: 'get' }));
     assert.equal(retained.settings.hasKey, true);
