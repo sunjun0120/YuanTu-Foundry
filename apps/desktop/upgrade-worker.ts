@@ -42,14 +42,19 @@ async function main() {
       JSON.parse(values[1]!) as DesktopRelease,
       values[2] ? JSON.parse(values[2]) : undefined,
     );
-  if (operation === 'prepare')
-    return prepareUpgrade(
-      JSON.parse(readFileSync(argument, 'utf8')) as StagedUpgrade,
+  if (operation === 'prepare') {
+    const staged = JSON.parse(readFileSync(argument, 'utf8')) as StagedUpgrade;
+    const journal = prepareUpgrade(
+      staged,
       values[0]!,
       values[1]!,
       JSON.parse(values[2]!) as DesktopRelease,
       values[3],
     );
+    // The journal is on disk and lists a hash for every application file, megabytes for a packaged install:
+    // printed whole it overran the desktop's output buffer and failed every real upgrade.
+    return { phase: journal.phase, journal: staged.journal };
+  }
   if (operation === 'rollback') {
     if (values[0] !== '--offline')
       throw new Error('Close the application and every Host/CLI; then explicitly pass --offline');
