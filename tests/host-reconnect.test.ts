@@ -479,6 +479,36 @@ test('a carrier whose first Host cannot open the database reports it once and cl
   await carrier.stop();
 });
 
+test('stopping a Host that then refuses its database is not a failed shutdown', async (t) => {
+  // Quitting while the Host is still starting: the stop closes its input, but the Host is already refusing the
+  // newer database and exits with an error. That error is the start's, and the start reports it; the stop used to
+  // report it again as "exited abnormally during shutdown", which the desktop shows as an exit failure dialog.
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-newer-db-stop-'));
+  const db = path.join(root, 'sessions.sqlite');
+  new SessionStore(db).close();
+  const stamp = new DatabaseSync(db);
+  stamp.exec(`PRAGMA user_version=${SCHEMA_VERSION + 1}`);
+  stamp.close();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const client = new AgentHostClient({
+    nodePath: process.execPath,
+    hostPath,
+    workspace: root,
+    db,
+    env: { YUANTU_MAX_CONTEXT_TOKENS: '128000', YUANTU_SESSION_TITLES: '0' },
+  });
+  const started = client.start().then(
+    () => assert.fail('the start must fail'),
+    (error: unknown) => error,
+  );
+  // Stop once the Host process exists and before it has answered: that is the window a quit lands in.
+  while (client.lastPid === undefined) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(client.status, 'starting');
+  await client.stop();
+  assert.ok((await started) instanceof Error);
+  assert.equal(client.status, 'failed');
+});
+
 test('a client that missed the approval frame gets it from the queue answer and can still answer it', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-reconnect-pending-'));
   const cleanups: (() => Promise<unknown>)[] = [];

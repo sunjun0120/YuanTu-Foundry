@@ -585,6 +585,10 @@ export class AgentHostClient {
       this.setStatus('stopped');
       return;
     }
+    // A Host still on its way up has answered no request, so it has started nothing a stop must account for. If it
+    // then exits with an error, that is its startup failing (a database written by a newer build, say), which the
+    // pending `start()` reports; calling it an unconfirmed shutdown added a second, misleading failure on quit.
+    const unstarted = this.currentStatus === 'starting' && !this.info;
     this.setStatus('stopping');
     transport.end();
     let timer: NodeJS.Timeout | undefined;
@@ -608,7 +612,7 @@ export class AgentHostClient {
       );
     }
     if (this.spent === transport) this.spent = null;
-    if (exit.code !== 0 || exit.signal) {
+    if ((exit.code !== 0 || exit.signal) && !unstarted) {
       this.setStatus('failed');
       throw new Error(
         `Agent Host exited abnormally during shutdown (code=${exit.code}, signal=${exit.signal}); cleanup is unconfirmed`,
