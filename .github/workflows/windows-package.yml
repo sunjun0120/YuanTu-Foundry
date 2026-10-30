@@ -9,6 +9,47 @@ concurrency:
   group: windows-package-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  # The Windows suite is the slow part of a release (about 17 minutes on one runner at concurrency 2), so it runs
+  # as three shards beside the packaging job instead of in front of it. `publish` needs both.
+  windows-tests:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      # `npm test` includes the helper's PE-header contract, which reads the built binary rather than a
+      # source file, so every shard builds it first.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/sandbox/windows-sandbox/native -> target
+      - run: npm run build:windows-sandbox
+      # Report every failing file, as the CI gate does; the exit code is still non-zero on any failure.
+      # Host teardown and the source index compete for I/O on hosted Windows runners.
+      - run: npm test -- --shard=${{ matrix.shard }}/3 --concurrency=2 --timings=.scratch/windows-package-tests.ndjson
+        env:
+          FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'
+          # Every Host appends its shutdown steps to its worker's artifacts (copied into .scratch/test-logs), so a
+          # teardown timeout shows which step it was stuck in.
+          FOUNDRY_TEST_SHUTDOWN_TRACE: '1'
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-tests-diagnostics-${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            .scratch/test-logs/
+            .scratch/windows-package-tests.ndjson
+
   windows-x64:
     runs-on: windows-latest
     steps:
@@ -31,22 +72,11 @@ jobs:
           }
       - run: npm ci
       - run: npm run typecheck
-      # `npm test` includes the helper's PE-header contract, which reads the built binary rather than a
-      # source file. `package:windows` builds that binary too, but only after this step would already
-      # have failed; the CI gate installs the toolchain and builds it first for the same reason.
+      # `package:windows` builds the sandbox helper itself; it only needs the toolchain.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages/sandbox/windows-sandbox/native -> target
-      - run: npm run build:windows-sandbox
-      # Report every failing file, as the CI gate does; the exit code is still non-zero on any failure.
-      # Host teardown and the source index compete for I/O on hosted Windows runners.
-      - run: npm test -- --concurrency=2 --timings=.scratch/windows-package-tests.ndjson
-        env:
-          FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'
-          # Every Host appends its shutdown steps to its worker's artifacts (copied into .scratch/test-logs), so a
-          # teardown timeout shows which step it was stuck in.
-          FOUNDRY_TEST_SHUTDOWN_TRACE: '1'
       - run: npm run package:windows
       - name: Install in isolated directory
         shell: pwsh
@@ -101,19 +131,9 @@ jobs:
           path: |
             dist/release/*-setup.exe
             dist/release/*-setup.exe.json
-      - name: Upload failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Windows-installation-diagnostics
-          if-no-files-found: warn
-          retention-days: 7
-          path: |
-            .scratch/test-logs/
-            .scratch/windows-package-tests.ndjson
 
   publish:
-    needs: windows-x64
+    needs: [windows-tests, windows-x64]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     permissions:

@@ -45,7 +45,15 @@ const args = process.argv.slice(2),
 let concurrency = Math.min(8, availableParallelism()),
   schedule = 'partitioned',
   order = 'duration',
-  durationHistory;
+  durationHistory,
+  /**
+   * One slice of the files, for a gate that spreads the suite over several machines (`--shard=2/3`).
+   *
+   * Files are dealt round-robin over their sorted paths, so every machine computes the same split without a
+   * duration history (a fresh runner has none) and neighbouring files — often the slow ones of one area — land on
+   * different shards. A file's cases stay together, and serial files are dealt the same way.
+   */
+  shard;
 let plan = false,
   /**
    * Whether a failing file stops the dispatch of the rest.
@@ -77,6 +85,13 @@ for (const arg of args) {
   } else if (arg.startsWith('--duration-history=')) {
     durationHistory = arg.slice('--duration-history='.length);
     if (!durationHistory.trim()) throw Error('--duration-history requires a path');
+  } else if (arg.startsWith('--shard=')) {
+    const match = /^(\d+)\/(\d+)$/.exec(arg.slice('--shard='.length));
+    const index = Number(match?.[1]),
+      count = Number(match?.[2]);
+    if (!match || count < 1 || index < 1 || index > count)
+      throw Error('--shard must be <index>/<count> with 1 <= index <= count');
+    shard = { index, count };
   } else if (arg === '--plan') plan = true;
   else if (arg === '--verbose') verbose = true;
   else if (arg === '--continue-on-failure') continueOnFailure = true;
@@ -97,7 +112,9 @@ if (schedule === 'serial') {
   concurrency = 1;
 }
 const explicit = files.length > 0;
-const discovered = [
+const inShard = (files) =>
+  shard ? files.sort().filter((_file, index) => index % shard.count === shard.index - 1) : files;
+const discovered = inShard([
   ...new Set(
     explicit
       ? files.map((file) => {
@@ -109,7 +126,7 @@ const discovered = [
         })
       : await discoverTests(root),
   ),
-];
+]);
 const partition = await partitionTests(discovered, { root });
 const filtered = options.some((option) => /^--test-(?:name|skip)-pattern=/.test(option));
 // Nested controllers write hints inside their outer owner's artifacts. Coverage has a separate cost profile.

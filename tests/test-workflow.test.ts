@@ -206,6 +206,34 @@ test('explicit files default to parallel without selecting unrelated files', asy
   }
 });
 
+test('shards split the suite into disjoint slices that together cover every file', async (t) => {
+  const content = "import test from 'node:test';test('fixture',()=>{});";
+  const names = ['a', 'b', 'c', 'd', 'e'];
+  const root = await runnerTree(
+    t,
+    Object.fromEntries(names.map((name) => [`tests/${name}.test.ts`, content])),
+  );
+  const seen: string[] = [];
+  for (const shard of ['1/2', '2/2']) {
+    const { stdout } = await exec(
+      process.execPath,
+      ['scripts/run-tests.mjs', '--plan', `--shard=${shard}`],
+      { cwd: root, windowsHide: true },
+    );
+    seen.push(...[...stdout.matchAll(/^parallel\s+tests\/(\w)\.test\.ts/gm)].map((m) => m[1]!));
+  }
+  assert.deepEqual(seen, ['a', 'c', 'e', 'b', 'd']);
+  for (const shard of ['0/2', '3/2', '1/0', 'x']) {
+    const refusal = await run(
+      process.execPath,
+      ['scripts/run-tests.mjs', '--plan', `--shard=${shard}`],
+      { cwd: root, windowsHide: true },
+    );
+    assert.equal(refusal.code, 1, shard);
+    assert.match(refusal.stderr, /--shard must be/);
+  }
+});
+
 test('continue-on-failure reports every file while preserving a failed exit status', async (t) => {
   const root = await runnerTree(t, {
     'tests/a.test.ts':
