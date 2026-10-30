@@ -702,11 +702,35 @@ test('unresponsive Host shutdown is bounded and reports forced termination', asy
     { hostPath: path.join(projectRoot, 'tests/faulty-host.ts'), shutdownTimeoutMs: 200 },
   );
   await client.start();
-  await assert.rejects(client.stop(), /unknown|termination|cleanup/i);
+  // The message says which half of the stop is missing: here the Host itself never exited.
+  await assert.rejects(
+    client.stop(),
+    /cleanup could not be confirmed \(process \d+ had not exited\)/,
+  );
   assert.equal(client.status, 'failed');
   await new Promise((resolve) => setTimeout(resolve, 1800));
   await assert.rejects(readFile(marker), { code: 'ENOENT' });
 });
+
+test(
+  'a shutdown timeout says when the Host exited but left its output held open',
+  {
+    // Windows closes a child's stdio when the child exits, whatever inherited it, so there `close` follows `exit`.
+    skip: process.platform === 'win32' && 'Windows closes the pipes with the process',
+  },
+  async (t) => {
+    const { client: orphaned } = await setup(
+      t,
+      { FIXTURE_MODE: 'orphan-output' },
+      { hostPath: path.join(projectRoot, 'tests/faulty-host.ts'), shutdownTimeoutMs: 1000 },
+    );
+    await orphaned.start();
+    await assert.rejects(
+      orphaned.stop(),
+      /cleanup could not be confirmed \(process \d+ exited \d+ ms earlier \(code=0, signal=null\) but its stdout and stderr stayed open\)/,
+    );
+  },
+);
 
 test('an interrupted undo stays actionable in the session-change list', () => {
   // Regression: the desktop offered the undo button only for 'applied'. A row left in 'undoing' by

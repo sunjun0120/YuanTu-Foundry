@@ -8,6 +8,7 @@ import type { CompletionRepairPolicy, CompletionSpec } from '../protocol/complet
 import { redactSecrets } from '../platform/redact.ts';
 import { stdioTransport, type HostTransport } from './host-transport.ts';
 import { HostRequests, type HostPendingRequest } from './host-requests.ts';
+import { traceUnconfirmedShutdown } from './shutdown-trace.ts';
 import {
   HOST_PROTOCOL_VERSIONS,
   HOST_LONG_REQUESTS,
@@ -595,12 +596,16 @@ export class AgentHostClient {
     ]);
     if (timer) clearTimeout(timer);
     if (!exit) {
+      const state = transport.shutdownState?.();
+      traceUnconfirmedShutdown(transport.pid, state);
       transport.kill();
       this.rejectPending(
         new Error('Agent Host did not shut down gracefully; execution outcome is unknown'),
       );
       this.setStatus('failed');
-      throw new Error('Agent Host shutdown timed out; descendant cleanup could not be confirmed');
+      throw new Error(
+        `Agent Host shutdown timed out; descendant cleanup could not be confirmed${state ? ` (${state})` : ''}`,
+      );
     }
     if (this.spent === transport) this.spent = null;
     if (exit.code !== 0 || exit.signal) {

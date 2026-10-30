@@ -40,6 +40,11 @@ export interface HostTransport {
   end(): void;
   /** Stop it now, after the graceful path has timed out. */
   kill(): void;
+  /**
+   * Where a graceful stop that timed out got stuck, for the failure message. A child process reports whether it
+   * exited at all, or exited while something still held its output open: the two need opposite fixes.
+   */
+  shutdownState?(): string;
 }
 /**
  * Split a byte stream into lines, once, for every transport that carries one.
@@ -146,6 +151,9 @@ class TransportBase {
 class StdioTransport extends TransportBase implements HostTransport {
   private child: ChildProcessWithoutNullStreams;
   private framer: ReturnType<typeof lineFramer>;
+  /** `exit` and `close` are separate: the exit is the process ending, the close is its last pipe closing. */
+  private exited: { at: number; code: number | null; signal: NodeJS.Signals | null } | undefined;
+  private openOutputs = new Set(['stdout', 'stderr']);
   constructor(
     child: ChildProcessWithoutNullStreams,
     maxFrameBytes: number,
@@ -162,6 +170,11 @@ class StdioTransport extends TransportBase implements HostTransport {
     // Drain stderr to prevent pipe deadlock; the consumer keeps only a small tail, because arbitrary
     // stderr can contain credentials, paths, prompts or untrusted extension output.
     child.stderr.on('data', (chunk: Buffer) => this.announceDiagnostic(chunk.toString('utf8')));
+    child.once('exit', (code, signal) => {
+      this.exited = { at: performance.now(), code, signal };
+    });
+    child.stdout.once('close', () => this.openOutputs.delete('stdout'));
+    child.stderr.once('close', () => this.openOutputs.delete('stderr'));
     child.once('close', (code, signal) => this.announceExit({ code, signal }));
     child.on('error', () => onSpawnError(new Error('Unable to spawn Agent Host')));
     child.stdin.on('error', () => this.announceError(new Error('Agent Host input disconnected')));
@@ -193,6 +206,16 @@ class StdioTransport extends TransportBase implements HostTransport {
     } else this.child.kill('SIGKILL');
     this.child.stdout.destroy();
     this.child.stderr.destroy();
+  }
+  shutdownState(): string {
+    if (!this.exited) return `${this.label} had not exited`;
+    const { at, code, signal } = this.exited;
+    const ago = Math.round(performance.now() - at);
+    const open = [...this.openOutputs];
+    // The process is gone but a pipe is not: something it started inherited that end and is still running.
+    return open.length
+      ? `${this.label} exited ${ago} ms earlier (code=${code}, signal=${signal}) but its ${open.join(' and ')} stayed open`
+      : `${this.label} exited ${ago} ms earlier (code=${code}, signal=${signal})`;
   }
 }
 export interface StdioTransportOptions {

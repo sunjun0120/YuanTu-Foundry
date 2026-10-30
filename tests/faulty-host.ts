@@ -56,6 +56,14 @@ if (process.env.FIXTURE_MODE === 'crash-on-eof') {
   // cleanup it was promising cannot be confirmed), as opposed to `ignore-eof`, which never exits at all.
   process.exit(79);
 }
+if (process.env.FIXTURE_MODE === 'orphan-output') {
+  // A Host that exits cleanly on EOF but leaves a process behind holding its stdout and stderr: the process is
+  // gone, its pipes are not, so the client never sees `close`.
+  spawn(process.execPath, ['-e', 'setTimeout(()=>{},3000)'], {
+    windowsHide: true,
+    stdio: ['ignore', 'inherit', 'inherit'],
+  }).unref();
+}
 if (process.env.FIXTURE_MODE === 'ignore-eof') {
   if (process.env.FIXTURE_CHILD_MARKER)
     spawn(
