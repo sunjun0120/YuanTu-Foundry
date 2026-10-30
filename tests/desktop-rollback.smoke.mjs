@@ -143,9 +143,27 @@ test(
       { timeout: 60000, maxBuffer: 2 * 1024 * 1024 },
     );
     assert.equal(JSON.parse(result.stdout.trim().split('\n').at(-1)).phase, 'rolled-back');
+    // Sessions record the workspace they were created in, and the desktop lists a workspace's sessions by that
+    // path. The restored database still names the upgrade smoke's workspace, not this private clone of it, so
+    // point its sessions at the clone the desktop opens; a real rollback keeps the workspace where it was.
+    const restored = new DatabaseSync(journal.database);
+    restored.prepare('UPDATE sessions SET workspace = ?').run(env.YUANTU_WORKSPACE);
+    const preserved = restored
+      .prepare('SELECT id FROM sessions')
+      .all()
+      .map((row) => row.id);
+    restored.close();
+    assert.ok(preserved.length > 0, 'The restored database must keep the upgraded sessions');
     app = await launch();
     page = await app.firstWindow();
     await page.waitForFunction(() => document.querySelector('#prompt')?.disabled === false);
+    // The clone is a workspace this profile has never opened, so the desktop starts a new session instead of
+    // reopening the last one; open the preserved one the way the session list does.
+    for (const id of preserved) {
+      const loaded = await page.evaluate((id) => window.yuantu.invoke({ type: 'load', id }), id);
+      if (JSON.stringify(loaded.state?.session?.messages).includes('UPGRADE_PRESERVED_REPLY'))
+        break;
+    }
     try {
       await page.getByText('UPGRADE_PRESERVED_REPLY', { exact: true }).waitFor();
     } catch (error) {
