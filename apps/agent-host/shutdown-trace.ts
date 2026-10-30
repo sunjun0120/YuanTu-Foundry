@@ -1,17 +1,20 @@
 import { appendFileSync } from 'node:fs';
+import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 /**
  * Per-step timing of one Host's way down, for a test run that has to see where a slow shutdown spends its time.
  *
- * Off unless `FOUNDRY_TEST_SHUTDOWN_TRACE` names a file. Each step is appended as its own NDJSON line the moment it
- * finishes, rather than once at the end, because the shutdown being investigated is the one the client gives up on
- * and kills: the last line a killed Host left is the step before the one it was stuck in. The variable is a test
- * harness name (`FOUNDRY_TEST_*`), not a product setting, so test isolation passes it through to every worker.
+ * Off unless `FOUNDRY_TEST_SHUTDOWN_TRACE=1` and the Host runs under a test worker. Each step is appended as its
+ * own NDJSON line the moment it finishes, rather than once at the end, because the shutdown being investigated is
+ * the one the client gives up on and kills: the last line a killed Host left is the step before the one it was
+ * stuck in. The file goes into the worker's own artifact directory, the one place test isolation lets it write;
+ * the runner copies that directory into `.scratch/test-logs` when the worker ends.
  */
 function shutdownTrace(): (step: string, detail?: Record<string, unknown>) => void {
-  const file = process.env.FOUNDRY_TEST_SHUTDOWN_TRACE;
-  if (!file) return () => {};
+  const artifacts = process.env.FOUNDRY_TEST_ARTIFACTS;
+  if (process.env.FOUNDRY_TEST_SHUTDOWN_TRACE !== '1' || !artifacts) return () => {};
+  const file = path.join(artifacts, 'host-shutdown.ndjson');
   let started: number | undefined;
   let last = 0;
   return (step, detail) => {

@@ -110,6 +110,8 @@ export async function serveHost(ctx: HostContext): Promise<void> {
     }
     if (step) markShutdown(step);
   };
+  // A Host that never reaches `read-loop-ended` is still visible in the trace as one that was serving.
+  markShutdown('serving');
   try {
     // Started only once the read loop is live, so a trigger that fires immediately can dispatch
     // through the same path as any other request.

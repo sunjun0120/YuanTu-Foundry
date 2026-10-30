@@ -44,8 +44,9 @@ jobs:
       - run: npm test -- --concurrency=2 --timings=.scratch/windows-package-tests.ndjson
         env:
           FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'
-          # Every Host appends its shutdown steps here, so a teardown timeout shows which step it was stuck in.
-          FOUNDRY_TEST_SHUTDOWN_TRACE: ${{ github.workspace }}\.scratch\test-logs\host-shutdown.ndjson
+          # Every Host appends its shutdown steps to its worker's artifacts (copied into .scratch/test-logs), so a
+          # teardown timeout shows which step it was stuck in.
+          FOUNDRY_TEST_SHUTDOWN_TRACE: '1'
       - run: npm run package:windows
       - name: Install in isolated directory
         shell: pwsh
