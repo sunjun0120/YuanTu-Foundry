@@ -28,7 +28,7 @@ import {
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { isTrustedPage } from './trusted-page.ts';
 import { existsSync, realpathSync } from 'node:fs';
 import { CarrierService, parseCarrierCommand } from '../../packages/carrier/index.ts';
 import type { CarrierSnapshot } from '../../packages/carrier/index.ts';
@@ -277,7 +277,6 @@ let sandboxInitializing: Promise<SandboxSetupView> | undefined;
 // stays aborted, and every later connection test or model discovery would fail at once until a restart.
 let settingsAbort = new AbortController();
 const pagePath = path.join(__dirname, 'index.html');
-const trustedUrl = pathToFileURL(pagePath).href;
 
 /** The window's normal (unmaximised) bounds and whether it is maximised, as the next launch should restore them. */
 function currentWindowState(): WindowState | null {
@@ -295,7 +294,7 @@ function assertSender(event: Electron.IpcMainInvokeEvent): void {
     !window ||
     event.sender !== window.webContents ||
     event.senderFrame !== window.webContents.mainFrame ||
-    event.senderFrame.url !== trustedUrl
+    !isTrustedPage(event.senderFrame.url, pagePath)
   )
     throw new Error('Untrusted desktop sender');
 }
