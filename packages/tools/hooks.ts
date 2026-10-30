@@ -19,11 +19,14 @@ import type {
   PreStepContext,
   PreStepResult,
   ExtensionHooks,
+  BeforeToolDecision,
   BeforeToolOutcome,
   PostExecuteOutcome,
 } from '../protocol/tool-hooks.ts';
 import type { GuardDecision, PostToolDecision, ToolExecution } from '../protocol/tool-pipeline.ts';
 import type { ToolCall, ToolResult, ReasoningEffort } from '../protocol/index.ts';
+/** How much of a `beforeTool` refusal's reason reaches the model: enough to act on, not a hook's whole log. */
+const MAX_DENY_REASON = 1_000;
 export { EXTENSION_HOOK_NAMES } from '../protocol/tool-hooks.ts';
 export type {
   SessionHookContext,
@@ -219,13 +222,22 @@ export class HookRegistry {
    */
   async beforeTool(call: ToolCall, parent: AbortSignal): Promise<BeforeToolOutcome> {
     const outcome = await dispatchFirst(this.withMethod('beforeTool'), async (hook) => {
-      let allowed: boolean | void;
+      let decision: BeforeToolDecision;
       try {
-        allowed = await invokeHook((signal) => hook(structuredClone(call), signal), parent);
+        decision = await invokeHook((signal) => hook(structuredClone(call), signal), parent);
       } catch {
         return 'failed' as const;
       }
-      return allowed === false ? ('deny' as const) : undefined;
+      if (decision === false) return 'deny' as const;
+      if (!decision || typeof decision !== 'object' || !('deny' in decision)) return undefined;
+      // A `deny` key refuses whatever its value is: a reason that is not readable text is a refusal without one,
+      // never a consent.
+      const reason = typeof decision.deny === 'string' ? decision.deny.trim() : '';
+      return reason
+        ? {
+            deny: reason.length > MAX_DENY_REASON ? reason.slice(0, MAX_DENY_REASON) + '…' : reason,
+          }
+        : ('deny' as const);
     });
     return outcome ?? 'allow';
   }

@@ -11,6 +11,7 @@ import {
   LOAD_TOOLS,
   deferredToolUsage,
   loadedTools,
+  matchDeferredTools,
 } from '../packages/tools/deferred-tools.ts';
 import { LoadedDeferredTools, loadedDeferredTools } from '../packages/core/run/catalog.ts';
 import { editSnippet } from '../packages/tools/file-change.ts';
@@ -96,6 +97,7 @@ test('a deferred catalog holds back the listed subsystems and names them in load
     'git_diff',
     'save_memory',
     'list_memories',
+    'read_memory',
     'recall_knowledge',
     'forget_memory',
   ])
@@ -145,6 +147,50 @@ test('the loaded set is read from the transcript: named loads and direct calls',
     },
   ];
   assert.deepEqual([...loadedTools(messages, DEFERRED_TOOLS)].sort(), ['lsp_hover', 'web_fetch']);
+});
+
+test('a keyword query loads its best matches, and the transcript reads it back the same way', async (t) => {
+  assert.equal(matchDeferredTools('rename symbol', DEFERRED_TOOLS)[0], 'lsp_rename');
+  assert.deepEqual(matchDeferredTools('browser', DEFERRED_TOOLS), [
+    'browser_click',
+    'browser_close',
+    'browser_fill',
+    'browser_open',
+    'browser_screenshot',
+  ]);
+  assert.deepEqual(matchDeferredTools('a', DEFERRED_TOOLS), [], 'too short to mean anything');
+  // Ties go by name, so the order of the set does not change the answer.
+  assert.deepEqual(
+    matchDeferredTools('web', [...DEFERRED_TOOLS].reverse()),
+    matchDeferredTools('web', DEFERRED_TOOLS),
+  );
+  const messages: Message[] = [
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: '1', name: LOAD_TOOLS, arguments: { query: 'browser' } }],
+    },
+  ];
+  assert.ok(loadedTools(messages, DEFERRED_TOOLS).has('browser_open'));
+  assert.equal(
+    deferredToolUsage([messages]).tools.find((tool) => tool.name === 'browser_open')?.loads,
+    1,
+  );
+
+  const { tools } = await registry(t);
+  const context = { signal: new AbortController().signal } as never;
+  const loader = (
+    tools as unknown as { entries: Map<string, { tool: { execute: Function } }> }
+  ).entries.get(LOAD_TOOLS)!.tool;
+  const found = await loader.execute({ query: 'rename symbol' }, context);
+  assert.equal(found.isError, false);
+  assert.match(found.content, /^Loaded lsp_rename/);
+  const nothing = await loader.execute({ query: 'zzzz qqqq' }, context);
+  assert.equal(nothing.isError, true);
+  assert.match(nothing.content, /No loadable tool matches/);
+  assert.equal((await loader.execute({}, context)).isError, true);
+  const typo = await loader.execute({ names: ['web_serch'] }, context);
+  assert.match(typo.content, /Did you mean: web_search/);
 });
 
 test('a run reads only what the transcript gained, and answers as a full read would', () => {

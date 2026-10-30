@@ -6672,9 +6672,28 @@ textarea {
 }
 
 .chat-page .mcp-group-progress {
+  flex: none;
   margin-left: auto;
   text-align: right;
   font-size: 12px;
+}
+
+.chat-page .mcp-group-tools {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.chat-page .mcp-group-tools .mcp-call-name {
+  max-width: 100%;
+}
+
+.chat-page .mcp-group[open] > .mcp-group-summary > .mcp-group-tools {
+  display: none;
 }
 
 .chat-page .mcp-call-list {
@@ -6841,8 +6860,14 @@ textarea {
 
 @container mcp (max-width: 500px) {
   .chat-page .mcp-group-summary {
+    flex-wrap: wrap;
     gap: 8px;
     padding: 10px 12px;
+  }
+
+  .chat-page .mcp-group-tools {
+    order: 1;
+    flex-basis: 100%;
   }
 
   .chat-page .mcp-group-progress {
@@ -7859,7 +7884,7 @@ body[data-page='settings'] .mantine-Select-dropdown {
   --settings-font-selection: #414141;
   --settings-selection-ink: #f4f4f4;
   --settings-switch-off: #555;
-  --settings-switch-on: #f4f4f4;
+  --settings-switch-on: #7282ff;
   --settings-switch-thumb: #f4f4f4;
   --settings-border: #454545;
   --settings-divider: #363636;
@@ -8134,12 +8159,6 @@ body[data-page='settings']
   height: 16px;
   border: 0;
   background: var(--settings-switch-thumb);
-}
-[data-mantine-color-scheme='dark']
-  .settings-dialog
-  .settings-notification:has(:checked)
-  .mantine-Switch-thumb {
-  background: #181818;
 }
 .settings-dialog .settings-notification .mantine-Switch-thumb::before {
   display: none;

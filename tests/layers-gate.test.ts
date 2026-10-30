@@ -35,6 +35,30 @@ function run(root: string) {
   });
 }
 
+test('Rust build artifacts cannot introduce source layer violations', async (t) => {
+  const root = await tree(t, {
+    'packages/protocol/value.ts': 'export const value = 1;\n',
+    'packages/protocol/native/Cargo.toml': '[package]\nname = "fixture"\nversion = "0.1.0"\n',
+    'packages/protocol/native/target/generated.ts':
+      "export { core } from '../../../core/value.ts';\n",
+    'packages/core/value.ts': 'export const core = 1;\n',
+  });
+  const result = run(root);
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test('a regular target source directory still participates in layer checks', async (t) => {
+  const root = await tree(t, {
+    'packages/protocol/target/value.ts': "export { core } from '../../core/value.ts';\n",
+    'packages/core/value.ts': 'export const core = 1;\n',
+  });
+  const result = run(root);
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /goes against the layer order/);
+});
+
 test('a .ts module that imports a component is rejected', async (t) => {
   const root = await tree(t, {
     'apps/desktop/renderer-widget.ts': "export { Button } from './ui/Button.tsx';\n",

@@ -123,11 +123,13 @@ export function anthropicTools(
   tools: ToolSpec[],
   cache: boolean,
   toolBreakpoint = cache,
+  strict?: ReadonlyMap<string, Record<string, unknown>>,
 ): Record<string, unknown>[] {
   return tools.map((tool, index) => ({
     name: tool.name,
     description: tool.description,
-    input_schema: tool.inputSchema,
+    input_schema: strict?.get(tool.name) ?? tool.inputSchema,
+    ...(strict?.has(tool.name) ? { strict: true } : {}),
     ...(cache && toolBreakpoint && index === tools.length - 1 ? { cache_control: ephemeral } : {}),
   }));
 }

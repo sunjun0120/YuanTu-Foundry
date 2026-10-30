@@ -137,6 +137,15 @@ export function McpCalls({
         <>
           <CapabilityIcon />
           <span className="mcp-group-title">{t(builtin ? 'mcp.builtinTitle' : 'mcp.title')}</span>
+          <span className="mcp-group-tools">
+            {calls.map((item) => (
+              <span className="mcp-call-name" key={item.key}>
+                <code translate="no" title={item.target.tool}>
+                  {item.target.tool}
+                </code>
+              </span>
+            ))}
+          </span>
           <span className="mcp-group-progress" role="status">
             {t('mcp.completedCount', { completed, total: calls.length })}
             {failed

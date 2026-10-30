@@ -376,7 +376,7 @@ export function fileTools(
       isConcurrencySafe: parallelRead,
       output: READ_FILE_OUTPUT,
       description:
-        'Read a UTF-8 file. Returns numbered lines; use start_line and end_line for slices. The whole file is searchable, so a slice may start anywhere in it, and totalLines is the file’s real length. Output a tool could not return is stored under .yuantu/spill and is readable here.',
+        'Read a UTF-8 file. Returns numbered lines; use start_line and end_line for slices. The whole file is searchable, so a slice may start anywhere in it, and totalLines is the file’s real length. Output a tool could not return is stored under .yuantu/spill and is readable here. For a directory use list_files; to find where text occurs use search_files rather than reading files whole.',
       inputSchema: schema(
         {
           path: str,
@@ -509,7 +509,7 @@ export function fileTools(
       isConcurrencySafe: parallelRead,
       output: SEARCH_FILES_OUTPUT,
       description:
-        'Search workspace text. Defaults remain literal, case-sensitive, and 100 results; supports regex, case modes, include/exclude globs and a bounded result limit. Files are read to EOF, and the result says whether the scan was complete — an incomplete scan never reports that the workspace has no such text.',
+        'Search workspace text. Defaults remain literal, case-sensitive, and 100 results; supports regex, case modes, include/exclude globs and a bounded result limit. Files are read to EOF, and the result says whether the scan was complete — an incomplete scan never reports that the workspace has no such text. Use it instead of grep, rg or findstr through run_command.',
       inputSchema: schema(
         {
           query: { type: 'string', minLength: 1, maxLength: 1000 },
@@ -693,7 +693,7 @@ export function fileTools(
       name: 'edit_file',
       effect: 'workspace-file',
       description:
-        'Replace exactly one occurrence of old_text in an existing UTF-8 file, preserving other bytes. Read before editing. Rejects ambiguous matches and files over 1MB.',
+        'Replace exactly one occurrence of old_text in an existing UTF-8 file, preserving other bytes. Read before editing. Rejects ambiguous matches and files over 1MB: add surrounding lines to old_text until it is unique. For a new file or a full rewrite use write_file; for several edits in one file, batch_edit (via load_tools).',
       permission: 'write',
       inputSchema: schema(
         {

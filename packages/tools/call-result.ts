@@ -1,6 +1,9 @@
+import type { ErrorObject } from 'ajv';
 import { validateImages } from '../protocol/images.ts';
 import type { ToolContext, ToolResult } from '../protocol/index.ts';
+import { similarNames } from '../protocol/similar-names.ts';
 import type { ToolExecutionResult } from './pipeline.ts';
+import { presentedSchema } from './presented-schema.ts';
 import { spillNotice } from './spill.ts';
 import {
   MAX_TOOL_OUTPUT,
@@ -32,17 +35,83 @@ export function normalizeImages(result: ToolResult): ToolResult {
   }
 }
 
-/** The text a model reads for arguments that failed schema validation. */
+/**
+ * The text a model reads for a tool name nothing in this run answers to.
+ *
+ * `offered` is what the run may call, so a suggestion never names a tool a restriction keeps from it. A bare
+ * "Unknown tool" sent the model guessing again; the near names are what turns a typo into one more round.
+ */
+export function unknownToolMessage(name: string, offered: Iterable<string>): string {
+  const near = similarNames(name, offered);
+  return (
+    `Unknown tool: ${name}.` +
+    (near.length ? ` Did you mean: ${near.join(', ')}?` : '') +
+    ' Call a tool by its exact name from your tool list.'
+  );
+}
+
+/** How much of one argument's schema an argument error may quote. */
+const MAX_ARGUMENT_SCHEMA = 400;
+const MAX_ARGUMENTS_QUOTED = 8;
+
+/**
+ * The text a model reads for arguments that failed schema validation.
+ *
+ * Ajv's text says *what* is wrong; it does not say what would be right. So the arguments the errors involve are
+ * quoted with their schema (as the model is sent it), and an unknown argument close to an allowed one is named as
+ * the likely rename. That matters most for a deferred tool called before it was loaded: the model never saw its
+ * schema, and the error is the first place it can.
+ */
 export function invalidArgumentsMessage(
   errorsText: string,
-  properties: unknown,
-  additional: boolean,
+  errors: readonly ErrorObject[] | null | undefined,
+  schema: Record<string, unknown>,
 ): string {
-  const hint =
-    additional && properties && typeof properties === 'object'
-      ? ` Allowed top-level arguments: ${Object.keys(properties).slice(0, 20).join(', ') || '(none)'}.`
-      : '';
-  return `Invalid arguments: ${errorsText}.${hint}`;
+  const properties =
+    schema.properties && typeof schema.properties === 'object'
+      ? (schema.properties as Record<string, unknown>)
+      : {};
+  const names = Object.keys(properties);
+  const involved = new Set<string>();
+  const renames: string[] = [];
+  let additional = false;
+  for (const error of errors ?? []) {
+    if (error.instancePath === '' && error.keyword === 'required')
+      involved.add(String(error.params.missingProperty));
+    else if (error.instancePath === '' && error.keyword === 'additionalProperties') {
+      additional = true;
+      const extra = String(error.params.additionalProperty);
+      const [near] = similarNames(extra, names, 1);
+      if (near) {
+        renames.push(`${extra} → ${near}`);
+        involved.add(near);
+      }
+    } else if (error.instancePath) {
+      // `/files/0` is an error in `files`: the top-level argument is the one the model can find and fix.
+      const top = error.instancePath.split('/')[1]!;
+      involved.add(top.replaceAll('~1', '/').replaceAll('~0', '~'));
+    }
+  }
+  const hint = additional
+    ? ` Allowed top-level arguments: ${names.slice(0, 20).join(', ') || '(none)'}.`
+    : '';
+  const rename = renames.length ? ` Did you mean: ${renames.join(', ')}?` : '';
+  const expected = [...involved]
+    .filter((name) => Object.hasOwn(properties, name))
+    .slice(0, MAX_ARGUMENTS_QUOTED)
+    .map((name) => {
+      const value = properties[name];
+      const text = JSON.stringify(
+        value && typeof value === 'object'
+          ? presentedSchema(value as Record<string, unknown>)
+          : value,
+      );
+      return `${name}: ${text.length > MAX_ARGUMENT_SCHEMA ? text.slice(0, MAX_ARGUMENT_SCHEMA) + '…' : text}`;
+    });
+  return (
+    `Invalid arguments: ${errorsText}.${hint}${rename}` +
+    (expected.length ? ` Expected: ${expected.join('; ')}.` : '')
+  );
 }
 
 /**

@@ -95,6 +95,8 @@ async function sources(dir) {
   const found = [];
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     if (entry.name === 'node_modules') continue;
+    if (entry.isDirectory() && entry.name === 'target' && existsSync(path.join(dir, 'Cargo.toml')))
+      continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) found.push(...(await sources(full)));
     else if (SOURCE_FILE.test(entry.name)) found.push(full);

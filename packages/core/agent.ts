@@ -49,6 +49,7 @@ import { ResidentTurnSettlements } from './run/residency.ts';
 import { loadRunTask, registerTaskStepTool, startRunTask } from './run/task.ts';
 import { createToolBatch } from './run/tools.ts';
 import { ToolProgressGuard, toolProgressNotice } from './tool-progress.ts';
+import { shellReadIn, shellReadNotice } from './tool-advice.ts';
 import { projectChangedPaths } from './completion/work-evidence.ts';
 import { sessionQueryTools } from './session-query.ts';
 import { subAgentJobProducer } from './subagents/jobs.ts';
@@ -483,9 +484,12 @@ export class Agent {
        * belongs to has spoken in this very round.
        */
       let humanTurn = input.authority !== 'automatic';
+      // The file-tool advice is said once per run (`tool-advice.ts`).
+      let shellReadAdvised = false;
       const progressGuard = new ToolProgressGuard({
         workspace,
         investigationMs: limits.investigationMs,
+        isQuery: (name) => tools.classify(name).query,
         // Model processing time excludes a person thinking about an approval or answering a question.
         now: () => statistics.modelMs,
         investigate: () =>
@@ -584,6 +588,7 @@ export class Agent {
           sessionId: input.sessionId,
           runId,
           workspace,
+          project,
           depth,
           limits: this.subagents,
           signal,
@@ -623,6 +628,7 @@ export class Agent {
           store,
           sessionId: input.sessionId,
           workspace,
+          memoryRoot: project,
           emit,
           taskId: input.taskId,
           task,
@@ -1158,6 +1164,19 @@ export class Agent {
               source: 'tool-progress',
               round,
               action: progress,
+            });
+          }
+          // Only while the file tools are there to switch to: a run whose tools were withdrawn, or that never had
+          // `read_file`, would be told to use something it cannot call.
+          const shellReader =
+            !shellReadAdvised && surface.specs.some((spec) => spec.name === 'read_file')
+              ? shellReadIn(observations.map(({ call }) => call))
+              : undefined;
+          if (shellReader) {
+            shellReadAdvised = true;
+            injectContext(store, input.sessionId, emit, shellReadNotice(shellReader), {
+              source: 'tool-advice',
+              round,
             });
           }
           // Submitting the plan ends the planning run: the next step is a human decision, and letting

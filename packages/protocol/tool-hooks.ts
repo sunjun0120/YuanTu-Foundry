@@ -152,7 +152,14 @@ export interface ExtensionHooks {
    * that throws refuses the run too: a policy that could not run is not a policy that consented.
    */
   preStep?(context: PreStepContext, signal: AbortSignal): PreStepResult | Promise<PreStepResult>;
-  beforeTool?(call: ToolCall, signal: AbortSignal): boolean | void | Promise<boolean | void>;
+  /**
+   * Pre-execute gate. `false` refuses the call; `{deny: reason}` refuses it and the model reads the reason, which is
+   * what lets it change approach instead of sending the same call again. Anything else lets the call through.
+   */
+  beforeTool?(
+    call: ToolCall,
+    signal: AbortSignal,
+  ): BeforeToolDecision | Promise<BeforeToolDecision>;
   /**
    * Monotonic deny-only guard, evaluated after every `beforeTool` hook for the same call.
    *
@@ -206,7 +213,9 @@ export const EXTENSION_HOOK_NAMES = [
   'stop',
   'close',
 ] as const;
-export type BeforeToolOutcome = 'allow' | 'deny' | 'failed';
+export type BeforeToolDecision = boolean | void | { deny: string };
+/** `{deny}` is a refusal that carries the hook's reason; `'deny'` is one that gave none. */
+export type BeforeToolOutcome = 'allow' | 'deny' | 'failed' | { deny: string };
 /** What post-execute policy decided, plus whether an observer misbehaved along the way. */
 export interface PostExecuteOutcome {
   result: ToolResult;

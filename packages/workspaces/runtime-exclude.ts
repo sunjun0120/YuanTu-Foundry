@@ -12,12 +12,14 @@ import { workspaceGit } from './git.ts';
  * this is the same boundary for Git.
  *
  * The repository's private `info/exclude`, not `.gitignore`: it is local to this clone, is never committed, and
- * changes nothing a teammate sees. Only the directory's *contents* are excluded, with the two files a person may
- * mean to share put back — `lsp.json` (language server configuration) and `memory.md` (the workspace memory) are
- * written by people, not by the runtime.
+ * changes nothing a teammate sees. Only the directory's *contents* are excluded, with what a person may mean to
+ * share put back — `lsp.json` (language server configuration), `memory/` (the workspace memory, one file per
+ * entry) and the single `memory.md` of earlier versions, until it is migrated.
  *
  * Best effort and idempotent: a workspace that is not inside a Git working tree, or whose exclude file cannot be
- * written, is left alone, and a block already present is not written twice. Returns whether a block was added.
+ * written, is left alone, and a block already present is not written twice. A block written by an earlier
+ * version is completed with the lines it lacks instead, since its presence would otherwise keep them out for
+ * good. Returns whether anything was added.
  */
 export async function excludeRuntimeState(
   workspace: string,
@@ -52,16 +54,21 @@ export async function excludeRuntimeState(
     `${prefix}/*`,
     `!${prefix}/lsp.json`,
     `!${prefix}/memory.md`,
+    `!${prefix}/memory/`,
   ];
   const file = path.join(common, 'info', 'exclude');
   const existing = await readFile(file, 'utf8').catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return '';
     throw error;
   });
-  if (existing.split(/\r?\n/).includes(block[1]!)) return false;
+  const present = new Set(existing.split(/\r?\n/));
+  const missing = present.has(block[1]!)
+    ? block.slice(2).filter((line) => !present.has(line))
+    : block;
+  if (!missing.length) return false;
   await mkdir(path.dirname(file), { recursive: true });
   const separator = existing && !existing.endsWith('\n') ? '\n' : '';
-  await appendFile(file, `${separator}${block.join('\n')}\n`, 'utf8');
+  await appendFile(file, `${separator}${missing.join('\n')}\n`, 'utf8');
   return true;
 }
 

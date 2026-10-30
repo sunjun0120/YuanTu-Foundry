@@ -3,6 +3,7 @@ import type { ToolCall, ToolResult } from '../protocol/index.ts';
 import { environmentBlockedCode } from '../protocol/environment-blocked.ts';
 import type { FileStateDigest } from '../tools/file-state-digest.ts';
 import { projectChangedPaths } from './completion/work-evidence.ts';
+import { classifyTool } from '../tools/tool-categories.ts';
 
 export interface ToolObservation {
   call: ToolCall;
@@ -79,29 +80,13 @@ const INVESTIGATION_DEFAULT_MS = 240_000;
 /**
  * Calls that only read, so a round of them repeating unchanged is a model asking the same question again.
  *
- * Any tool outside this set resets the comparison, which is why it has to name every read a model reaches for
- * while investigating: one `web_search` in a round of repeated reads used to hide the repetition entirely.
- * `job_output` stays out on purpose — polling a running job is supposed to return the same thing until it moves.
+ * Any tool that is not a query resets the comparison, which is why every read a model reaches for while
+ * investigating has to be one: one `web_search` in a round of repeated reads used to hide the repetition entirely,
+ * back when this was a list of its own. Which tools are queries is now the tool classification's answer
+ * (`Tool.query`, `tools/tool-categories.ts`); `job_output` is not one on purpose — polling a running job is
+ * supposed to return the same thing until it moves.
  */
-const queries = new Set([
-  'read_file',
-  'list_files',
-  'search_files',
-  'repo_map',
-  'git_status',
-  'git_diff',
-  'git_log',
-  'git_branches',
-  'git_worktrees',
-  'web_search',
-  'web_fetch',
-  'lsp_diagnostics',
-  'lsp_definition',
-  'lsp_references',
-  'lsp_hover',
-  'lsp_symbols',
-  'lsp_workspace_symbols',
-]);
+const productQuery = (name: string): boolean => classifyTool({ name }).query;
 /** Calls that collect a job already running: waiting on one is not a new investigation round. */
 const collections = new Set(['job_list', 'job_output']);
 /** Fields of a structured result that differ on every run of the same call, and so say nothing about it. */
@@ -152,6 +137,11 @@ export class ToolProgressGuard {
     workspace?: string;
     /** Model time the investigation may take; the nudge fires at half of it. */
     investigationMs?: number;
+    /**
+     * Whether a tool is a query. The run passes its registry's answer, so a tool that classifies itself
+     * (`Tool.query`) is counted too; without it the product table decides.
+     */
+    isQuery?: (name: string) => boolean;
   };
   /** The configured allowance, never below a second: a zero here would withdraw the tools immediately. */
   private investigationMs: number;
@@ -161,6 +151,7 @@ export class ToolProgressGuard {
       investigate?: () => boolean;
       workspace?: string;
       investigationMs?: number;
+      isQuery?: (name: string) => boolean;
     } = {},
   ) {
     this.options = options;
@@ -391,7 +382,7 @@ export class ToolProgressGuard {
       observations.some(
         ({ call, result, kind }) =>
           !(
-            queries.has(call.name) ||
+            (this.options.isQuery ?? productQuery)(call.name) ||
             (call.name === 'run_code' && kind === 'program-output' && !result.isError)
           ) ||
           result.change ||

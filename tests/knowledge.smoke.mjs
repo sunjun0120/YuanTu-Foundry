@@ -7,7 +7,7 @@ import path from 'node:path';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { KnowledgeStore } from '../packages/knowledge/store.ts';
-import { memoryPaths, readMemoryFile } from '../packages/knowledge/memory.ts';
+import { memoryPaths, readMemoryDirectory } from '../packages/knowledge/memory.ts';
 import { createTools } from '../packages/catalog/index.ts';
 
 test(
@@ -68,6 +68,8 @@ test(
           arguments: {
             scope: 'workspace',
             key: 'release-choice',
+            type: 'project',
+            description: 'Release with staging waves',
             content: 'Use staging wave 947',
           },
         },
@@ -81,7 +83,7 @@ test(
       assert.match(recalled.content, /Use staging wave 947/);
       await tools.close();
       // The markdown file, not a database row, is the source of truth.
-      const memory = readMemoryFile(memoryPaths(root).workspace);
+      const memory = readMemoryDirectory(memoryPaths(root).workspace);
       assert.deepEqual(
         memory.entries.map((entry) => entry.key),
         ['release-choice'],

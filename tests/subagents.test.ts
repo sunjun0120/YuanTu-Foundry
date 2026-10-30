@@ -13,6 +13,7 @@ import {
   resolveSubAgentOptions,
   type SubAgentOptions,
 } from '../packages/core/subagents/delegation.ts';
+import { CHILD_DENIED_TOOLS } from '../packages/core/subagents/contract.ts';
 import {
   SUBAGENT_CAPABILITIES,
   SubAgentProviderRegistry,
@@ -1144,6 +1145,50 @@ test('an explore child cannot reach tools that manage its parent resources', asy
   });
   await generalAgent.run({ sessionId: generalSession.id, prompt: 'Write the file' });
   assert.ok(childTools.includes('write_file'), 'a general child must still be able to write');
+  // But not to memory: a child reads the delegator's memories and reports what it learned instead.
+  for (const name of CHILD_DENIED_TOOLS)
+    assert.equal(childTools.includes(name), false, `${name} reached a child`);
+  assert.ok(childTools.includes('read_memory'));
+  assert.ok(childTools.includes('list_memories'));
+});
+
+test('a child that calls a memory write is refused, not quietly allowed', async (t) => {
+  let refusal = '';
+  const { session, agent } = await fixture(t, {
+    async complete(request) {
+      if (!isChild(request)) {
+        if (!turn(request).afterTool)
+          return delegate([{ objective: 'Remember the build command', role: 'general' }]);
+        return reply(toolResults(request));
+      }
+      if (!turn(request).afterTool)
+        return {
+          text: 'Saving it',
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'save-1',
+              name: 'save_memory',
+              arguments: {
+                scope: 'workspace',
+                key: 'build',
+                type: 'project',
+                description: 'Build command',
+                content: 'npm run build',
+              },
+            },
+          ],
+          usage: { inputTokens: 10, outputTokens: 5 },
+        };
+      refusal =
+        request.messages.find(
+          (message) => message.role === 'tool' && message.toolCallId === 'save-1',
+        )?.content ?? '';
+      return reply('Reported instead');
+    },
+  });
+  await agent.run({ sessionId: session.id, prompt: 'Remember the build command' });
+  assert.match(refusal, /"save_memory" is not available in this run/);
 });
 
 test('wait:false returns at once, and the parent keeps taking rounds while the child works', async (t) => {

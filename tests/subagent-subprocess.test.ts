@@ -152,6 +152,7 @@ test('the child is handed the tool filter and none of the deployment’s permiss
       '  allow: process.env.YUANTU_TOOL_ALLOWLIST ?? null,',
       '  policy: process.env.YUANTU_PERMISSION_POLICY ?? null,',
       '  subagents: process.env.YUANTU_SUBAGENTS ?? null,',
+      '  memoryRoot: process.env.YUANTU_MEMORY_ROOT ?? null,',
       '});',
       'process.stdout.write(JSON.stringify({ type: "result", result: { status: "completed", text } }) + "\\n");',
     ].join('\n'),
@@ -170,7 +171,16 @@ test('the child is handed the tool filter and none of the deployment’s permiss
     allow: 'read_file,search_files',
     policy: null,
     subagents: 'false',
+    // The scratch workspace has no `.yuantu`: the child reads the delegator's project memories instead.
+    memoryRoot: process.cwd(),
   });
+  // A delegator working in a worktree names its project, and that is whose memories the child reads.
+  const base = request();
+  const fromWorktree = await provider.start({
+    ...base,
+    parent: { ...base.parent, workspace: directory, project: process.cwd() },
+  });
+  assert.equal(JSON.parse(fromWorktree.text).memoryRoot, process.cwd());
 });
 
 for (const stream of ['stdout', 'stderr', 'combined'] as const) {

@@ -49,6 +49,8 @@ export interface CoordinatorOptions {
   store: SessionStore;
   sessionId: string;
   workspace: string;
+  /** The session's project, whose memories a child reads (`SubAgentParent.project`). */
+  project?: string;
   depth: number;
   /** The resolved delegation limits: the coordinator's own admission rules come from here. */
   limits: ResolvedSubAgentOptions;
@@ -126,7 +128,12 @@ export function createCoordinator(options: CoordinatorOptions): SubAgentCoordina
     inbox: () => store.stateOf<readonly PendingSubagentMessage[]>('subagentInbox', sessionId),
     providers: options.providers,
     provider: options.providerName ?? 'in-process',
-    parent: { sessionId, workspace: options.workspace, depth: options.depth },
+    parent: {
+      sessionId,
+      workspace: options.workspace,
+      ...(options.project ? { project: options.project } : {}),
+      depth: options.depth,
+    },
     ...(options.models ? { models: options.models } : {}),
     ...(options.workspaceMode ? { workspaceMode: options.workspaceMode } : {}),
     ...(options.workspaces

@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, rm, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { KnowledgeStore } from '../packages/knowledge/store.ts';
-import { realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, realpathSync, writeFileSync } from 'node:fs';
 import { riskWorker } from './risk-concurrency.ts';
 import { knowledgeTools } from '../packages/knowledge/tools.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
@@ -15,13 +15,29 @@ import {
   forgetMemoryEntry,
   listMemoryEntries,
   memoryLimits,
+  memoryFile,
   memorySummary,
-  parseMemory,
-  renderMemory,
+  memoryUsage,
+  memoryUsageFile,
+  recordMemoryUse,
+  MEMORY_NOTES_FILE,
+  MemoryConflictError,
+  parseMemoryEntry,
+  readMemoryDirectory,
+  renderMemoryEntry,
   saveMemoryEntry,
-  searchMemories,
+  memorySources,
+  maintainMemories,
+  memoryArchiveDir,
+  memoryScore,
+  memoryScoring,
+  readArchivedEntries,
+  readMemoryEntry,
+  recordMemoriesSeen,
+  restoreMemoryEntry,
 } from '../packages/knowledge/memory.ts';
 import { Agent } from '../packages/core/agent.ts';
+import { AGENT_SYSTEM_PROMPT, agentSystemPrompt } from '../packages/core/prompt/notices.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import type { Message, ModelRequest } from '../packages/protocol/index.ts';
 import { tempRoot } from './temp-fixture.ts';
@@ -260,7 +276,7 @@ test('Agent can recall saved knowledge but persistent writes still require appro
   );
   assert.equal(recall.isError, false);
   assert.match(recall.content, /Use staged rollout 481/);
-  assert.match(recall.content, /\.yuantu\/memory\.md/, 'the result names its source file');
+  assert.match(recall.content, /\.yuantu\/memory\/release\.md/, 'the result names its source file');
   const recalled = JSON.parse(recall.content);
   assert.ok(Array.isArray(recalled.results));
   assert.deepEqual(recalled.freshness, {
@@ -271,7 +287,13 @@ test('Agent can recall saved knowledge but persistent writes still require appro
   const save = {
     id: 'write',
     name: 'save_memory',
-    arguments: { scope: 'workspace', key: 'no-auto-save', content: 'Must ask first' },
+    arguments: {
+      scope: 'workspace',
+      key: 'no-auto-save',
+      type: 'feedback',
+      description: 'Must ask first',
+      content: 'Must ask first',
+    },
   };
   const denied = await registry.execute(save, { signal, approve: async () => false });
   assert.equal(denied.isError, true);
@@ -292,11 +314,11 @@ test('Agent can recall saved knowledge but persistent writes still require appro
 
 test('new Agent runs see a bounded reminder of saved cross-session memory', async (t) => {
   const { root, globalDir, workspace, global } = await memoryFixture(t, 'yuantu-memory-context-');
-  assert.equal(memoryContext(root, globalDir), '');
+  assert.equal(await memoryContext(root, globalDir), '');
   const { saveMemoryEntry } = await import('../packages/knowledge/memory.ts');
   await saveMemoryEntry(global, 'language', 'Respond in Chinese');
   await saveMemoryEntry(workspace, 'build', 'Use the local build 348');
-  const prompt = memoryContext(root, globalDir);
+  const prompt = await memoryContext(root, globalDir);
   assert.match(prompt, /Respond in Chinese/);
   assert.match(prompt, /local build 348/);
   assert.match(prompt, /recall_knowledge/);
@@ -312,29 +334,80 @@ test('Agent manages memories and indexed documents through approved tools', asyn
   registry.onClose(source.close);
   const signal = new AbortController().signal;
   const run = (id: string, name: string, args: Record<string, unknown>, allow: boolean) =>
-    registry.execute({ id, name, arguments: args }, { signal, approve: async () => allow });
+    registry.execute(
+      { id, name, arguments: args },
+      { signal, approve: async () => allow, sessionId: 'session-7' },
+    );
 
   const created = await run(
     '1',
     'save_memory',
-    { scope: 'workspace', key: 'build-preference', content: 'Use npm run build' },
+    {
+      scope: 'workspace',
+      key: 'build-preference',
+      type: 'feedback',
+      description: 'Build with npm run build',
+      content: 'Use npm run build',
+    },
     true,
   );
   assert.equal(created.isError, false);
   assert.equal(JSON.parse(created.content).key, 'build-preference');
   const listed = await run('2', 'list_memories', {}, false);
-  assert.equal(JSON.parse(listed.content).memories.workspace[0].key, 'build-preference');
+  const [first] = JSON.parse(listed.content).memories.workspace;
+  assert.equal(first.key, 'build-preference');
+  assert.equal(first.type, 'feedback');
+  assert.equal(first.session, 'session-7', 'the writing session is recorded');
+  assert.equal(first.text, undefined, 'a listing names memories without their text');
+  const read = await run(
+    '2b',
+    'read_memory',
+    { scope: 'workspace', key: 'build-preference' },
+    false,
+  );
+  assert.equal(read.isError, false, read.content);
+  assert.equal(JSON.parse(read.content).text, 'Use npm run build');
+  assert.equal(JSON.parse(read.content).revision, first.revision);
+  const missing = await run('2c', 'read_memory', { scope: 'workspace', key: 'absent' }, false);
+  assert.equal(missing.isError, true);
+  assert.match(missing.content, /No memory named absent/);
+  const update = { scope: 'workspace', key: 'build-preference', type: 'feedback' };
   const denied = await run(
     '3',
     'save_memory',
-    { scope: 'workspace', key: 'build-preference', content: 'Use npm run check' },
+    {
+      ...update,
+      description: 'Check with npm run check',
+      content: 'Use npm run check',
+      revision: first.revision,
+    },
     false,
   );
   assert.equal(denied.isError, true);
+  const blind = await run(
+    '3b',
+    'save_memory',
+    { ...update, description: 'Check with npm run check', content: 'Use npm run check' },
+    true,
+  );
+  assert.equal(blind.isError, true, 'a replace that names no revision is refused');
+  assert.match(blind.content, /Use npm run build/, 'with the current text to merge');
+  const undescribed = await run(
+    '3c',
+    'save_memory',
+    { scope: 'workspace', key: 'loose', content: 'No type or description' },
+    true,
+  );
+  assert.equal(undescribed.isError, true, 'the model must classify and describe what it saves');
   const replaced = await run(
     '4',
     'save_memory',
-    { scope: 'workspace', key: 'build-preference', content: 'Use npm run check' },
+    {
+      ...update,
+      description: 'Check with npm run check',
+      content: 'Use npm run check',
+      revision: first.revision,
+    },
     true,
   );
   assert.equal(replaced.isError, false);
@@ -348,7 +421,11 @@ test('Agent manages memories and indexed documents through approved tools', asyn
   const forgotten = await run(
     '8',
     'forget_memory',
-    { scope: 'workspace', key: 'build-preference' },
+    {
+      scope: 'workspace',
+      key: 'build-preference',
+      revision: JSON.parse(replaced.content).revision,
+    },
     true,
   );
   assert.equal(forgotten.isError, false);
@@ -409,6 +486,115 @@ test('one Agent instance refreshes remembered context on the next run', async (t
   sessionStore.close();
 });
 
+test('a run working outside its project is still reminded of the project memories', async (t) => {
+  const { root, workspace } = await memoryFixture(t, 'yuantu-memory-project-root-');
+  const executionRoot = await mkdtemp(path.join(tmpdir(), 'yuantu-memory-worktree-'));
+  t.after(() => rm(executionRoot, { recursive: true, force: true }));
+  await saveMemoryEntry(workspace, 'release', 'Use marker 512 for release', {
+    type: 'feedback',
+    description: 'Release with marker 512',
+  });
+  const sessionStore = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const session = sessionStore.create(root);
+  const tools = new ToolRegistry();
+  const sent: Message[][] = [];
+  const agent = new Agent({
+    store: sessionStore,
+    tools,
+    approve: async () => true,
+    // A worktree child: its files are elsewhere, its project is `root`.
+    workspaceRoots: () => ({ projectRoot: root, executionRoot }),
+    provider: {
+      async complete(request: ModelRequest) {
+        sent.push(request.messages);
+        return {
+          text: 'ok',
+          toolCalls: [],
+          finishReason: 'stop',
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    },
+  });
+  await agent.run({ sessionId: session.id, prompt: 'How do we release?' });
+  assert.match(sent[0]!.map((message) => message.content).join('\n'), /marker 512/);
+  await tools.close();
+  sessionStore.close();
+});
+
+test('knowledge tools in a worktree read and list the project memories', async (t) => {
+  const { root, workspace } = await memoryFixture(t, 'yuantu-memory-tools-root-');
+  const executionRoot = await mkdtemp(path.join(tmpdir(), 'yuantu-memory-tools-worktree-'));
+  t.after(() => rm(executionRoot, { recursive: true, force: true }));
+  await saveMemoryEntry(workspace, 'release', 'Use marker 733', {
+    type: 'project',
+    description: 'Release marker',
+  });
+  const source = knowledgeTools(executionRoot, root);
+  const registry = new ToolRegistry();
+  source.tools.forEach((tool) => registry.register(tool));
+  registry.onClose(source.close);
+  const context = { signal: new AbortController().signal, approve: async () => false };
+  const listed = await registry.execute(
+    { id: 'list', name: 'list_memories', arguments: {} },
+    context,
+  );
+  assert.equal(JSON.parse(listed.content).memories.workspace[0].key, 'release');
+  const read = await registry.execute(
+    { id: 'read', name: 'read_memory', arguments: { scope: 'workspace', key: 'release' } },
+    context,
+  );
+  assert.equal(JSON.parse(read.content).text, 'Use marker 733');
+  const recalled = await registry.execute(
+    { id: 'recall', name: 'recall_knowledge', arguments: { query: 'marker 733' } },
+    context,
+  );
+  assert.match(recalled.content, /Use marker 733/);
+  assert.equal(existsSync(path.join(executionRoot, '.yuantu', 'memory')), false);
+  await registry.close();
+});
+
+test('a process started for another project reads that project memories', async (t) => {
+  const { root, globalDir, workspace } = await memoryFixture(t, 'yuantu-memory-root-setting-');
+  const scratch = await mkdtemp(path.join(tmpdir(), 'yuantu-memory-scratch-'));
+  const previous = process.env.YUANTU_MEMORY_ROOT;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.YUANTU_MEMORY_ROOT;
+    else process.env.YUANTU_MEMORY_ROOT = previous;
+    await rm(scratch, { recursive: true, force: true });
+  });
+  await saveMemoryEntry(workspace, 'release', 'Use marker 734', {
+    type: 'feedback',
+    description: 'Release marker',
+  });
+  // The subprocess provider's child: it works in a scratch directory and is told whose project it serves.
+  process.env.YUANTU_MEMORY_ROOT = root;
+  const borrowed = memoryPaths(scratch, globalDir).workspace;
+  assert.equal(borrowed.dir, workspace.dir);
+  assert.match(memorySummary(scratch, globalDir), /workspace\/feedback release: Release marker/);
+  assert.equal(recallMemories(scratch, 'marker 734', globalDir)[0]?.key, 'release');
+  assert.equal(existsSync(path.join(scratch, '.yuantu', 'memory')), false);
+  // Read, never changed: the project is the delegator's, and so is deciding what it remembers.
+  await assert.rejects(saveMemoryEntry(borrowed, 'note', 'Child view'), /may read but not change/);
+  const current = listMemoryEntries(scratch, globalDir).workspace[0]!;
+  await assert.rejects(
+    forgetMemoryEntry(borrowed, 'release', current.revision),
+    /may read but not change/,
+  );
+  // Nor is a legacy file migrated in the delegator's project: that is its own Host's write to make.
+  const legacyRoot = await mkdtemp(path.join(tmpdir(), 'yuantu-memory-legacy-borrowed-'));
+  t.after(() => rm(legacyRoot, { recursive: true, force: true }));
+  await mkdir(path.join(legacyRoot, '.yuantu'));
+  writeFileSync(
+    path.join(legacyRoot, '.yuantu', 'memory.md'),
+    '# YuanTu memory\n\n- **old**: Legacy entry (2026-10-01)\n',
+  );
+  process.env.YUANTU_MEMORY_ROOT = legacyRoot;
+  assert.deepEqual(listMemoryEntries(scratch, globalDir).workspace, []);
+  assert.equal(existsSync(path.join(legacyRoot, '.yuantu', 'memory')), false);
+  assert.equal(existsSync(path.join(legacyRoot, '.yuantu', 'memory.md')), true);
+});
+
 // ---- merged from memory.test.ts ----
 
 async function fixture(t: test.TestContext) {
@@ -421,81 +607,212 @@ async function fixture(t: test.TestContext) {
   return { root, globalDir, ...memoryPaths(root, globalDir) };
 }
 
-test('memory is readable markdown and entries round-trip through it', async (t) => {
+test('each memory is its own readable markdown file that round-trips', async (t) => {
   const { workspace } = await fixture(t);
-  await saveMemoryEntry(workspace, 'windows-shell', 'Use npm.cmd in this repository.');
-  const text = await readFile(workspace, 'utf8');
-  assert.match(text, /^# YuanTu memory/m);
-  assert.match(
+  const saved = await saveMemoryEntry(
+    workspace,
+    'windows-shell',
+    'Use npm.cmd here.\n\nWhy: npm is a ps1 shim.',
+    {
+      type: 'feedback',
+      description: 'Use npm.cmd in this repository',
+      session: 'session-1',
+      now: new Date('2026-10-30T00:00:00Z'),
+    },
+  );
+  const file = memoryFile(workspace, 'windows-shell');
+  const text = await readFile(file, 'utf8');
+  assert.equal(
     text,
-    /^- \*\*windows-shell\*\*: Use npm\.cmd in this repository\. \(\d{4}-\d{2}-\d{2}\)$/m,
+    '---\nname: windows-shell\ndescription: Use npm.cmd in this repository\ntype: feedback\nupdated: 2026-10-30\nsession: session-1\n---\n\nUse npm.cmd here.\n\nWhy: npm is a ps1 shim.\n',
   );
-  const memory = parseMemory(text);
-  assert.deepEqual(
-    memory.entries.map((entry) => entry.key),
-    ['windows-shell'],
+  const parsed = parseMemoryEntry('windows-shell', Buffer.from(text));
+  assert.deepEqual(parsed.entry, saved);
+  assert.equal(
+    renderMemoryEntry(parsed.entry, parsed.extra),
+    text,
+    'a parsed file renders back to itself',
   );
-  assert.equal(renderMemory(memory), text, 'a parsed file renders back to itself');
 });
 
-test('hand-written markdown outside the managed bullets survives every write', async (t) => {
+test('hand-written fields, notes and files without frontmatter survive', async (t) => {
   const { workspace } = await fixture(t);
-  await mkdir(path.dirname(workspace), { recursive: true });
+  await mkdir(workspace.dir, { recursive: true });
   await writeFile(
-    workspace,
-    '# YuanTu memory\n\nMy own notes: the staging database is read-only.\n\n- **old**: keep me (2026-01-02)\n',
+    path.join(workspace.dir, MEMORY_NOTES_FILE),
+    'My own notes: staging is read-only.\n',
   );
-  await saveMemoryEntry(workspace, 'new', 'Added later.');
-  const afterSave = await readFile(workspace, 'utf8');
-  assert.match(afterSave, /My own notes: the staging database is read-only\./);
-  await forgetMemoryEntry(workspace, 'old');
-  const afterForget = await readFile(workspace, 'utf8');
-  assert.match(afterForget, /My own notes: the staging database is read-only\./);
-  assert.match(afterForget, /\*\*new\*\*/);
-  assert.doesNotMatch(afterForget, /\*\*old\*\*/);
-});
-
-test('saving an existing key replaces its text in place and re-dates it', async (t) => {
-  const { workspace } = await fixture(t);
-  await saveMemoryEntry(workspace, 'build', 'Use npm run build', new Date('2026-01-01T00:00:00Z'));
-  await saveMemoryEntry(workspace, 'other', 'Unrelated', new Date('2026-01-01T00:00:00Z'));
-  const replaced = await saveMemoryEntry(
-    workspace,
-    'build',
-    'Use npm run check',
-    new Date('2026-03-04T00:00:00Z'),
+  await writeFile(
+    path.join(workspace.dir, 'plain.md'),
+    'Written by hand, no header.\r\nSecond line.\r\n',
   );
-  assert.equal(replaced.updatedAt, '2026-03-04');
-  const memory = parseMemory(await readFile(workspace, 'utf8'));
+  await writeFile(
+    path.join(workspace.dir, 'tagged.md'),
+    '---\nname: tagged\nowner: platform team\ndescription: ends in dashes ---\ntype: reference\nupdated: 2026-01-02\n---\n\nbody\n',
+  );
+  const before = readMemoryDirectory(workspace);
+  assert.equal(before.notes, 'My own notes: staging is read-only.');
   assert.deepEqual(
-    memory.entries.map((entry) => entry.key),
-    ['build', 'other'],
-    'replacing keeps the original position',
+    before.entries.map((entry) => [entry.key, entry.type, entry.description]),
+    [
+      ['plain', 'project', 'Written by hand, no header.'],
+      ['tagged', 'reference', 'ends in dashes ---'],
+    ],
   );
-  assert.equal(memory.entries[0]!.text, 'Use npm run check');
+  const tagged = before.entries[1]!;
+  await saveMemoryEntry(workspace, 'tagged', 'new body', {
+    type: 'reference',
+    revision: tagged.revision,
+  });
+  assert.match(await readFile(memoryFile(workspace, 'tagged'), 'utf8'), /^owner: platform team$/m);
+  assert.equal(readMemoryDirectory(workspace).notes, 'My own notes: staging is read-only.');
 });
 
-test('keys and content are validated instead of written blindly', async (t) => {
+test('replacing or forgetting an entry requires the revision it was based on', async (t) => {
+  const { workspace } = await fixture(t);
+  const first = await saveMemoryEntry(workspace, 'build', 'Use npm run build', {
+    now: new Date('2026-01-01T00:00:00Z'),
+  });
+  await assert.rejects(
+    () => saveMemoryEntry(workspace, 'build', 'Use npm run check'),
+    (error: unknown) =>
+      error instanceof MemoryConflictError &&
+      error.current?.text === 'Use npm run build' &&
+      error.message.includes(first.revision),
+  );
+  const replaced = await saveMemoryEntry(workspace, 'build', 'Use npm run check', {
+    revision: first.revision,
+    now: new Date('2026-03-04T00:00:00Z'),
+  });
+  assert.equal(replaced.updatedAt, '2026-03-04');
+  assert.notEqual(replaced.revision, first.revision);
+  await assert.rejects(
+    () => saveMemoryEntry(workspace, 'build', 'stale', { revision: first.revision }),
+    MemoryConflictError,
+    'an outdated revision is refused',
+  );
+  await assert.rejects(() => forgetMemoryEntry(workspace, 'build', undefined), MemoryConflictError);
+  await assert.rejects(
+    () => forgetMemoryEntry(workspace, 'build', first.revision),
+    MemoryConflictError,
+  );
+  assert.equal(readMemoryDirectory(workspace).entries[0]!.text, 'Use npm run check');
+  await forgetMemoryEntry(workspace, 'build', replaced.revision);
+  assert.deepEqual(readMemoryDirectory(workspace).entries, []);
+  await assert.rejects(
+    () => saveMemoryEntry(workspace, 'build', 'again', { revision: replaced.revision }),
+    /no longer exists/,
+  );
+});
+
+test('concurrent saves of different keys never lose an entry', async (t) => {
+  const { workspace } = await fixture(t);
+  const keys = Array.from({ length: 12 }, (_, index) => `key-${index}`);
+  await Promise.all(keys.map((key) => saveMemoryEntry(workspace, key, `value of ${key}`)));
+  assert.deepEqual(
+    readMemoryDirectory(workspace)
+      .entries.map((entry) => entry.key)
+      .sort(),
+    [...keys].sort(),
+  );
+});
+
+test('concurrent replaces based on one revision let exactly one through', async (t) => {
+  const { workspace } = await fixture(t);
+  const base = await saveMemoryEntry(workspace, 'shared', 'base');
+  const outcomes = await Promise.allSettled(
+    ['first', 'second', 'third'].map((text) =>
+      saveMemoryEntry(workspace, 'shared', text, { revision: base.revision }),
+    ),
+  );
+  const won = outcomes.filter((outcome) => outcome.status === 'fulfilled');
+  assert.equal(won.length, 1);
+  for (const outcome of outcomes)
+    if (outcome.status === 'rejected') assert.ok(outcome.reason instanceof MemoryConflictError);
+  assert.equal(
+    readMemoryDirectory(workspace).entries[0]!.text,
+    (won[0] as PromiseFulfilledResult<{ text: string }>).value.text,
+  );
+});
+
+test('keys, types and content are validated instead of written blindly', async (t) => {
   const { workspace } = await fixture(t);
   await assert.rejects(() => saveMemoryEntry(workspace, 'Not A Key', 'x'), /Invalid memory key/);
   await assert.rejects(() => saveMemoryEntry(workspace, '', 'x'), /Invalid memory key/);
+  for (const reserved of ['con', 'nul', 'com1', 'lpt9', 'aux.notes'])
+    await assert.rejects(() => saveMemoryEntry(workspace, reserved, 'x'), /reserved by Windows/);
   await assert.rejects(() => saveMemoryEntry(workspace, 'ok', '   '), /must not be empty/);
   await assert.rejects(
     () => saveMemoryEntry(workspace, 'ok', 'x'.repeat(memoryLimits.text + 1)),
     /exceeds/,
   );
-  await assert.rejects(() => forgetMemoryEntry(workspace, 'missing'), /No memory named/);
-  const normalized = await saveMemoryEntry(workspace, 'multiline', 'first\n\n  second  ');
-  assert.equal(normalized.text, 'first second', 'entries stay on one readable line');
+  await assert.rejects(
+    () => saveMemoryEntry(workspace, 'ok', 'x', { type: 'note' }),
+    /Invalid memory type/,
+  );
+  await assert.rejects(
+    () =>
+      saveMemoryEntry(workspace, 'ok', 'x', {
+        description: 'd'.repeat(memoryLimits.description + 1),
+      }),
+    /description exceeds/,
+  );
+  await assert.rejects(() => forgetMemoryEntry(workspace, 'missing', undefined), /No memory named/);
+  const multiline = await saveMemoryEntry(workspace, 'multiline', '  first\r\n\r\nsecond  ');
+  assert.equal(multiline.text, 'first\n\nsecond', 'line breaks are kept, CRLF becomes LF');
+  assert.equal(multiline.description, 'first');
+  assert.equal(multiline.type, 'project', 'a workspace memory defaults to project');
 });
 
-test('the entry count is bounded so the file cannot grow without limit', async (t) => {
+test('the entry count is bounded so the directory cannot grow without limit', async (t) => {
   const { workspace } = await fixture(t);
   for (let index = 0; index < memoryLimits.entries; index++)
     await saveMemoryEntry(workspace, `entry-${index}`, `value ${index}`);
   await assert.rejects(() => saveMemoryEntry(workspace, 'one-too-many', 'x'), /limit reached/);
-  await forgetMemoryEntry(workspace, 'entry-0');
+  const first = readMemoryDirectory(workspace).entries.find((entry) => entry.key === 'entry-0')!;
+  await forgetMemoryEntry(workspace, 'entry-0', first.revision);
   assert.equal((await saveMemoryEntry(workspace, 'one-too-many', 'x')).key, 'one-too-many');
+});
+
+test('a single-file memory.md from earlier versions is migrated once and kept aside', async (t) => {
+  const { workspace, global } = await fixture(t);
+  await mkdir(path.dirname(workspace.dir), { recursive: true });
+  const legacy =
+    '# YuanTu memory\n\n<!-- One bullet per managed memory. Text outside these bullets is kept as written. -->\n\nMy own notes.\n\n- **build**: Use npm run build (2026-01-02)\n- **con**: Reserved name (2026-01-03)\n';
+  await writeFile(`${workspace.dir}.md`, legacy);
+  await writeFile(`${global.dir}.md`, '- **language**: Respond in Chinese (2026-02-03)\n');
+  const migrated = readMemoryDirectory(workspace);
+  assert.deepEqual(
+    migrated.entries.map((entry) => [
+      entry.key,
+      entry.type,
+      entry.text,
+      entry.updatedAt,
+      entry.session,
+    ]),
+    [
+      ['build', 'project', 'Use npm run build', '2026-01-02', 'migrated'],
+      ['con-entry', 'project', 'Reserved name', '2026-01-03', 'migrated'],
+    ],
+  );
+  assert.match(migrated.notes, /^My own notes\./);
+  assert.match(migrated.notes, /con -> con-entry/);
+  assert.equal(
+    await readFile(`${workspace.dir}.md.migrated`, 'utf8'),
+    legacy,
+    'the old file is kept',
+  );
+  assert.equal(
+    readMemoryDirectory(global).entries[0]!.type,
+    'user',
+    'user-wide entries become user memories',
+  );
+  // A crash after the directory was renamed into place but before the legacy file was moved aside.
+  await writeFile(`${workspace.dir}.md`, '- **build**: Older text (2025-01-01)\n');
+  const again = readMemoryDirectory(workspace);
+  assert.equal(again.entries.find((entry) => entry.key === 'build')!.text, 'Use npm run build');
+  assert.ok(existsSync(`${workspace.dir}.md.migrated`));
+  assert.equal(existsSync(`${workspace.dir}.md`), false);
 });
 
 test('the system prompt reminder prefers workspace entries over user-wide ones', async (t) => {
@@ -516,32 +833,386 @@ test('the system prompt reminder prefers workspace entries over user-wide ones',
   );
 });
 
-test('the reminder is bounded even when the file holds more entries', async (t) => {
+test('the reminder is an index of every memory, not a dozen entries of text', async (t) => {
   const { root, globalDir, workspace, global } = await fixture(t);
-  await saveMemoryEntry(global, 'language', 'Respond in Chinese');
-  for (let index = 0; index <= memoryLimits.injectedEntries; index++)
+  await saveMemoryEntry(global, 'language', 'Respond in Chinese', { type: 'user' });
+  await saveMemoryEntry(workspace, 'old-decision', 'x'.repeat(400), {
+    type: 'project',
+    description: 'Staging is read-only',
+    now: new Date('2026-01-01T00:00:00Z'),
+  });
+  await saveMemoryEntry(workspace, 'new-decision', 'Long project text '.repeat(10), {
+    type: 'project',
+    description: 'Release in waves',
+    now: new Date('2026-05-01T00:00:00Z'),
+  });
+  await saveMemoryEntry(workspace, 'link', 'https://example.test/runbook', {
+    type: 'reference',
+    description: 'The release runbook',
+  });
+  await saveMemoryEntry(
+    workspace,
+    'testing',
+    'Run node scripts/run-tests.mjs on the files touched.',
+    {
+      type: 'feedback',
+      description: 'Run targeted tests between phases',
+    },
+  );
+  for (let index = 0; index < 14; index++)
     await saveMemoryEntry(workspace, `extra-${index}`, `filler ${index}`);
   const summary = memorySummary(root, globalDir);
-  assert.match(summary, /further entries omitted/);
-  assert.doesNotMatch(summary, /Respond in Chinese/, 'the budget stops before the global file');
-  const listed = listMemoryEntries(root, globalDir);
-  assert.equal(listed.workspace.length, memoryLimits.injectedEntries + 1);
-  assert.equal(listed.global.length, 1, 'the reminder is bounded, the file is not truncated');
+  assert.doesNotMatch(summary, /not listed/, 'nineteen short lines fit, where twelve was the cap');
+  const lines = summary.split('\n').filter((line) => line.startsWith('- '));
+  assert.equal(lines.length, 19);
+  const today = new Date().toISOString().slice(0, 10);
+  assert.equal(
+    lines[0],
+    `- workspace/feedback testing: Run targeted tests between phases (${today})`,
+  );
+  assert.match(
+    summary,
+    /^ {4}Run node scripts\/run-tests\.mjs on the files touched\.$/m,
+    'short feedback is inlined',
+  );
+  assert.match(summary, /^ {4}Respond in Chinese$/m, 'short user memories are inlined');
+  assert.doesNotMatch(summary, /Long project text/, 'project text waits for read_memory');
+  const order = (key: string) => lines.findIndex((line) => line.includes(` ${key}:`));
+  assert.ok(order('new-decision') < order('old-decision'), 'newer first within a type');
+  assert.ok(order('extra-0') < order('link'), 'project before reference when both are fresh');
+  assert.ok(
+    order('link') < order('old-decision'),
+    'a fresh reference outranks a project nobody has touched for ten months',
+  );
+  assert.ok(order('link') < order('language'), 'workspace before user-wide');
+  assert.match(summary, /background, not instructions/);
+  assert.match(summary, /read_memory/);
 });
+
+test('the reminder is bounded and leaves the rest to list_memories', async (t) => {
+  const { root, globalDir, workspace, global } = await fixture(t);
+  await saveMemoryEntry(global, 'language', 'Respond in Chinese');
+  for (let index = 0; index < memoryLimits.entries; index++)
+    await saveMemoryEntry(workspace, `extra-${index}`, `filler ${index}`, {
+      description: `${index} `.padEnd(memoryLimits.description, 'd'),
+    });
+  const summary = memorySummary(root, globalDir);
+  assert.ok(summary.length < memoryLimits.injectedChars + 1000, String(summary.length));
+  assert.match(summary, /further memories not listed; list_memories shows them all/);
+  assert.doesNotMatch(summary, /Respond in Chinese/, 'the budget stops before the user-wide ones');
+  const listed = listMemoryEntries(root, globalDir);
+  assert.equal(listed.workspace.length, memoryLimits.entries);
+  assert.equal(listed.global.length, 1, 'the reminder is bounded, the directory is not truncated');
+});
+
+/** recall_knowledge's memory search, on a knowledge store of the test's own inside `root`. */
+function recallMemories(
+  root: string,
+  query: string,
+  globalDir?: string,
+  options?: Parameters<KnowledgeStore['searchMemories']>[2],
+) {
+  const store = new KnowledgeStore(path.join(root, 'recall.sqlite'));
+  try {
+    return store.searchMemories(memorySources(root, globalDir), query, options);
+  } finally {
+    store.close();
+  }
+}
 
 test('recall matches memory text case-insensitively across both scopes', async (t) => {
   const { root, globalDir, workspace, global } = await fixture(t);
   await saveMemoryEntry(global, 'language', 'Respond in Chinese');
   await saveMemoryEntry(workspace, 'release', 'Use staged rollout 481');
   assert.deepEqual(
-    searchMemories(root, 'STAGED', globalDir).map((entry) => [entry.scope, entry.key]),
+    recallMemories(root, 'STAGED', globalDir).map((entry) => [entry.scope, entry.key]),
     [['workspace', 'release']],
   );
   assert.deepEqual(
-    searchMemories(root, 'chinese', globalDir).map((entry) => entry.scope),
+    recallMemories(root, 'chinese', globalDir).map((entry) => entry.scope),
     ['global'],
   );
-  assert.deepEqual(searchMemories(root, '   ', globalDir), []);
+  assert.throws(() => recallMemories(root, '   ', globalDir), /Invalid knowledge query/);
+});
+
+test('recall ranks memories by relevance, finds Chinese words inside a sentence and drops weak matches', async (t) => {
+  const { root, globalDir, workspace } = await fixture(t);
+  await saveMemoryEntry(
+    workspace,
+    'deploy-notes',
+    '上线前先在预发环境跑一遍数据库迁移脚本，再灰度发布。',
+    {
+      type: 'project',
+      description: '上线流程',
+    },
+  );
+  await saveMemoryEntry(workspace, 'migration', '数据库迁移必须可回滚。', {
+    type: 'feedback',
+    description: '数据库迁移的要求',
+  });
+  await saveMemoryEntry(workspace, 'unrelated', 'The office coffee machine is on floor 3.', {
+    type: 'reference',
+    description: 'Coffee',
+  });
+  const hits = recallMemories(root, '数据库迁移', globalDir);
+  assert.equal(hits[0]?.key, 'migration', 'a description naming the whole query comes first');
+  assert.deepEqual(hits.map((hit) => hit.key).sort(), ['deploy-notes', 'migration']);
+  assert.deepEqual(
+    recallMemories(root, '迁移', globalDir, { types: ['project'] }).map((hit) => hit.key),
+    ['deploy-notes'],
+  );
+  assert.equal(recallMemories(root, '数据库迁移', globalDir, { limit: 1 }).length, 1);
+  // Many memories match a common word; only those close to the best survive the relevance floor.
+  for (let index = 0; index < 12; index++)
+    await saveMemoryEntry(workspace, `filler-${index}`, `release ${'filler '.repeat(200)}`, {
+      description: `Filler ${index}`,
+    });
+  await saveMemoryEntry(
+    workspace,
+    'release-train',
+    'Release every Tuesday from the release branch.',
+    {
+      type: 'project',
+      description: 'Release train schedule',
+    },
+  );
+  const release = recallMemories(root, 'release train', globalDir, { limit: 20 });
+  assert.equal(release[0]?.key, 'release-train');
+  assert.ok(
+    !release.some((hit) => hit.key.startsWith('filler-')),
+    JSON.stringify(release.map((hit) => hit.key)),
+  );
+});
+
+test('recall returns an excerpt of a long memory and follows edits made by hand', async (t) => {
+  const { root, globalDir, workspace } = await fixture(t);
+  const long = `${'Background paragraph. '.repeat(40)}The deploy key rotates on the first Monday. ${'Trailing note. '.repeat(40)}`;
+  await saveMemoryEntry(workspace, 'rotation', long, {
+    type: 'project',
+    description: 'Key rotation',
+  });
+  const [hit] = recallMemories(root, 'first Monday', globalDir);
+  assert.ok(hit);
+  assert.ok(hit.excerpt.length <= 301, String(hit.excerpt.length));
+  assert.match(hit.excerpt, /first Monday/);
+  assert.equal('text' in hit, false, 'the full text is read_memory');
+  // The file is the source of truth: an edit outside the tools is searchable on the next recall.
+  const file = memoryFile(workspace, 'rotation');
+  await writeFile(file, (await readFile(file, 'utf8')).replace('first Monday', 'last Friday'));
+  assert.deepEqual(recallMemories(root, 'first Monday', globalDir), []);
+  assert.equal(recallMemories(root, 'last Friday', globalDir)[0]?.key, 'rotation');
+  await rm(file);
+  assert.deepEqual(recallMemories(root, 'last Friday', globalDir), []);
+});
+
+test('recall_knowledge filters memories, caps them and names the file each one lives in', async (t) => {
+  const { root, globalDir, workspace, global } = await memoryFixture(
+    t,
+    'yuantu-memory-recall-tool-',
+  );
+  await saveMemoryEntry(global, 'language', 'Answer in Chinese, marker 951', { type: 'user' });
+  await saveMemoryEntry(workspace, 'release', 'Release marker 951', { type: 'project' });
+  const registry = memoryToolRegistry(root);
+  const context = { signal: new AbortController().signal, approve: async () => false };
+  const recall = async (args: Record<string, unknown>) => {
+    const outcome = await registry.execute(
+      { id: 'recall', name: 'recall_knowledge', arguments: args },
+      context,
+    );
+    assert.equal(outcome.isError, false, outcome.content);
+    return JSON.parse(outcome.content).results as {
+      scope: string;
+      title: string;
+      source: string;
+    }[];
+  };
+  const both = await recall({ query: 'marker 951' });
+  assert.deepEqual(both.map((hit) => hit.scope).sort(), ['global', 'workspace']);
+  const user = both.find((hit) => hit.scope === 'global')!;
+  // The configured directory, not a hard-coded ~/.yuantu.
+  assert.ok(user.source.endsWith(`${path.basename(globalDir)}/memory/language.md`), user.source);
+  assert.equal(both.find((hit) => hit.scope === 'workspace')!.source, '.yuantu/memory/release.md');
+  assert.deepEqual(
+    (await recall({ query: 'marker 951', memory_scope: 'workspace' })).map((hit) => hit.title),
+    ['release'],
+  );
+  assert.deepEqual(
+    (await recall({ query: 'marker 951', memory_types: ['user'] })).map((hit) => hit.title),
+    ['language'],
+  );
+  assert.equal((await recall({ query: 'marker 951', limit: 1 })).length, 1);
+  assert.ok(memoryUsage(workspace).release?.lastUsed, 'a top recall counts as a use');
+  await registry.close();
+});
+
+/** Sets one setting for the rest of the test and puts the previous value back afterwards. */
+function withSetting(t: test.TestContext, name: string, value: string): void {
+  const previous = process.env[name];
+  process.env[name] = value;
+  t.after(() => {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  });
+}
+/** The caller closes it: the fixture's directory is removed by an earlier `t.after`, and an open index blocks that. */
+function memoryToolRegistry(root: string): ToolRegistry {
+  const source = knowledgeTools(root);
+  const registry = new ToolRegistry();
+  source.tools.forEach((tool) => registry.register(tool));
+  registry.onClose(source.close);
+  return registry;
+}
+const readContext = () => ({ signal: new AbortController().signal, approve: async () => true });
+
+test('a memory that carries a credential is refused, prose about credentials is not', async (t) => {
+  const { workspace } = await fixture(t);
+  // Built from parts so the fixture is not itself a credential a scanner would flag.
+  const samples: [string, RegExp][] = [
+    [`Key is sk-ant-${'a1'.repeat(16)}`, /Anthropic API key/],
+    [`Use ghp_${'A1'.repeat(18)} for the bot`, /GitHub token/],
+    [`AWS: AKIA${'ABCD1234'.repeat(2)}`, /AWS access key/],
+    [`-----BEGIN ${'OPENSSH'} PRIVATE KEY-----\nabc`, /private key/],
+    ['Connect to postgres://app:hunter22@db.internal/app', /URL with a password/],
+    [`password = "${'q8'.repeat(9)}"`, /credential assignment/],
+  ];
+  for (const [text, kind] of samples)
+    await assert.rejects(saveMemoryEntry(workspace, 'leak', text), kind);
+  // The value is never echoed back in the refusal.
+  await assert.rejects(saveMemoryEntry(workspace, 'leak', samples[0]![0]), (error: Error) => {
+    assert.doesNotMatch(error.message, /sk-ant-/);
+    return true;
+  });
+  // A description is checked too: it is the line every later session sees.
+  await assert.rejects(
+    saveMemoryEntry(workspace, 'leak', 'Release bot', { description: samples[1]![0] }),
+    /GitHub token/,
+  );
+  // A value the deployment was configured with is matched exactly, whatever its shape.
+  withSetting(t, 'YUANTU_SEARCH_API_KEY', 'plain-looking-value');
+  await assert.rejects(
+    saveMemoryEntry(workspace, 'leak', 'Search uses plain-looking-value'),
+    /value of YUANTU_SEARCH_API_KEY/,
+  );
+  for (const prose of [
+    'The API token lives in 1Password under "release bot"; ask before rotating it.',
+    'password: see the team vault',
+    'Set YUANTU_API_KEY in .env, never in code.',
+  ])
+    await saveMemoryEntry(workspace, `prose-${prose.length}`, prose);
+  assert.equal(readMemoryDirectory(workspace).entries.length, 3);
+});
+
+test('YUANTU_MEMORY=read keeps reading and changes nothing on disk', async (t) => {
+  const { root, globalDir, workspace } = await memoryFixture(t, 'yuantu-memory-mode-read-');
+  await saveMemoryEntry(workspace, 'release', 'Use marker 735', { type: 'feedback' });
+  withSetting(t, 'YUANTU_MEMORY', 'read');
+  const registry = memoryToolRegistry(root);
+  const names = registry.specs().map((spec) => spec.name);
+  assert.ok(names.includes('read_memory') && names.includes('list_memories'));
+  assert.ok(!names.includes('save_memory') && !names.includes('forget_memory'));
+  await assert.rejects(saveMemoryEntry(workspace, 'other', 'Text'), /read-only in this deployment/);
+  const summary = memorySummary(root, globalDir);
+  assert.match(summary, /release/);
+  assert.match(summary, /read-only in this deployment/);
+  assert.doesNotMatch(summary, /save_memory/);
+  assert.match(agentSystemPrompt('read'), /read-only in this deployment/);
+  assert.doesNotMatch(agentSystemPrompt('read'), /save_memory/);
+  // Reading records nothing either: the record the earlier save started is left as it was.
+  const before = await readFile(memoryUsageFile(workspace), 'utf8');
+  await registry.execute(
+    { id: 'read', name: 'read_memory', arguments: { scope: 'workspace', key: 'release' } },
+    readContext(),
+  );
+  assert.equal(await readFile(memoryUsageFile(workspace), 'utf8'), before);
+  assert.equal(memoryUsage(workspace).release?.lastUsed, undefined);
+  await registry.close();
+});
+
+test('YUANTU_MEMORY=off is a run with no memory at all', async (t) => {
+  const { root, globalDir, workspace } = await memoryFixture(t, 'yuantu-memory-mode-off-');
+  await saveMemoryEntry(workspace, 'release', 'Use marker 736', { type: 'feedback' });
+  withSetting(t, 'YUANTU_MEMORY', 'off');
+  const registry = memoryToolRegistry(root);
+  const names = registry.specs().map((spec) => spec.name);
+  for (const name of ['read_memory', 'save_memory', 'forget_memory'])
+    assert.ok(!names.includes(name), name);
+  // Kept for the indexed documents, which they also cover.
+  assert.ok(names.includes('recall_knowledge') && names.includes('list_memories'));
+  assert.equal(memorySummary(root, globalDir), '');
+  assert.deepEqual(memorySources(root, globalDir), []);
+  assert.doesNotMatch(agentSystemPrompt('off'), /# Memory|save_memory/);
+  assert.equal(agentSystemPrompt('on'), AGENT_SYSTEM_PROMPT);
+  await registry.close();
+});
+
+test('reading or recalling a memory records the day it was used, without touching the entry', async (t) => {
+  const { root, workspace, global } = await memoryFixture(t, 'yuantu-memory-usage-');
+  const saved = await saveMemoryEntry(workspace, 'release', 'Use marker 737');
+  await saveMemoryEntry(global, 'language', 'Respond in Chinese, marker 737');
+  await saveMemoryEntry(workspace, 'unused', 'Never asked for');
+  const registry = memoryToolRegistry(root);
+  const listUsed = async () => {
+    const listed = await registry.execute(
+      { id: 'list', name: 'list_memories', arguments: {} },
+      readContext(),
+    );
+    const memories = JSON.parse(listed.content).memories as Record<
+      'workspace' | 'global',
+      { key: string; lastUsed?: string; revision: string }[]
+    >;
+    return memories;
+  };
+  // Listing and the reminder are not use.
+  assert.ok((await listUsed()).workspace.every((entry) => entry.lastUsed === undefined));
+  await registry.execute(
+    { id: 'recall', name: 'recall_knowledge', arguments: { query: 'marker 737' } },
+    readContext(),
+  );
+  const today = new Date().toISOString().slice(0, 10);
+  const used = await listUsed();
+  assert.equal(used.workspace.find((entry) => entry.key === 'release')?.lastUsed, today);
+  assert.equal(used.workspace.find((entry) => entry.key === 'unused')?.lastUsed, undefined);
+  assert.equal(used.global[0]?.lastUsed, today);
+  // The entry file is untouched, so the revision someone is saving against still holds.
+  assert.equal(used.workspace.find((entry) => entry.key === 'release')?.revision, saved.revision);
+  // Kept beside the directory, under the part of `.yuantu` that git excludes.
+  assert.equal(memoryUsageFile(workspace), path.join(root, '.yuantu', 'memory-usage.json'));
+  await recordMemoryUse(workspace, ['unused'], new Date('2026-01-02T00:00:00Z'));
+  assert.equal(memoryUsage(workspace).unused?.lastUsed, '2026-01-02');
+  await registry.execute(
+    { id: 'read', name: 'read_memory', arguments: { scope: 'workspace', key: 'unused' } },
+    readContext(),
+  );
+  // A second day counts; a second use on the same day does not, so a key is rewritten at most once a day.
+  assert.deepEqual(memoryUsage(workspace).unused, {
+    firstSeen: today,
+    lastUsed: today,
+    usedDays: 2,
+  });
+  await registry.execute(
+    { id: 'again', name: 'read_memory', arguments: { scope: 'workspace', key: 'unused' } },
+    readContext(),
+  );
+  assert.equal(memoryUsage(workspace).unused?.usedDays, 2);
+  // Every entry has a record from its first day, used or not: the start of a clean-up's grace period.
+  assert.deepEqual(memoryUsage(global).language, {
+    firstSeen: today,
+    lastUsed: today,
+    usedDays: 1,
+  });
+  // A forgotten memory leaves the record, and so does one deleted by hand.
+  await forgetMemoryEntry(
+    workspace,
+    'unused',
+    listMemoryEntries(root).workspace.find((e) => e.key === 'unused')!.revision,
+  );
+  assert.equal(memoryUsage(workspace).unused, undefined);
+  await rm(memoryFile(workspace, 'release'));
+  await recordMemoryUse(global, ['language']);
+  await recordMemoryUse(workspace, []);
+  writeFileSync(memoryUsageFile(workspace), '{ not json');
+  assert.deepEqual(memoryUsage(workspace), {});
+  await registry.close();
 });
 
 /**
@@ -898,4 +1569,382 @@ test('a document is cut into as many chunks as it needs and no trailing duplicat
     await writeFile(path.join(root, name), 'x'.repeat(length));
     assert.equal(store.pinDocument(root, name).chunks, expected, `${length} characters`);
   }
+});
+
+/** Noon UTC on the given day, so the date a memory records is that day in every time zone a test runs in. */
+const day = (date: string) => new Date(`${date}T12:00:00Z`);
+const reminderKeys = (summary: string) =>
+  summary
+    .split('\n')
+    .filter((line) => line.startsWith('- '))
+    .map((line) => line.split(' ')[2]!.replace(/:$/, ''));
+
+test('a memory scores by type, freshness and use, and a pinned one outranks everything', () => {
+  const entry = (type: 'feedback' | 'project' | 'reference', pinned = false) => ({
+    key: 'k',
+    type,
+    description: 'd',
+    text: 't',
+    updatedAt: '2026-01-01',
+    revision: '000000000000',
+    ...(pinned ? { pinned: true as const } : {}),
+  });
+  const seen = { firstSeen: '2026-01-01', usedDays: 0 };
+  const near = (actual: number, expected: number, message: string) =>
+    assert.ok(Math.abs(actual - expected) < 1e-9, `${message}: ${actual}`);
+  near(memoryScore(entry('feedback'), seen, '2026-10-30'), 3 + 2, 'feedback does not decay');
+  near(memoryScore(entry('project'), seen, '2026-01-01'), 1 + 2, 'a fresh project');
+  near(memoryScore(entry('project'), seen, '2026-03-02'), 1 + 1, 'a project halves in 60 days');
+  near(memoryScore(entry('reference'), seen, '2026-01-31'), 0 + 1, 'a reference halves in 30 days');
+  near(
+    memoryScore(entry('project'), undefined, '2026-10-30'),
+    1 + 2,
+    'unrecorded counts as seen today',
+  );
+  near(
+    memoryScore(entry('project'), { ...seen, lastUsed: '2026-10-30', usedDays: 7 }, '2026-10-30'),
+    1 + 2 + 1,
+    'a use renews freshness and adds heat',
+  );
+  near(
+    memoryScore(entry('project'), { ...seen, lastUsed: '2026-10-30', usedDays: 1e6 }, '2026-10-30'),
+    1 + 2 + memoryScoring.heatCap,
+    'heat is capped',
+  );
+  assert.ok(memoryScore(entry('reference', true), seen, '2030-01-01') >= memoryScoring.pinned);
+});
+
+test('pinned memories round-trip, survive a replace and lead the reminder', async (t) => {
+  const { root, globalDir, workspace } = await fixture(t);
+  const saved = await saveMemoryEntry(workspace, 'always', 'Never push to main.', {
+    type: 'reference',
+    description: 'Never push to main',
+    pinned: true,
+    now: day('2025-01-01'),
+  });
+  await saveMemoryEntry(workspace, 'fresh', 'Fresh feedback', {
+    type: 'feedback',
+    description: 'Fresh',
+  });
+  const file = await readFile(memoryFile(workspace, 'always'), 'utf8');
+  assert.match(file, /^pinned: true$/m);
+  assert.equal(parseMemoryEntry('always', Buffer.from(file)).entry.pinned, true);
+  const replaced = await saveMemoryEntry(workspace, 'always', 'Never push to main or release.', {
+    type: 'reference',
+    revision: saved.revision,
+  });
+  assert.equal(replaced.pinned, true, 'a replace that does not mention pinned keeps it');
+  assert.equal(reminderKeys(memorySummary(root, globalDir))[0], 'always');
+  const unpinned = await saveMemoryEntry(workspace, 'always', 'Never push.', {
+    type: 'reference',
+    revision: replaced.revision,
+    pinned: false,
+  });
+  assert.equal(unpinned.pinned, undefined);
+  assert.doesNotMatch(await readFile(memoryFile(workspace, 'always'), 'utf8'), /pinned/);
+  await assert.rejects(saveMemoryEntry(workspace, 'other', 'x', { pinned: 'yes' }), /pinned/);
+});
+
+test('a long-unused reference is left out of the reminder but stays listed and searchable', async (t) => {
+  const { root, globalDir, workspace } = await fixture(t);
+  await saveMemoryEntry(workspace, 'old-link', 'https://example.test/old', {
+    type: 'reference',
+    description: 'Old runbook link',
+    now: day('2026-01-01'),
+  });
+  await saveMemoryEntry(workspace, 'new-link', 'https://example.test/new', {
+    type: 'reference',
+    description: 'New runbook link',
+    now: day('2026-06-01'),
+  });
+  const summary = memorySummary(root, globalDir, day('2026-06-01'));
+  assert.deepEqual(reminderKeys(summary), ['new-link']);
+  assert.match(summary, /\(1 further memories not listed; list_memories shows them all\)/);
+  assert.equal(listMemoryEntries(root, globalDir).workspace.length, 2);
+  assert.deepEqual(
+    recallMemories(root, 'runbook link', globalDir)
+      .map((hit) => hit.key)
+      .sort(),
+    ['new-link', 'old-link'],
+  );
+});
+
+test('the reminder keeps its order through a day of reads and re-ranks when the day turns', async (t) => {
+  const { root, globalDir, workspace } = await fixture(t);
+  const first = day('2026-06-01');
+  for (const key of ['alpha', 'beta'])
+    await saveMemoryEntry(workspace, key, `${key} decision`, {
+      type: 'project',
+      description: key,
+      now: first,
+    });
+  const before = memorySummary(root, globalDir, first);
+  assert.deepEqual(reminderKeys(before), ['alpha', 'beta']);
+  await recordMemoryUse(workspace, ['beta'], first);
+  assert.equal(
+    memorySummary(root, globalDir, first),
+    before,
+    'a read does not re-announce the index',
+  );
+  assert.deepEqual(reminderKeys(memorySummary(root, globalDir, day('2026-06-02'))), [
+    'beta',
+    'alpha',
+  ]);
+});
+
+test('near the limit the reminder names the lowest-ranked memories, and a full directory says which to drop', async (t) => {
+  const { root, globalDir, workspace } = await fixture(t);
+  const now = day('2026-06-01');
+  await saveMemoryEntry(workspace, 'stale-ref', 'old', {
+    type: 'reference',
+    description: 'Stale',
+    now: day('2026-01-01'),
+  });
+  for (let index = 1; index < memoryScoring.nearLimit; index++)
+    await saveMemoryEntry(workspace, `entry-${index}`, `entry ${index}`, { now });
+  assert.match(
+    memorySummary(root, globalDir, now),
+    new RegExp(
+      `Workspace memory holds ${memoryScoring.nearLimit} of ${memoryLimits.entries} entries\\. Lowest-ranked: stale-ref, `,
+    ),
+  );
+  for (let index = memoryScoring.nearLimit; index < memoryLimits.entries; index++)
+    await saveMemoryEntry(workspace, `entry-${index}`, `entry ${index}`, { now });
+  await assert.rejects(
+    saveMemoryEntry(workspace, 'one-more', 'x', { now }),
+    /Memory limit reached \(64\).*Lowest-ranked: stale-ref/,
+  );
+});
+
+test('the daily clean-up archives project and reference memories unused for 90 days, and restore brings one back', async (t) => {
+  const { root, globalDir, workspace } = await fixture(t);
+  const start = day('2026-01-01');
+  await saveMemoryEntry(workspace, 'old-project', 'old project', { type: 'project', now: start });
+  await saveMemoryEntry(workspace, 'old-link', 'old link', { type: 'reference', now: start });
+  await saveMemoryEntry(workspace, 'old-feedback', 'old feedback', {
+    type: 'feedback',
+    now: start,
+  });
+  await saveMemoryEntry(workspace, 'pinned-project', 'pinned', {
+    type: 'project',
+    pinned: true,
+    now: start,
+  });
+  await saveMemoryEntry(workspace, 'recent', 'recent', { type: 'project', now: day('2026-03-01') });
+  const before = readMemoryEntry(workspace, 'old-project');
+  const later = day('2026-04-10');
+  await maintainMemories(root, globalDir, later);
+  assert.deepEqual(
+    listMemoryEntries(root, globalDir).workspace.map((entry) => entry.key),
+    ['old-feedback', 'pinned-project', 'recent'],
+    'feedback, pinned and recently written memories stay',
+  );
+  assert.deepEqual(
+    readArchivedEntries(workspace).map((entry) => entry.key),
+    ['old-link', 'old-project'],
+  );
+  assert.ok(existsSync(path.join(memoryArchiveDir(workspace), 'old-project.md')));
+  assert.equal(
+    readMemoryEntry(workspace, 'old-project', { archived: true }).revision,
+    before.revision,
+    'moved byte for byte',
+  );
+  const summary = memorySummary(root, globalDir, later);
+  assert.match(
+    summary,
+    /Workspace memories archived today \(unused for 90\+ days\): old-link, old-project\. restore_memory brings one back\./,
+  );
+  assert.doesNotMatch(summary, / old-project:/);
+  assert.doesNotMatch(
+    memorySummary(root, globalDir, day('2026-04-11')),
+    /archived today/,
+    'the notice lasts the day',
+  );
+  const restored = await restoreMemoryEntry(workspace, 'old-project', later);
+  assert.equal(restored.revision, before.revision);
+  assert.equal(memoryUsage(workspace)['old-project']?.lastUsed, '2026-04-10');
+  await maintainMemories(root, globalDir, day('2026-04-11'));
+  assert.ok(
+    listMemoryEntries(root, globalDir).workspace.some((entry) => entry.key === 'old-project'),
+    'a restored memory is not archived again the next day',
+  );
+  await assert.rejects(restoreMemoryEntry(workspace, 'old-project'), /No archived memory/);
+});
+
+test('a memory older than the usage record gets a grace period, and nothing is archived where memories are read-only', async (t) => {
+  const { root, globalDir, workspace } = await fixture(t);
+  await mkdir(workspace.dir, { recursive: true });
+  await writeFile(
+    memoryFile(workspace, 'legacy'),
+    renderMemoryEntry({
+      key: 'legacy',
+      type: 'project',
+      description: 'Legacy',
+      text: 'Legacy decision',
+      updatedAt: '2025-01-01',
+    }),
+  );
+  await maintainMemories(root, globalDir, day('2026-06-01'));
+  assert.equal(memoryUsage(workspace).legacy?.firstSeen, '2026-06-01');
+  assert.deepEqual(readArchivedEntries(workspace), [], 'its grace period starts today');
+  // An archived copy and a live memory with the same key: restoring would overwrite, so it is refused.
+  await mkdir(memoryArchiveDir(workspace), { recursive: true });
+  await writeFile(path.join(memoryArchiveDir(workspace), 'legacy.md'), 'Archived copy');
+  await assert.rejects(restoreMemoryEntry(workspace, 'legacy'), /already exists/);
+  await rm(path.join(memoryArchiveDir(workspace), 'legacy.md'));
+  withSetting(t, 'YUANTU_MEMORY', 'read');
+  await recordMemoriesSeen(workspace, day('2026-12-01'));
+  await maintainMemories(root, globalDir, day('2026-12-01'));
+  assert.deepEqual(readArchivedEntries(workspace), [], 'a read-only deployment moves nothing');
+});
+
+test('memory tools list, read, recall, forget and restore archived memories, flag likely duplicates and set pinned', async (t) => {
+  const { root, workspace } = await memoryFixture(t, 'yuantu-memory-archive-tools-');
+  await saveMemoryEntry(workspace, 'old-plan', 'Ship the beta in March, marker 962', {
+    type: 'project',
+    description: 'Beta plan',
+    now: day('2026-01-01'),
+  });
+  await saveMemoryEntry(workspace, 'old-notes', 'Old notes, marker 963', {
+    type: 'project',
+    description: 'Old notes',
+    now: day('2026-01-01'),
+  });
+  await maintainMemories(root, undefined, day('2026-06-01'));
+  const registry = memoryToolRegistry(root);
+  const run = async (name: string, args: Record<string, unknown>) => {
+    const outcome = await registry.execute({ id: name, name, arguments: args }, readContext());
+    assert.equal(outcome.isError, false, outcome.content);
+    return JSON.parse(outcome.content);
+  };
+  const listed = await run('list_memories', { include_archived: true });
+  assert.deepEqual(listed.memories.workspace, []);
+  assert.deepEqual(
+    listed.archived.workspace.map((entry: { key: string }) => entry.key),
+    ['old-notes', 'old-plan'],
+  );
+  assert.equal((await run('list_memories', {})).archived, undefined);
+  assert.deepEqual(
+    (await run('recall_knowledge', { query: 'marker 962' })).results,
+    [],
+    'archived memories are not recalled unless asked for',
+  );
+  const [archivedHit] = (
+    await run('recall_knowledge', { query: 'marker 962', include_archived: true })
+  ).results;
+  assert.equal(archivedHit.archived, true);
+  assert.equal(archivedHit.source, '.yuantu/memory/_archive/old-plan.md');
+  const read = await run('read_memory', { scope: 'workspace', key: 'old-plan', archived: true });
+  assert.equal(read.archived, true);
+  assert.match(read.text, /marker 962/);
+  await run('restore_memory', { scope: 'workspace', key: 'old-plan' });
+  assert.deepEqual(
+    (await run('list_memories', {})).memories.workspace.map((entry: { key: string }) => entry.key),
+    ['old-plan'],
+  );
+  const notes = readArchivedEntries(workspace).find((entry) => entry.key === 'old-notes')!;
+  await run('forget_memory', {
+    scope: 'workspace',
+    key: 'old-notes',
+    revision: notes.revision,
+    archived: true,
+  });
+  assert.deepEqual(readArchivedEntries(workspace), []);
+  const similar = await run('save_memory', {
+    scope: 'workspace',
+    key: 'beta-plan-v2',
+    type: 'project',
+    description: 'Beta plan v2',
+    content: 'Ship the beta in April.',
+  });
+  assert.deepEqual(
+    similar.similar.map((entry: { key: string }) => entry.key),
+    ['old-plan'],
+  );
+  const pinned = await run('save_memory', {
+    scope: 'workspace',
+    key: 'no-force-push',
+    type: 'feedback',
+    description: 'Never force-push shared branches',
+    content: 'Never force-push shared branches.',
+    pinned: true,
+  });
+  assert.equal(pinned.pinned, true);
+  assert.equal(pinned.similar, undefined);
+  assert.equal(
+    (await run('list_memories', {})).memories.workspace.find(
+      (entry: { key: string }) => entry.key === 'no-force-push',
+    ).pinned,
+    true,
+  );
+  await registry.close();
+  withSetting(t, 'YUANTU_MEMORY', 'read');
+  const readOnly = memoryToolRegistry(root);
+  assert.ok(!readOnly.specs().some((spec) => spec.name === 'restore_memory'));
+  await readOnly.close();
+});
+
+test('between two equally relevant memories, recall puts the higher-scoring one first, but never above a clearly better match', async (t) => {
+  const { root, globalDir, workspace } = await fixture(t);
+  for (const key of ['alpha', 'beta'])
+    await saveMemoryEntry(workspace, key, 'Run the deploy checklist before tagging.', {
+      type: 'project',
+      description: `Deploy checklist ${key}`,
+    });
+  const order = () => recallMemories(root, 'deploy checklist', globalDir).map((hit) => hit.key);
+  assert.deepEqual(order(), ['alpha', 'beta'], 'a tie falls back to the key');
+  await recordMemoryUse(workspace, ['beta']);
+  assert.deepEqual(order(), ['beta', 'alpha'], 'a use lifts the memory that was needed');
+  // A pinned memory scores far higher, but the boost is capped, so a much better match still wins.
+  await saveMemoryEntry(workspace, 'pinned-note', `deploy ${'unrelated words '.repeat(60)}`, {
+    type: 'reference',
+    description: 'Misc',
+    pinned: true,
+  });
+  await saveMemoryEntry(workspace, 'exact', 'deploy checklist deploy checklist', {
+    type: 'reference',
+    // Neither description names the query, so the order below is bm25 and the boost, not the description rule.
+    description: 'The full list',
+  });
+  const deploy = recallMemories(root, 'deploy', globalDir, { limit: 20 }).map((hit) => hit.key);
+  assert.ok(deploy.indexOf('exact') < deploy.indexOf('pinned-note'), JSON.stringify(deploy));
+});
+
+test('saving a memory that was archived before reports the archived one as similar', async (t) => {
+  const { root, workspace } = await memoryFixture(t, 'yuantu-memory-similar-archived-');
+  await saveMemoryEntry(workspace, 'release-notes', 'Notes live in docs/releases.', {
+    type: 'reference',
+    description: 'Where the release notes live',
+    now: day('2026-01-01'),
+  });
+  await maintainMemories(root, undefined, day('2026-06-01'));
+  assert.deepEqual(
+    readArchivedEntries(workspace).map((entry) => entry.key),
+    ['release-notes'],
+  );
+  const registry = memoryToolRegistry(root);
+  const saved = await registry.execute(
+    {
+      id: 'save',
+      name: 'save_memory',
+      arguments: {
+        scope: 'workspace',
+        key: 'release-notes',
+        type: 'reference',
+        description: 'Where the release notes live now',
+        content: 'Notes live in docs/release-notes.',
+      },
+    },
+    readContext(),
+  );
+  assert.equal(saved.isError, false, saved.content);
+  assert.deepEqual(JSON.parse(saved.content).similar, [
+    {
+      key: 'release-notes',
+      description: 'Where the release notes live',
+      revision: readArchivedEntries(workspace)[0]!.revision,
+      archived: true,
+    },
+  ]);
+  await registry.close();
 });

@@ -1,6 +1,7 @@
 import { DEFAULT_MAX_OUTPUT_TOKENS } from './limits.ts';
 import { assertPrunePolicyFits } from './prune-policy.ts';
 import { BUILTIN_PROTOCOLS } from './index.ts';
+import { editDistance } from './similar-names.ts';
 import {
   PROMPT_CACHE_ALIASES,
   PROMPT_CACHE_MODES,
@@ -293,6 +294,11 @@ export const ENVIRONMENT = {
   },
   YUANTU_CONNECTION_ID: { kind: 'string', description: '设置文件中的连接名（仅标注）' },
   YUANTU_SUPPORTS_VISION: { kind: 'boolean', description: '该模型是否接受图片' },
+  YUANTU_STRICT_TOOLS: {
+    kind: 'boolean',
+    description:
+      'Anthropic 协议下给可表达的工具发送 strict: true，由端点保证参数符合 schema；模型或网关不支持时会整次请求失败，默认关闭',
+  },
   YUANTU_DEEPSEEK_COMPAT: {
     kind: 'enum',
     values: ['auto', 'on', 'off'],
@@ -515,6 +521,27 @@ export const ENVIRONMENT = {
     description: '凭据文件路径（默认 ~/.yuantu/credentials.json；环境变量中的密钥优先于它）',
   },
   YUANTU_MEMORY_DIR: { kind: 'string', description: '用户级记忆目录' },
+  /**
+   * Whether runs use saved memories. `read` keeps the reminder and the reading tools but changes nothing on disk;
+   * `off` is a run with no memory at all, for an evaluation that must not depend on what this machine remembers.
+   */
+  YUANTU_MEMORY: {
+    kind: 'enum',
+    values: ['on', 'read', 'off'],
+    description:
+      '记忆开关：on 读写（默认）；read 只注入和读取，不保存、不删除、不记使用时间；off 不注入、不提供记忆工具',
+  },
+  /**
+   * The project whose workspace memories this process reads and writes, when it works somewhere else.
+   *
+   * The subprocess sub-agent provider sets it: its child runs in a scratch workspace that has no `.yuantu`, and
+   * without this it would see none of the project's memories.
+   */
+  YUANTU_MEMORY_ROOT: {
+    kind: 'string',
+    description:
+      '工作区记忆所属的项目目录（缺省为当前工作区；子进程子代理用它读取委派方项目的记忆）',
+  },
   YUANTU_KNOWLEDGE_DB: { kind: 'string', description: '知识库数据库路径' },
   YUANTU_REPO_MAP: { kind: 'enum', values: ['on', 'off'], description: '是否注入结构大纲' },
   /**
@@ -717,25 +744,9 @@ export interface EnvironmentProblem {
   /** The closest known name, when one is close enough to be worth suggesting. */
   suggestion?: string;
 }
-/** Levenshtein distance, bounded to the lengths this is used for (env names are short). */
-function distance(a: string, b: string): number {
-  const rows = Array.from({ length: a.length + 1 }, (_, index) => [
-    index,
-    ...Array(b.length).fill(0),
-  ]);
-  for (let column = 1; column <= b.length; column++) rows[0]![column] = column;
-  for (let row = 1; row <= a.length; row++)
-    for (let column = 1; column <= b.length; column++)
-      rows[row]![column] = Math.min(
-        rows[row - 1]![column]! + 1,
-        rows[row]![column - 1]! + 1,
-        rows[row - 1]![column - 1]! + (a[row - 1] === b[column - 1] ? 0 : 1),
-      );
-  return rows[a.length]![b.length]!;
-}
 function closest(key: string): string | undefined {
   const ranked = Object.keys(ENVIRONMENT)
-    .map((name) => ({ name, distance: distance(key, name) }))
+    .map((name) => ({ name, distance: editDistance(key, name) }))
     .sort((left, right) => left.distance - right.distance);
   const best = ranked[0];
   return best && best.distance <= Math.max(2, Math.floor(key.length / 4)) ? best.name : undefined;

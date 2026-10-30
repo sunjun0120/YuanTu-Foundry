@@ -100,6 +100,11 @@ export interface SubAgentOutcome {
 export interface SubAgentParent {
   sessionId: string;
   workspace: string;
+  /**
+   * The project the parent session belongs to, when it differs from where it works (a worktree). Its memories are
+   * the project's, so a provider that runs the child elsewhere points the child's memory here.
+   */
+  project?: string;
   /** 0 for a child of the top-level run. */
   depth: number;
 }

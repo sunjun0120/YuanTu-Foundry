@@ -283,12 +283,14 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 
 ### 记忆与知识
 
-| 工具                                         | 行为                                    | 审批 |
-| -------------------------------------------- | --------------------------------------- | ---- |
-| `recall_knowledge`                           | 搜索 markdown 记忆与已索引的项目文档    | —    |
-| `list_memories`                              | 列出工作区与用户级记忆，以及已索引文档  | —    |
-| `save_memory` / `forget_memory`              | 按 key 创建或替换 / 删除一条记忆        | 写入 |
-| `index_document` / `remove_indexed_document` | 加入检索索引 / 从索引移除（不删源文件） | 写入 |
+| 工具                                         | 行为                                               | 审批 |
+| -------------------------------------------- | -------------------------------------------------- | ---- |
+| `recall_knowledge`                           | 搜索 markdown 记忆与已索引的项目文档               | —    |
+| `list_memories`                              | 列出工作区与用户级记忆（不含正文），以及已索引文档 | —    |
+| `read_memory`                                | 读取一条记忆的全文与 revision                      | —    |
+| `restore_memory`                             | 把一条已归档的记忆原样移回                         | 写入 |
+| `save_memory` / `forget_memory`              | 按 key 创建或凭 revision 替换 / 删除一条记忆       | 写入 |
+| `index_document` / `remove_indexed_document` | 加入检索索引 / 从索引移除（不删源文件）            | 写入 |
 
 ### 会话与协作
 
@@ -334,8 +336,8 @@ validate → pre-execute → guards → prepare → approval → execute → pos
 
 | 阶段           | 谁能影响它                              | 能决定什么                                                                                                                            |
 | -------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `validate`     | —                                       | 参数不合法就结束，后面的阶段一步都不跑                                                                                                |
-| `pre-execute`  | `beforeTool`                            | 只读观察 + allow/deny；拒绝即到此为止                                                                                                 |
+| `validate`     | —                                       | 参数不合法就结束，后面的阶段一步都不跑；未知工具名附近似名建议，参数错误附相关参数的 schema                                           |
+| `pre-execute`  | `beforeTool`                            | 只读观察 + allow/deny；返回 `{deny: 原因}` 时原因会传给模型；拒绝即到此为止                                                           |
 | `guards`       | `guard`（宿主级、注册表级或钩子集内联） | **只能拒绝**，无法授权——审批层拒绝的操作，钩子和守卫都放行不了                                                                        |
 | `prepare`      | 工具自己的 `prepare`                    | 计算审批描述与 Diff；被守卫拒绝的调用连文件都不会读                                                                                   |
 | `approval`     | 人工审批                                | 无审批者或无法回答 = 拒绝                                                                                                             |
@@ -537,7 +539,25 @@ Host 启动时做一次收敛：把中断的运行 settle 掉（未闭合的工�
 
 ### 记忆与知识库
 
-**markdown 是记忆的真源**：工作区级 `<workspace>/.yuantu/memory.md` 与用户级 `<YUANTU_MEMORY_DIR>/memory.md`，条目是 `- **<key>**: <text> (YYYY-MM-DD)`，非条目文本原样保留。SQLite 不再写记忆。
+**markdown 是记忆的真源**：一条记忆一个文件，工作区级在 `<workspace>/.yuantu/memory/<key>.md`，用户级在 `<YUANTU_MEMORY_DIR>/memory/<key>.md`。每个文件以 frontmatter 开头（`name`、`description`、`type` 取 user / feedback / project / reference、`updated`、写入时的 `session`，以及可选的 `pinned: true`），后面是正文；手写的其他字段和目录里的 `_notes.md` 原样保留。替换或删除已有条目必须带上 `list_memories` 给出的 `revision`，过期或缺失的 revision 会被拒绝，并返回当前内容供合并，所以多个 Agent 同时写入时，不同条目互不覆盖，同一条也不会被悄悄改掉。早期的单文件 `memory.md` 在首次访问时自动拆分，原文件改名为 `memory.md.migrated` 保留。SQLite 里只有记忆的检索索引，是这些文件的缓存，不是第二份真源。
+
+每轮注入对话的是**记忆索引**而不是正文：一条一行（`scope/type key: description (updated)`），先工作区、后用户级；同一作用域内按分数从高到低排列（见下文），同分时按 feedback → user → project → reference、同类型新的在前。200 字以内的 feedback 和 user 记忆连正文一起内联，其余正文用 `read_memory` 读取。索引的预算是 6000 字，超出的条目只报数量，由 `list_memories` 列全。`save_memory` 要求给出 `type` 和一行能独立看懂的 `description`。新建的记忆如果描述和同作用域的已有条目或归档条目很像（字符相似度 ≥ 0.6），照常保存，并在结果的 `similar` 里列出最像的至多 3 条；这只是措辞上的提示，由模型读过之后判断是不是同一件事、要不要合并或恢复。
+
+**打分**：每条记忆的分数 = 类型权重（feedback 3、user 2、project 1、reference 0）+ 新鲜度 + 热度，钉住的再加 100。新鲜度满分 2，从最近一次写入、使用或第一次被看到起算，project 每 60 天减半、reference 每 30 天减半，feedback 和 user 不衰减；热度按用到过的天数增长，最多 2 分。分数低于 1 的条目（很久没用的 reference）不进索引，只计入“未列出”的数量，`list_memories` 和召回照常能找到。`pinned: true` 的记忆永远排在最前，不会被降级或归档；`save_memory` 的 `pinned` 参数只在用户要求某条记忆始终生效时使用，替换时不传就保持原样。索引的排序在同一天内、记忆文件没有变化时保持不变，读记忆不会让快照重新发送，用量的变化等到有记忆写入或第二天再体现。
+
+**接近上限**：某个作用域达到 56 条时，索引末尾会列出分数最低的 5 条，提示合并或删除；满 64 条时新建会被拒绝，报错里带上同样这 5 条。
+
+**归档**：每个进程每天对每个记忆目录做一次清理，在注入索引之前执行。project 和 reference 记忆如果 90 天内没有写入、使用，也不是第一次被看到，就会被原样移到 `memory/_archive/<key>.md`（字节和 revision 都不变，仍然跟着仓库走）。归档不需要审批，当天的索引会写明归档了哪些。归档的条目不占 64 条的名额，不进索引；`list_memories`、`recall_knowledge` 加上 `include_archived` 能看到，`read_memory`、`forget_memory` 加上 `archived` 能读取或删除，`restore_memory` 把它移回并记作今天用过。feedback、user 和钉住的记忆从不归档；第一次被看到的日期保证功能上线时已有的旧条目有 90 天宽限期。每个目录最多保留 256 条归档，满了就不再自动归档，不会为腾地方删除任何东西。`read` / `off` 模式和委派方的只读目录下不做清理。
+
+`recall_knowledge` 对记忆做全文检索：key、description 和正文进 `knowledge.sqlite` 的 FTS5 索引（汉字逐字成词，和文档检索同一套切分），每次召回前按 revision 与记忆文件对账，所以手工改过的文件下次召回就能搜到。排序先看 key 或 description 是否包含整个查询，再看 bm25（key 和 description 的权重高于正文），记忆的分数最多能把 bm25 提高 20%，只用来区分匹配程度相近的条目，同分时再按 feedback → user → project → reference、按更新日期。相关度不到最优结果四分之一的命中会被丢掉，记忆和文档各自最多返回 `limit` 条（默认 8，最多 20）。超过 300 字的正文只返回命中附近的摘录，全文用 `read_memory` 读取。可以用 `memory_types` 和 `memory_scope` 只搜某些类型或某个作用域。
+
+保存前会检查正文和描述里有没有凭据：各家 API key、GitHub/Slack token、AWS 访问密钥、私钥、带密码的 URL、看起来像生成值的 `password = …` 赋值，以及当前进程配置过的凭据值（按值精确匹配）。命中就拒绝保存，报错只说是哪一类，不回显值。规则偏保守，"令牌放在 1Password 里"这类说明文字可以正常保存。
+
+每条记忆的使用情况记在目录旁边的 `memory-usage.json`（工作区是 `.yuantu/memory-usage.json`，不进 git），不写进条目本身，所以读记忆不会改变 revision。每个 key 记三项：`firstSeen`（记录里第一次出现的日期）、`lastUsed`（最近一次被 `read_memory` 读取、或在 `recall_knowledge` 里排进记忆结果前 3 名的日期）、`usedDays`（用到过的天数）。出现在每轮索引里不算使用。同一个 key 每天最多重写一次，写失败只跳过，不影响读取。`list_memories` 的每条结果带上 `lastUsed`。
+
+`YUANTU_MEMORY` 控制整套记忆：`on`（默认）读写；`read` 照常注入和读取，但不提供 `save_memory` / `forget_memory` / `restore_memory`，也不记使用情况、不归档；`off` 不注入索引，不提供记忆专用的工具，`recall_knowledge` 只搜文档，系统提示里的记忆一节也一并去掉，适合不能受本机记忆影响的评测。
+
+子代理**只读**记忆：任何角色的子代理都没有 `save_memory`、`forget_memory` 和 `restore_memory`，调用会被拒绝；想记的东西写进汇报，由委派方决定存不存。委派到 worktree 的子代理，读的仍然是项目的记忆，不是 worktree 里那份（worktree 不复制 `.yuantu`），每轮注入同理。子进程方式运行的子代理在临时目录里工作，委派方通过 `YUANTU_MEMORY_ROOT` 把项目目录告诉它，它读到的同样是项目记忆；这份记忆对它只读，旧版 `memory.md` 也不会由它迁移。
 
 文档检索用独立的 `~/.yuantu/knowledge.sqlite`（FTS5），`index_document` 只接受工作区内的 UTF-8 文本与代码（30 种扩展名），拒绝凭据类文件名与 `node_modules` 之类目录；每个工作区最多 64 个文档，搜索按标题命中 → bm25（标题列加权 4）→ 记忆优先 → 更新时间排序，并保证一个文档只占一个结果位。
 
@@ -633,7 +653,7 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 | 子代理       | `YUANTU_SUBAGENTS`、`YUANTU_SUBAGENT_CONCURRENCY`、`YUANTU_SUBAGENT_TIMEOUT_MS`、`YUANTU_SUBAGENT_MODELS`                                                                      |
 | 工作区与沙箱 | `YUANTU_WORKSPACE`、`YUANTU_SANDBOX`、`YUANTU_SANDBOX_HOOK`、`YUANTU_SANDBOX_SPEC`、`YUANTU_PTY`、`YUANTU_ALLOW_PRIVATE_NETWORK`、`YUANTU_PERMISSION_POLICY`                   |
 | 集成与钩子   | `YUANTU_HOOKS_MODULE`、`YUANTU_HOOK_BRIDGE`、`YUANTU_TRUST_WORKSPACE_HOOKS`、`YUANTU_HOOK_TIMEOUT_MS`、`YUANTU_QUESTION_TIMEOUT_MS`                                            |
-| 检索与记忆   | `YUANTU_SEARCH_PROVIDER`、`YUANTU_SEARCH_API_KEY`、`YUANTU_SEARCH_BASE_URL`、`YUANTU_MEMORY_DIR`、`YUANTU_KNOWLEDGE_DB`、`YUANTU_MCP_OAUTH_DIR`                                |
+| 检索与记忆   | `YUANTU_SEARCH_PROVIDER`、`YUANTU_SEARCH_API_KEY`、`YUANTU_SEARCH_BASE_URL`、`YUANTU_MEMORY_DIR`、`YUANTU_MEMORY_ROOT`、`YUANTU_KNOWLEDGE_DB`、`YUANTU_MCP_OAUTH_DIR`          |
 | 内置分析服务 | `YUANTU_BUILTIN_SERVICES`、`YUANTU_BUILTIN_SERVICES_URL`、`YUANTU_PACKAGED`                                                                                                    |
 | 调度与会话   | `YUANTU_WORKFLOWS`、`YUANTU_WORKFLOW_INTERVAL_MS`、`YUANTU_SESSION_TITLES`                                                                                                     |
 
@@ -643,7 +663,7 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 
 <!-- settings:start -->
 
-**由代码算出**：共 77 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 80 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -654,6 +674,7 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 | `YUANTU_PROTOCOL` | `anthropic` / `openai` / `openai-responses` | 协议适配器 |
 | `YUANTU_CONNECTION_ID` | `string` | 设置文件中的连接名（仅标注） |
 | `YUANTU_SUPPORTS_VISION` | `0` / `1` | 该模型是否接受图片 |
+| `YUANTU_STRICT_TOOLS` | `0` / `1` | Anthropic 协议下给可表达的工具发送 strict: true，由端点保证参数符合 schema；模型或网关不支持时会整次请求失败，默认关闭 |
 | `YUANTU_DEEPSEEK_COMPAT` | `auto` / `on` / `off` | DeepSeek 原生历史兼容：auto 仅识别官方端点的已知模型；on 显式声明网关支持思考回传与历史系统提示更新；off 禁用 |
 | `YUANTU_PROMPT_CACHE` | `auto` / `blocks` / `key-only` / `off` | 提示缓存的粒度：auto / blocks / key-only / off；auto 按路由声明的能力选，其余三种照字面执行，off 不发送缓存字段（旧值 0 / false 等价于 off，1 / true 等价于 auto） |
 | `YUANTU_STREAM_IDLE_TIMEOUT_MS` | `1000–3600000` | 流式空闲超时（毫秒） |
@@ -698,6 +719,8 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 | `YUANTU_WORKTREE_DIR` | `string` | 子代理隔离工作树的根目录（绝对路径；默认在用户数据目录下，位于仓库之外且不含受保护的路径片段） |
 | `YUANTU_CREDENTIALS_FILE` | `string` | 凭据文件路径（默认 ~/.yuantu/credentials.json；环境变量中的密钥优先于它） |
 | `YUANTU_MEMORY_DIR` | `string` | 用户级记忆目录 |
+| `YUANTU_MEMORY` | `on` / `read` / `off` | 记忆开关：on 读写（默认）；read 只注入和读取，不保存、不删除、不记使用时间；off 不注入、不提供记忆工具 |
+| `YUANTU_MEMORY_ROOT` | `string` | 工作区记忆所属的项目目录（缺省为当前工作区；子进程子代理用它读取委派方项目的记忆） |
 | `YUANTU_KNOWLEDGE_DB` | `string` | 知识库数据库路径 |
 | `YUANTU_REPO_MAP` | `on` / `off` | 是否注入结构大纲 |
 | `YUANTU_SEARCH_RG` | `0` / `1` | 是否启用固定 ripgrep 快速搜索后端（0 关闭；缺省启用，但仍需已核验的固定资产） |
@@ -747,14 +770,14 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 68 个 / 37.0 KB | `createTools().specs()` |
-| 工具（只读运行） | 35 个 / 17.4 KB | `specs({ readOnly: true })` |
-| 工具（默认按需加载，首个请求） | 24 个 / 14.9 KB | `specs({ loaded: new Set() })` |
-| `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
+| 工具（空工作区，全部） | 70 个 / 40.6 KB | `createTools().specs()` |
+| 工具（只读运行） | 36 个 / 18.8 KB | `specs({ readOnly: true })` |
+| 工具（默认按需加载，首个请求） | 26 个 / 18.6 KB | `specs({ loaded: new Set() })` |
+| `explore` 白名单条目 | 26 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 58 / 53 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 24 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 352 个 | `tests/*.test.ts` |
+| 行为测试文件 | 355 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |

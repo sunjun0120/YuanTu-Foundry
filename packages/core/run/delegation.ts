@@ -97,6 +97,8 @@ export interface RunDelegationOptions {
   sessionId: string;
   runId: string;
   workspace: string;
+  /** The session's project; differs from `workspace` when the run works in a worktree. */
+  project?: string;
   depth: number;
   limits: ResolvedSubAgentOptions;
   signal: AbortSignal;
@@ -121,6 +123,7 @@ export function createRunDelegation(options: RunDelegationOptions): SubAgentCoor
     sessionId,
     runId,
     workspace,
+    project,
     depth,
     limits,
     signal,
@@ -248,6 +251,7 @@ export function createRunDelegation(options: RunDelegationOptions): SubAgentCoor
     store,
     sessionId: sessionId,
     workspace,
+    ...(project ? { project } : {}),
     depth,
     limits,
     signal,

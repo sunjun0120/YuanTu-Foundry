@@ -27,10 +27,12 @@ import {
   finalResult,
   invalidArgumentsMessage,
   normalizeImages,
+  unknownToolMessage,
 } from './call-result.ts';
 import type { ToolMode } from './run-code-sdk.ts';
 import { LOAD_TOOLS, deferredCatalog } from './deferred-tools.ts';
 import { presentedSchema } from './presented-schema.ts';
+import { classifyTool } from './tool-categories.ts';
 import type {
   PipelineStage,
   PostToolDecision,
@@ -63,6 +65,7 @@ export type {
   PreStepContext,
   PreStepResult,
   ExtensionHooks,
+  BeforeToolDecision,
   BeforeToolOutcome,
   PostExecuteOutcome,
 } from '../protocol/tool-hooks.ts';
@@ -349,6 +352,13 @@ export class ToolRegistry {
       .map(({ tool }) => tool.name);
   }
   /**
+   * A tool's subsystem and whether it is a query (`tool-categories.ts`). A name this registry does not hold is
+   * classified from the product table alone, so a transcript's old calls can still be read after a tool went away.
+   */
+  classify(name: string): ReturnType<typeof classifyTool> {
+    return classifyTool(this.entries.get(name)?.tool ?? { name });
+  }
+  /**
    * Whether this call may overlap its siblings from the same assistant message.
    *
    * Fail closed, in this order, and every "no" is a reason a reader can check:
@@ -558,7 +568,15 @@ export class ToolRegistry {
     };
     try {
       invariant.enter(execution, 'validate');
-      if (!entry) return materialize(errorResult(`Unknown tool: ${call.name}`));
+      if (!entry)
+        return materialize(
+          errorResult(
+            unknownToolMessage(
+              call.name,
+              [...this.entries.keys()].filter((name) => this.offers(name)),
+            ),
+          ),
+        );
       if (entry.tool.permission === 'write' && context.executionPolicy?.files === 'read-only')
         return materialize(
           errorResult("File mutation is refused by this call's read-only execution policy"),
@@ -577,20 +595,16 @@ export class ToolRegistry {
             `Tool "${call.name}" is not available in this run; it is registered but excluded by a restriction. Do not retry it.`,
           ),
         );
-      if (!entry.validate(call.arguments)) {
-        const additional = entry.validate.errors?.some(
-          (error) => error.keyword === 'additionalProperties' && error.instancePath === '',
-        );
+      if (!entry.validate(call.arguments))
         return materialize(
           errorResult(
             invalidArgumentsMessage(
               schemaValidator.errorsText(entry.validate.errors),
-              entry.tool.inputSchema.properties,
-              additional === true,
+              entry.validate.errors,
+              entry.tool.inputSchema,
             ),
           ),
         );
-      }
 
       invariant.enter(execution, 'pre-execute');
       const outcome = await this.hooks.beforeTool(call, context.signal);
@@ -603,6 +617,14 @@ export class ToolRegistry {
       if (outcome === 'deny')
         return materialize(
           errorResult('Operation denied by extension; permission cannot be granted by hooks'),
+        );
+      // A hook that says why is the one a model can act on: the reason names what to change, not just that it
+      // was refused, so the same call is not simply sent again.
+      if (typeof outcome === 'object')
+        return materialize(
+          errorResult(
+            `Operation denied by extension: ${outcome.deny}. Permission cannot be granted by hooks; change what the reason names instead of retrying the same call.`,
+          ),
         );
       context.signal.throwIfAborted();
 

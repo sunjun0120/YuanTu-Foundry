@@ -134,9 +134,12 @@ test('the shipped read-only tools opt in, and nothing that writes does', async (
     'list_files',
     'list_memories',
     'load_skill',
+    // Loading only names schemas for the next request; it writes nothing.
+    'load_tools',
     'office_inspect',
     'read_file',
     'read_image',
+    'read_memory',
     'repo_map',
     'search_files',
     'verify_file_delivery',

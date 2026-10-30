@@ -23,6 +23,7 @@ import {
   subAgentRolePrompt,
   toolArgumentPreview,
 } from '../subagents/delegation.ts';
+import { CHILD_DENIED_TOOLS } from '../subagents/contract.ts';
 import { RunQueueFull } from './queue.ts';
 import { redactSecrets } from '../../platform/redact.ts';
 import { nodeDependencyWarning } from '../../workspaces/dependencies.ts';
@@ -138,6 +139,14 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
     };
     const ownsRegistry = Boolean(options.agent.subagentResidency) || rebuildTools;
     const childRegistry = buildTools();
+    /**
+     * Memory writes are taken away from every child, including from a registry a host factory built.
+     *
+     * Unlike the read-only allowlist above, this is not a narrowing that depends on how the registry was obtained:
+     * no child may save or forget a memory, so a factory-built registry gets the same rule as a borrowed one. A
+     * name-only deny, so a memory tool installed later under the same name is caught as well.
+     */
+    childRegistry.restrict({ deny: CHILD_DENIED_TOOLS });
     let rounds = 0,
       toolCalls = 0;
     /**

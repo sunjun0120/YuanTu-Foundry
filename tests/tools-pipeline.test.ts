@@ -119,6 +119,78 @@ test('an early exit still ends at the result stage', async () => {
   assert.equal(registry.pipelineInvariant.violations.length, 0);
 });
 
+test('an unknown tool is answered with the near names this run may call', async () => {
+  const registry = new ToolRegistry();
+  registry.register(echo({ name: 'read_file' }));
+  registry.register(echo({ name: 'mcp_docs_search' }));
+  registry.register(echo({ name: 'secret_tool' }));
+  registry.restrict({ deny: ['secret_tool'] });
+  const typo = await registry.execute(call('readFile'), context());
+  assert.match(typo.content, /^Unknown tool: readFile\. Did you mean: read_file\?/);
+  // A name written without its server prefix still finds the prefixed tool.
+  assert.match((await registry.execute(call('search'), context())).content, /mcp_docs_search/);
+  // A restricted tool is never suggested, however close.
+  const hidden = await registry.execute(call('secret_tol'), context());
+  assert.doesNotMatch(hidden.content, /secret_tool/);
+  assert.doesNotMatch(
+    (await registry.execute(call('completely_different'), context())).content,
+    /Did you mean/,
+  );
+});
+
+test('invalid arguments quote the schema of the arguments they involve', async () => {
+  const registry = new ToolRegistry();
+  registry.register(
+    echo({
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', minLength: 1, description: 'What to echo' },
+          mode: { type: 'string', enum: ['loud', 'quiet'] },
+          files: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['text'],
+        additionalProperties: false,
+      },
+    }),
+  );
+  const missing = await registry.execute(call('echo', { mode: 'loud' }), context());
+  assert.match(missing.content, /^Invalid arguments: /);
+  // The schema as the model is sent it: `minLength: 1` is noise there and stays out of the quote too.
+  assert.match(missing.content, /Expected: text: \{"description":"What to echo","type":"string"\}/);
+  const wrongEnum = await registry.execute(call('echo', { text: 'a', mode: 'shout' }), context());
+  assert.match(wrongEnum.content, /mode: \{"enum":\["loud","quiet"\]/);
+  const nested = await registry.execute(call('echo', { text: 'a', files: [1] }), context());
+  assert.match(nested.content, /Expected: files: /);
+  const renamed = await registry.execute(call('echo', { txt: 'a' }), context());
+  assert.match(renamed.content, /Allowed top-level arguments: text, mode, files\./);
+  assert.match(renamed.content, /Did you mean: txt → text\?/);
+});
+
+test('a before-tool hook that gives a reason has it read by the model', async () => {
+  const registry = new ToolRegistry();
+  let bodyRan = false;
+  registry.register(
+    echo({ execute: async () => ((bodyRan = true), { isError: false, content: '' }) }),
+  );
+  const dispose = registry.registerHooks({
+    beforeTool: () => ({ deny: '  writes under vendor/ are frozen; patch upstream instead ' }),
+  });
+  const result = await registry.execute(call('echo'), context());
+  assert.equal(result.isError, true);
+  assert.match(
+    result.content,
+    /^Operation denied by extension: writes under vendor\/ are frozen; patch upstream instead\. /,
+  );
+  assert.deepEqual(lastTrace(registry), ['validate', 'pre-execute', 'result']);
+  dispose();
+  // A `deny` key without readable text is still a refusal, never a consent.
+  registry.registerHooks({ beforeTool: () => ({ deny: 42 }) as unknown as { deny: string } });
+  const blank = await registry.execute(call('echo'), context());
+  assert.match(blank.content, /^Operation denied by extension; permission cannot be granted/);
+  assert.equal(bodyRan, false);
+});
+
 test('a pre-execute denial ends before the guards run', async () => {
   const registry = new ToolRegistry();
   let bodyRan = false;

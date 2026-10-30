@@ -20,6 +20,7 @@
  *
  * Only static cycles carry the hazard this gate exists for, and a gate that cries wolf gets deleted.
  */
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import ts from 'typescript';
@@ -57,6 +58,12 @@ async function walk(directory) {
   const found = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (SKIPPED.has(entry.name)) continue;
+    if (
+      entry.isDirectory() &&
+      entry.name === 'target' &&
+      existsSync(path.join(directory, 'Cargo.toml'))
+    )
+      continue;
     const full = path.join(directory, entry.name);
     if (entry.isDirectory()) found.push(...(await walk(full)));
     else if (/\.(?:ts|mts|cts|tsx)$/.test(entry.name)) found.push(full);

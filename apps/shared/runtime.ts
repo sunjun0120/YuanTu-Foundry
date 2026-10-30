@@ -409,8 +409,17 @@ export async function createAgent(
      * existing caller working unchanged.
      */
     subagentResidency: residency,
+    // A worktree child's memories are its project's: the worktree is a copy of the files without `.yuantu`.
     childTools: (binding) =>
-      createTools(binding?.executionRoot ?? workspace, undefined, 'subagent', hooks),
+      createTools(
+        binding?.executionRoot ?? workspace,
+        undefined,
+        'subagent',
+        hooks,
+        undefined,
+        undefined,
+        binding?.projectRoot ?? workspace,
+      ),
     workspaceMode: workspaceModeFor(options),
     workspaceManager: workspaces,
     workspaceResults,

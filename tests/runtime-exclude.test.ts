@@ -38,6 +38,11 @@ async function runtimeState(workspace: string): Promise<void> {
   await writeFile(path.join(workspace, '.yuantu', 'search', 'index.bin'), 'index');
   await writeFile(path.join(workspace, '.yuantu', 'lsp.json'), '{}');
   await writeFile(path.join(workspace, '.yuantu', 'memory.md'), '- note\n');
+  await mkdir(path.join(workspace, '.yuantu', 'memory'), { recursive: true });
+  await writeFile(path.join(workspace, '.yuantu', 'memory', 'build.md'), 'Use npm run build\n');
+  // An archived memory is still the user's file, kept with the repository like the live ones.
+  await mkdir(path.join(workspace, '.yuantu', 'memory', '_archive'), { recursive: true });
+  await writeFile(path.join(workspace, '.yuantu', 'memory', '_archive', 'old.md'), 'Old note\n');
   await writeFile(path.join(workspace, 'source.ts'), 'export {};\n');
 }
 
@@ -46,7 +51,13 @@ test('runtime state is excluded, the files people write stay visible, and the bl
   git(root, ['init', '-q']);
   await runtimeState(root);
   assert.equal(await excludeRuntimeState(root, ENABLED), true);
-  assert.deepEqual(untracked(root), ['.yuantu/lsp.json', '.yuantu/memory.md', 'source.ts']);
+  assert.deepEqual(untracked(root), [
+    '.yuantu/lsp.json',
+    '.yuantu/memory.md',
+    '.yuantu/memory/_archive/old.md',
+    '.yuantu/memory/build.md',
+    'source.ts',
+  ]);
   assert.equal(
     await excludeRuntimeState(root, ENABLED),
     false,
@@ -70,8 +81,29 @@ test('a workspace inside a larger repository excludes only its own runtime direc
     'other/.yuantu/kept.txt',
     'packages/app/.yuantu/lsp.json',
     'packages/app/.yuantu/memory.md',
+    'packages/app/.yuantu/memory/_archive/old.md',
+    'packages/app/.yuantu/memory/build.md',
     'packages/app/source.ts',
   ]);
+});
+
+test('a block written before memory became a directory is completed, once', async (t) => {
+  const root = await tempRoot(t, 'yuantu-runtime-exclude-');
+  git(root, ['init', '-q']);
+  await runtimeState(root);
+  const file = path.join(root, '.git', 'info', 'exclude');
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(
+    file,
+    '# YuanTu runtime state; configuration it reads from .yuantu stays visible.\n/.yuantu/*\n!/.yuantu/lsp.json\n!/.yuantu/memory.md\n',
+  );
+  assert.equal(untracked(root).includes('.yuantu/memory/build.md'), false);
+  assert.equal(await excludeRuntimeState(root, ENABLED), true);
+  assert.ok(untracked(root).includes('.yuantu/memory/build.md'));
+  assert.equal(await excludeRuntimeState(root, ENABLED), false);
+  const exclude = await readFile(file, 'utf8');
+  assert.equal(exclude.split('\n').filter((line) => line === '!/.yuantu/memory/').length, 1);
+  assert.equal(exclude.split('\n').filter((line) => line === '/.yuantu/*').length, 1);
 });
 
 test('a workspace that is not a Git working tree is left alone', async (t) => {

@@ -48,7 +48,7 @@ test('memory and knowledge default beneath the shared state root with explicit o
   withEnvironment(
     { YUANTU_STATE_DIR: state, YUANTU_MEMORY_DIR: undefined, YUANTU_KNOWLEDGE_DB: undefined },
     () => {
-      assert.equal(memoryPaths(state).global, path.join(state, 'memory.md'));
+      assert.equal(memoryPaths(state).global.dir, path.join(state, 'memory'));
       assert.equal(defaultKnowledgePath(), path.join(state, 'knowledge.sqlite'));
       withEnvironment(
         {
@@ -56,7 +56,7 @@ test('memory and knowledge default beneath the shared state root with explicit o
           YUANTU_KNOWLEDGE_DB: path.join(state, 'explicit.sqlite'),
         },
         () => {
-          assert.equal(memoryPaths(state).global, path.join(state, 'memory', 'memory.md'));
+          assert.equal(memoryPaths(state).global.dir, path.join(state, 'memory', 'memory'));
           assert.equal(defaultKnowledgePath(), path.join(state, 'explicit.sqlite'));
         },
       );

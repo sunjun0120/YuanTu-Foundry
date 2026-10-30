@@ -1,7 +1,8 @@
 import type { AgentOptions } from '../agent.ts';
 import type { Plan, TaskAttempt } from '../../protocol/index.ts';
 import type { SessionStore } from '../../storage/sqlite.ts';
-import { AGENT_SYSTEM_PROMPT } from '../prompt/notices.ts';
+import { agentSystemPrompt } from '../prompt/notices.ts';
+import { memoryMode } from '../../knowledge/memory.ts';
 import { redactSecrets } from '../../platform/redact.ts';
 import { definePromptSection, type PromptSection } from '../prompt/sections.ts';
 import {
@@ -30,7 +31,7 @@ export function createRunPromptSections(options: RunPromptOptions): PromptSectio
       name: 'identity',
       stage: 'identity',
       order: 0,
-      content: () => AGENT_SYSTEM_PROMPT,
+      content: () => agentSystemPrompt(memoryMode()),
     }),
     definePromptSection({
       name: 'execution-environment',

@@ -1,4 +1,5 @@
 import type { Message, Tool } from '../protocol/index.ts';
+import { similarNames } from '../protocol/similar-names.ts';
 
 /**
  * Deferred tool loading: the catalog a request carries is the tools a turn usually needs, plus one `load_tools`
@@ -154,11 +155,49 @@ export function addLoadedTools(
         continue;
       }
       const names = call.arguments?.names;
-      if (!Array.isArray(names)) continue;
-      for (const name of names)
-        if (typeof name === 'string' && deferrable.has(name)) loaded.add(name);
+      if (Array.isArray(names))
+        for (const name of names)
+          if (typeof name === 'string' && deferrable.has(name)) loaded.add(name);
+      // A search loads what it matches, and the match is a pure function of the query and the set, so the
+      // transcript alone still answers "what is loaded" — the same after a restart as in the run that searched.
+      const query = call.arguments?.query;
+      if (typeof query === 'string')
+        for (const name of matchDeferredTools(query, deferrable)) loaded.add(name);
     }
   }
+}
+
+/** The most tools one search loads: a query is for finding a capability, not for loading everything. */
+const MAX_QUERY_MATCHES = 8;
+
+/**
+ * The deferred tools a keyword query names, best first.
+ *
+ * A word counts twice in a tool's name and once in its group's hint, so "rename" finds `lsp_rename` ahead of the
+ * rest of the language-server group, and "browser" loads the browser tools a hint alone could not tell apart.
+ * Ties go by name rather than by the set's order, which is what keeps the answer the same for any caller holding
+ * the same names.
+ */
+export function matchDeferredTools(query: string, candidates: Iterable<string>): string[] {
+  const words = [...new Set(query.toLowerCase().split(/[^a-z0-9]+/))].filter(
+    (word) => word.length >= 2,
+  );
+  if (!words.length) return [];
+  const hints = new Map(
+    DEFERRED_GROUPS.flatMap(({ hint, names }) => names.map((name) => [name, hint.toLowerCase()])),
+  );
+  const scored: { name: string; score: number }[] = [];
+  for (const name of candidates) {
+    const lower = name.toLowerCase();
+    const hint = hints.get(name) ?? '';
+    let score = 0;
+    for (const word of words) score += lower.includes(word) ? 2 : hint.includes(word) ? 1 : 0;
+    if (score > 0) scored.push({ name, score });
+  }
+  return scored
+    .sort((a, b) => b.score - a.score || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .slice(0, MAX_QUERY_MATCHES)
+    .map(({ name }) => name);
 }
 
 /** One stable catalogue line per offered deferred group, regardless of which members are already loaded. */
@@ -178,8 +217,9 @@ export function deferredCatalog(tools: readonly { name: string }[]): string {
 export const LOAD_TOOLS_DESCRIPTION =
   'Load the full definitions of tools that are available but not yet in your tool list, so you can call them ' +
   'from your next step. Load only what your next step will call, all in one call; a tool with no or obvious ' +
-  'arguments can also be called directly without loading. Loading grants nothing: each loaded ' +
-  'tool keeps its own permissions and approvals. The tools you can load, by area:';
+  'arguments can also be called directly without loading. When you know the capability but not the name, pass ' +
+  'query (keywords such as "rename symbol") instead, and the best matches are loaded. Loading grants nothing: ' +
+  'each loaded tool keeps its own permissions and approvals. The tools you can load, by area:';
 
 /**
  * The `load_tools` tool. `offers` is the registry's own answer to "may this run call that name", so a name the
@@ -199,12 +239,23 @@ export function loadToolsTool(offers: (name: string) => boolean): Tool {
           minItems: 1,
           maxItems: 40,
         },
+        query: { type: 'string', minLength: 2, maxLength: 200 },
       },
-      required: ['names'],
       additionalProperties: false,
     },
     execute: async (args) => {
-      const names = [...new Set((args.names as string[]) ?? [])];
+      const query = typeof args.query === 'string' ? args.query : undefined;
+      if (args.names === undefined && query === undefined)
+        return { isError: true, content: 'Pass names (exact tool names) or query (keywords).' };
+      // Matched over the whole deferred set, exactly as `addLoadedTools` will read the call back; what this run
+      // may not use is then dropped from the answer, as it is for a name.
+      const matched = query ? matchDeferredTools(query, DEFERRED_TOOLS) : [];
+      if (query !== undefined && args.names === undefined && !matched.some(offers))
+        return {
+          isError: true,
+          content: `No loadable tool matches "${query}". Pick a name from this tool's list, or try other keywords.`,
+        };
+      const names = [...new Set([...((args.names as string[]) ?? []), ...matched.filter(offers)])];
       const loaded = names.filter((name) => DEFERRED_TOOLS.has(name) && offers(name));
       // A tool that is always sent is already callable: saying so is an answer, not a failure — a model that
       // "loads" one (GPT-5.6-Terra did, for `verify_file_delivery`) should go straight on to call it.
@@ -213,11 +264,15 @@ export function loadToolsTool(offers: (name: string) => boolean): Tool {
       const already = present.length
         ? ` Already in your tool list, call directly: ${present.join(', ')}.`
         : '';
-      const unknown = refused.length ? ` Not loadable: ${refused.join(', ')}.` : '';
+      const loadable = [...DEFERRED_TOOLS].filter(offers);
+      // A misspelt name is answered with the names it was probably meant to be, as an unknown tool call is.
+      const near = [...new Set(refused.flatMap((name) => similarNames(name, loadable, 2)))];
+      const suggestion = near.length ? ` Did you mean: ${near.join(', ')}?` : '';
+      const unknown = refused.length ? ` Not loadable: ${refused.join(', ')}.${suggestion}` : '';
       if (!loaded.length && !present.length)
         return {
           isError: true,
-          content: `None of these can be loaded: ${refused.join(', ')}. Use a name from this tool's list.`,
+          content: `None of these can be loaded: ${refused.join(', ')}.${suggestion} Use a name from this tool's list.`,
         };
       return {
         isError: false,
@@ -271,8 +326,11 @@ export function deferredToolUsage(
       for (const call of message.toolCalls) {
         if (call.name === LOAD_TOOLS) {
           loadCalls++;
-          const names = call.arguments?.names;
-          if (!Array.isArray(names)) continue;
+          const query = call.arguments?.query;
+          const names = new Set([
+            ...(Array.isArray(call.arguments?.names) ? (call.arguments.names as unknown[]) : []),
+            ...(typeof query === 'string' ? matchDeferredTools(query, deferrable) : []),
+          ]);
           for (const name of names) {
             if (typeof name !== 'string' || !deferrable.has(name)) continue;
             entry(name).loads++;

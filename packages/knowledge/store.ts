@@ -2,13 +2,30 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync } from 'node:fs';
 import { userStateDirectory } from '../platform/user-state.ts';
-import { ftsIndexText, ftsMatchQuery } from '../formats/fts-text.ts';
+import { ftsDisplayText, ftsIndexText, ftsMatchQuery } from '../formats/fts-text.ts';
 import { parseSetting } from '../protocol/settings.ts';
 import path from 'node:path';
 import { resourceText } from '../resources/files.ts';
+import type { MemoryEntry, MemoryLocation, MemoryScope, MemoryType } from './memory.ts';
 
 const DOCUMENT_CHUNK_CHARS = 1600;
 const DOCUMENT_CHUNK_OVERLAP = 200;
+/** A recalled memory carries an excerpt of about this many characters; read_memory returns the whole text. */
+const MEMORY_EXCERPT_CHARS = 300;
+/**
+ * A full-text hit is kept only while its bm25 score is at least this fraction of the best hit's.
+ *
+ * Relative rather than absolute, because bm25 depends on how many memories there are and how common the words
+ * are, so a fixed threshold that is right for eight entries is wrong for sixty.
+ */
+const MEMORY_RELEVANCE_FLOOR = 0.25;
+/**
+ * How much a memory's score (`memoryScore`: type, freshness, use, pinned) can improve its bm25 rank: at most this
+ * fraction, reached at `MEMORY_SCORE_CEILING`. Enough to order two memories that match about equally well, never
+ * enough to lift a weak match over a strong one.
+ */
+const MEMORY_SCORE_BOOST = 0.2;
+const MEMORY_SCORE_CEILING = 7;
 /**
  * `index`, moved back one unit when it would fall between the two halves of a surrogate pair.
  *
@@ -114,6 +131,33 @@ const item = (row: Record<string, unknown>): KnowledgeItem => ({
   version: Number(row.version),
   updatedAt: String(row.updated_at),
 });
+/** One memory directory as the files say it is now; the index is synced to it before every search. */
+export interface MemorySource {
+  location: MemoryLocation;
+  entries: readonly MemoryEntry[];
+  /** The directory is `_archive/`: its hits are marked archived. */
+  archived?: true;
+  /** Each entry's `memoryScore`, the tie-breaker between memories that match about equally well. */
+  scores?: ReadonlyMap<string, number>;
+}
+export interface MemoryHit {
+  scope: MemoryScope;
+  key: string;
+  type: MemoryType;
+  description: string;
+  updatedAt: string;
+  revision: string;
+  /** The whole text when it is short, otherwise the part around the match. */
+  excerpt: string;
+  archived?: true;
+}
+export interface MemorySearchOptions {
+  limit?: number;
+  types?: readonly MemoryType[];
+}
+/** One spelling per directory, so a path written two ways does not index the same memories twice. */
+const memoryDirKey = (dir: string) =>
+  process.platform === 'win32' ? path.resolve(dir).toLowerCase() : path.resolve(dir);
 export function defaultKnowledgePath(): string {
   const configured = parseSetting(process.env, 'YUANTU_KNOWLEDGE_DB');
   return typeof configured === 'string'
@@ -161,7 +205,12 @@ export class KnowledgeStore {
         id TEXT PRIMARY KEY, scope TEXT NOT NULL, path TEXT NOT NULL, digest TEXT NOT NULL,
         updated_at TEXT NOT NULL, UNIQUE(scope,path)
       );
-      CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(title,content,tokenize='unicode61');`);
+      CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(title,content,tokenize='unicode61');
+      CREATE TABLE IF NOT EXISTS memory_index (
+        dir TEXT NOT NULL, name TEXT NOT NULL, revision TEXT NOT NULL, type TEXT NOT NULL,
+        description TEXT NOT NULL, text TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(dir,name)
+      );
+      CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(name,description,text,tokenize='unicode61');`);
     this.reindexLegacyFts();
   }
   /**
@@ -499,5 +548,155 @@ export class KnowledgeStore {
       )
       .all(match, q, scope, q, q, limit);
     return rows.map(item);
+  }
+  /**
+   * Bring one directory's rows in line with its files: the markdown is the source of truth and these tables are
+   * a cache of it, so a memory the user edited by hand is searchable on the next recall without a watcher.
+   *
+   * Unchanged revisions are decided before the write transaction, as `pinDocument` does, so a recall that
+   * changed nothing costs one SELECT per directory rather than the database's single writer. Two processes that
+   * both see a change apply the same delete-and-insert, which is idempotent under the write lock.
+   */
+  private syncMemories(source: MemorySource): void {
+    const dir = memoryDirKey(source.location.dir);
+    const stored = new Map(
+      this.db
+        .prepare('SELECT name,revision FROM memory_index WHERE dir=?')
+        .all(dir)
+        .map((row) => [String(row.name), String(row.revision)]),
+    );
+    const changed = source.entries.filter((entry) => stored.get(entry.key) !== entry.revision);
+    const present = new Set(source.entries.map((entry) => entry.key));
+    const removed = [...stored.keys()].filter((name) => !present.has(name));
+    if (!changed.length && !removed.length) return;
+    this.transaction(() => {
+      const unindex = this.db.prepare(
+        'DELETE FROM memory_fts WHERE rowid IN (SELECT rowid FROM memory_index WHERE dir=? AND name=?)',
+      );
+      const remove = this.db.prepare('DELETE FROM memory_index WHERE dir=? AND name=?');
+      for (const name of [...removed, ...changed.map((entry) => entry.key)]) {
+        unindex.run(dir, name);
+        remove.run(dir, name);
+      }
+      const insert = this.db.prepare(
+        'INSERT INTO memory_index(dir,name,revision,type,description,text,updated) VALUES(?,?,?,?,?,?,?)',
+      );
+      const index = this.db.prepare(
+        'INSERT INTO memory_fts(rowid,name,description,text) VALUES(?,?,?,?)',
+      );
+      for (const entry of changed) {
+        const { lastInsertRowid } = insert.run(
+          dir,
+          entry.key,
+          entry.revision,
+          entry.type,
+          entry.description,
+          entry.text,
+          entry.updatedAt,
+        );
+        index.run(
+          lastInsertRowid,
+          ftsIndexText(entry.key),
+          ftsIndexText(entry.description),
+          ftsIndexText(entry.text),
+        );
+      }
+    });
+  }
+  /**
+   * Memories ranked by relevance to `query`, at most `limit` of them, each with an excerpt instead of its text.
+   *
+   * Ranking follows `search`: a key or description containing the whole query comes first, then bm25 with the
+   * key and description weighted above the text, since they are the summary written to be found. Ties go to the
+   * kind of memory the reminder lists first, then to the newer one. Once any memory matches the full-text query,
+   * the ones far below the best match are dropped rather than padding the result; a query with no indexable word
+   * (punctuation only) falls back to plain substring matches.
+   */
+  searchMemories(
+    sources: readonly MemorySource[],
+    query: string,
+    options: MemorySearchOptions = {},
+  ): MemoryHit[] {
+    const q = validate(query, 'knowledge query', 200);
+    const limit = options.limit ?? 8;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20)
+      throw new Error('Invalid knowledge result limit');
+    if (!sources.length) return [];
+    for (const source of sources) this.syncMemories(source);
+    const scopes = new Map(sources.map((source) => [memoryDirKey(source.location.dir), source]));
+    const dirs = [...scopes.keys()];
+    const types = options.types?.length ? [...new Set(options.types)] : [];
+    const match = ftsMatchQuery(q, 8);
+    const hits = match
+      ? `SELECT rowid AS rid, bm25(memory_fts, 4.0, 3.0, 1.0) AS rank,
+           snippet(memory_fts, 2, '', '', '…', 64) AS excerpt
+         FROM memory_fts WHERE memory_fts MATCH ?`
+      : 'SELECT NULL AS rid, NULL AS rank, NULL AS excerpt WHERE 0';
+    const rows = this.db
+      .prepare(
+        `WITH hits AS (${hits})
+         SELECT m.dir, m.name, m.type, m.description, m.text, m.updated, m.revision, h.rank, h.excerpt,
+           (CASE WHEN instr(lower(m.name),lower(?))>0 OR instr(lower(m.description),lower(?))>0
+             THEN 0 ELSE 1 END) AS title_rank
+         FROM memory_index m LEFT JOIN hits h ON h.rid = m.rowid
+         WHERE m.dir IN (${dirs.map(() => '?').join(',')})
+           ${types.length ? `AND m.type IN (${types.map(() => '?').join(',')})` : ''}
+           AND (h.rid IS NOT NULL OR instr(lower(m.name),lower(?))>0
+             OR instr(lower(m.description),lower(?))>0 OR instr(lower(m.text),lower(?))>0)
+         ORDER BY title_rank, COALESCE(h.rank, 1e18),
+           (CASE m.type WHEN 'feedback' THEN 0 WHEN 'user' THEN 1 WHEN 'project' THEN 2 ELSE 3 END),
+           m.updated DESC, m.name`,
+      )
+      .all(...(match ? [match] : []), q, q, ...dirs, ...types, q, q, q);
+    const ranks = rows.flatMap((row) => (row.rank === null ? [] : [Number(row.rank)]));
+    // bm25 is negative and smaller is better, so "a fraction of the best" is a bound from below on its magnitude.
+    const floor = ranks.length ? Math.min(...ranks) * MEMORY_RELEVANCE_FLOOR : undefined;
+    const boosted = (row: Record<string, unknown>) => {
+      if (row.rank === null) return 1e18;
+      const score = scopes.get(String(row.dir))!.scores?.get(String(row.name)) ?? 0;
+      return (
+        Number(row.rank) *
+        (1 +
+          (MEMORY_SCORE_BOOST * Math.min(Math.max(score, 0), MEMORY_SCORE_CEILING)) /
+            MEMORY_SCORE_CEILING)
+      );
+    };
+    return (
+      rows
+        .filter(
+          (row) =>
+            floor === undefined ||
+            Number(row.title_rank) === 0 ||
+            (row.rank !== null && Number(row.rank) <= floor),
+        )
+        // Stable, so rows the score does not separate keep the SQL order (type, then the newer one).
+        .sort(
+          (left, right) =>
+            Number(left.title_rank) - Number(right.title_rank) || boosted(left) - boosted(right),
+        )
+        .slice(0, limit)
+        .map((row) => {
+          const text = String(row.text);
+          let excerpt = text;
+          if (text.length > MEMORY_EXCERPT_CHARS) {
+            const cut = row.excerpt === null ? text : ftsDisplayText(String(row.excerpt));
+            excerpt =
+              cut.length > MEMORY_EXCERPT_CHARS
+                ? cut.slice(0, codePointBoundary(cut, MEMORY_EXCERPT_CHARS - 1)) + '…'
+                : cut;
+          }
+          const source = scopes.get(String(row.dir))!;
+          return {
+            scope: source.location.scope,
+            key: String(row.name),
+            type: row.type as MemoryType,
+            description: String(row.description),
+            updatedAt: String(row.updated),
+            revision: String(row.revision),
+            excerpt,
+            ...(source.archived ? { archived: true as const } : {}),
+          };
+        })
+    );
   }
 }

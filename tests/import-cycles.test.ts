@@ -9,6 +9,24 @@ import { tempRoot } from './temp-fixture.ts';
 const gate = fileURLToPath(new URL('../scripts/check-import-cycles.mjs', import.meta.url));
 const cases = [
   {
+    name: 'Rust build artifacts cannot introduce source import cycles',
+    code: 0,
+    files: {
+      'source.ts': 'export const source = 1;',
+      'native/Cargo.toml': '[package]\nname = "fixture"\nversion = "0.1.0"\n',
+      'native/target/a.ts': "import { b } from './b.ts';\nexport const a = b;",
+      'native/target/b.ts': "import { a } from './a.ts';\nexport const b = a;",
+    },
+  },
+  {
+    name: 'a regular target source directory still participates in cycle checks',
+    code: 1,
+    files: {
+      'target/a.ts': "import { b } from './b.ts';\nexport const a = b;",
+      'target/b.ts': "import { a } from './a.ts';\nexport const b = a;",
+    },
+  },
+  {
     name: 'leading whitespace cannot hide a static cycle',
     code: 1,
     files: {
@@ -80,8 +98,10 @@ for (const item of cases) {
     const root = await tempRoot(t, 'yuantu-cycle-gate-');
     const sources = path.join(root, 'packages', 'fixture');
     await mkdir(sources, { recursive: true });
-    for (const [name, body] of Object.entries(item.files))
+    for (const [name, body] of Object.entries(item.files)) {
+      await mkdir(path.dirname(path.join(sources, name)), { recursive: true });
       await writeFile(path.join(sources, name), body);
+    }
     const result = spawnSync(process.execPath, [gate], {
       cwd: root,
       encoding: 'utf8',

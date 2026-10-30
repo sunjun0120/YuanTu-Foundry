@@ -25,7 +25,11 @@ import type {
 import { AnthropicProvider } from '../packages/providers/anthropic.ts';
 import { OpenAIProvider } from '../packages/providers/openai.ts';
 import { ResponsesProvider } from '../packages/providers/responses.ts';
-import { anthropicThinkingBudget } from '../packages/providers/effort.ts';
+import {
+  anthropicThinkingBudget,
+  anthropicThinkingFields,
+  usesAdaptiveThinking,
+} from '../packages/providers/effort.ts';
 import { httpFixture, sendFrames } from './http-fixture.ts';
 
 /** A one-tool round first, so the run reaches round 1 where the interesting override happens. */
@@ -324,4 +328,61 @@ test('Anthropic reasoning is shown on its own channel now that the run can ask f
   // The answer is the answer: reasoning must never end up in the text that gets stored as it.
   assert.equal(response.text, 'The answer');
   // The redacted block contributed nothing to either channel: it exists so the stream stays well formed.
+});
+
+test('adaptive-thinking Claude models get the level as an effort, older ones keep the budget', async (t) => {
+  const bodies: Record<string, any>[] = [];
+  const url = await httpFixture(t, (body, res) => {
+    bodies.push(body);
+    sendFrames(res, [
+      { type: 'message_start', message: { usage: { input_tokens: 1, output_tokens: 1 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } },
+      { type: 'message_stop' },
+    ]);
+  });
+  const provider = new AnthropicProvider({ apiKey: 'k', model: 'claude-opus-5-5', baseUrl: url });
+  const request = (reasoningEffort: ModelRequest['reasoningEffort'], model?: string) =>
+    provider.complete({
+      system: 's',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      // Far too small for a budget: an adaptive model is not refused for it.
+      maxOutputTokens: 1_100,
+      signal: new AbortController().signal,
+      onText: () => {},
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    });
+  await request('high');
+  assert.deepEqual(bodies[0]!.thinking, { type: 'adaptive' });
+  assert.deepEqual(bodies[0]!.output_config, { effort: 'high' });
+  // `none` leaves the model its default: the newest models refuse `disabled` with a 400.
+  await request('none');
+  assert.equal(bodies[1]!.thinking, undefined);
+  assert.equal(bodies[1]!.output_config, undefined);
+  await assert.rejects(request('high', 'claude-haiku-4-5'), /does not fit/);
+
+  for (const model of [
+    'claude-opus-4-6',
+    'claude-sonnet-4-6',
+    'claude-opus-4-8',
+    'claude-sonnet-5-5',
+    'claude-haiku-5-5',
+    'claude-fable-5-1',
+    'anthropic.claude-opus-5-5',
+    'claude-opus-4-6@20260101',
+  ])
+    assert.ok(usesAdaptiveThinking(model), model);
+  for (const model of ['claude-haiku-4-5', 'claude-sonnet-4-5', 'claude-opus-4-1', 'kimi-k2', 'm'])
+    assert.ok(!usesAdaptiveThinking(model), model);
+  assert.deepEqual(anthropicThinkingFields('claude-haiku-4-5', 'medium', 8_000), {
+    thinking: { type: 'enabled', budget_tokens: 4_000 },
+  });
+  assert.throws(
+    () => anthropicThinkingFields('claude-opus-5-5', 'minimal' as never, 8_000),
+    /Unknown reasoning effort/,
+  );
 });

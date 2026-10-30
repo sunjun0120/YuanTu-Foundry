@@ -585,6 +585,8 @@ test('memory written during a run reaches the next round as a snapshot', async (
       ? toolCall('save-1', 'save_memory', {
           scope: 'workspace',
           key: 'theme',
+          type: 'feedback',
+          description: 'Keep the palette blue',
           content: 'Keep the palette blue.',
         })
       : reply('记住了。'),

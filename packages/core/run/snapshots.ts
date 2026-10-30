@@ -39,6 +39,13 @@ export interface RunAnnouncementsOptions {
   store: SessionStore;
   sessionId: string;
   workspace: string;
+  /**
+   * Whose memories the run is reminded of: the session's project, not the directory it works in.
+   *
+   * A child delegated into a worktree works in a copy that does not carry `.yuantu`, so reading memory from where
+   * it works would show it none of the project's. Absent means the workspace, for a caller with no project.
+   */
+  memoryRoot?: string;
   emit: RunEmit;
   /** The task this run carries out, when it is a task run; re-read per round for its live steps. */
   taskId: string | undefined;
@@ -145,7 +152,7 @@ export function createRunAnnouncements(options: RunAnnouncementsOptions): RunAnn
         ),
       );
     }
-    announce('memory', memoryContext(workspace));
+    announce('memory', await memoryContext(options.memoryRoot ?? workspace));
     // Read per round: a skill written during the run is available from the next round.
     announce(
       'skills',

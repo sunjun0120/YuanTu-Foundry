@@ -19,7 +19,8 @@ import { failureForStatus, failureFromResponse, fetchModel } from './http.ts';
 import { RunFailure, failureCodeOf } from '../protocol/failure.ts';
 import { anthropicSystem, anthropicTools, cacheFields, markLastContentBlock } from './cache.ts';
 import { readSse } from './sse.ts';
-import { anthropicThinkingBudget } from './effort.ts';
+import { anthropicThinkingFields } from './effort.ts';
+import { strictTools } from './strict-tools.ts';
 import { validateImages } from '../protocol/images.ts';
 
 function object(value: unknown): Record<string, unknown> {
@@ -131,17 +132,18 @@ export class AnthropicProvider implements Provider {
     };
     const prompt = projectNativeSystem(request, route, capabilities.systemUpdates);
     /**
-     * Anthropic's extended thinking, sized by our own documented rule (see `effort.ts`).
+     * Anthropic's thinking for the requested level: adaptive with an effort on the models that take it, a budget
+     * sized by our own documented rule on the ones that do not (see `effort.ts`).
      *
-     * Computed before the request rather than inline, because the rule can *refuse*: a request whose output
+     * Computed before the request rather than inline, because the budget rule can *refuse*: a request whose output
      * limit leaves no room for Anthropic's thinking floor is a request this protocol cannot express, and the
      * caller gets that answer before anything is sent. Omitted entirely when no effort was asked for, which is
      * why every run that does not use the seam behaves exactly as before.
      */
     const thinking =
       request.reasoningEffort && !capabilities.reasoning
-        ? anthropicThinkingBudget(request.reasoningEffort, request.maxOutputTokens)
-        : undefined;
+        ? anthropicThinkingFields(model, request.reasoningEffort, request.maxOutputTokens)
+        : {};
     const messages = serialize(
       request.messages,
       capabilities.reasoning ? route : undefined,
@@ -165,9 +167,7 @@ export class AnthropicProvider implements Provider {
             model: request.model ?? this.config.model,
             max_tokens: request.maxOutputTokens,
             stream: true,
-            ...(thinking === undefined
-              ? {}
-              : { thinking: { type: 'enabled', budget_tokens: thinking } }),
+            ...thinking,
             ...(capabilities.reasoning &&
             request.reasoningEffort &&
             request.reasoningEffort !== 'none'
@@ -179,7 +179,14 @@ export class AnthropicProvider implements Provider {
             system: anthropicSystem(prompt.system, cache.blocks),
             messages,
             ...(request.tools.length
-              ? { tools: anthropicTools(request.tools, cache.blocks, cache.toolBreakpoint) }
+              ? {
+                  tools: anthropicTools(
+                    request.tools,
+                    cache.blocks,
+                    cache.toolBreakpoint,
+                    this.config.strictTools ? strictTools(request.tools) : undefined,
+                  ),
+                }
               : {}),
             ...(request.tools.length && request.toolChoice === 'none'
               ? { tool_choice: { type: 'none' } }

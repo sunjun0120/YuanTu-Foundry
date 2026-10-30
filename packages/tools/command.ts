@@ -76,7 +76,7 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
     permission: 'command',
     output: RUN_COMMAND_OUTPUT,
     description:
-      'Run an approved shell command and wait for it: the default for any command that finishes on its own (tests, builds, git, scripts, one-off reads), returning stdout, stderr and exit code in one step. Runs under the selected execution backend and its file/network policy (native isolation is platform-dependent; host mode is unrestricted). Do not detach or background the process; for a server or watcher that keeps running, use start_command. The native sandbox blocks the network by default; set network to true only for a command that genuinely needs it (installing dependencies, fetching), which asks the user to approve that one command.',
+      'Run an approved shell command and wait for it: the default for any command that finishes on its own (tests, builds, git, scripts, one-off reads), returning stdout, stderr and exit code in one step. Not for reading, listing or searching files: read_file, list_files and search_files do that without an approval. Runs under the selected execution backend and its file/network policy (native isolation is platform-dependent; host mode is unrestricted). Do not detach or background the process; for a server or watcher that keeps running, use start_command. The native sandbox blocks the network by default; set network to true only for a command that genuinely needs it (installing dependencies, fetching), which asks the user to approve that one command.',
     inputSchema: {
       type: 'object',
       properties: {

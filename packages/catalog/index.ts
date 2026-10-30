@@ -112,6 +112,8 @@ export function createTools(
   hooks?: HookRegistry,
   bridge: HookBridgeSettings = hookBridgeSettings(),
   sharedTerminals?: TerminalSessions,
+  /** The project whose memories the knowledge tools use, when the tools work somewhere else (a child's worktree). */
+  memoryRoot = root,
 ): ToolRegistry {
   const registry = new ToolRegistry(hooks);
   registry.workspaceRoot = path.resolve(root);
@@ -165,7 +167,7 @@ export function createTools(
   registry.register(deliveryTool(root));
   registry.register(presentTool(root));
   for (const tool of officeTools(root)) registry.register(tool);
-  const knowledge = knowledgeTools(root);
+  const knowledge = knowledgeTools(root, memoryRoot);
   registry.onClose(knowledge.close);
   for (const tool of knowledge.tools) registry.register(tool);
   /**

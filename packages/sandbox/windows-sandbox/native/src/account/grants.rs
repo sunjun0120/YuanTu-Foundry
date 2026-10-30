@@ -969,7 +969,7 @@ mod tests {
     }
 
     /// The root keeps the group from changing any DACL or owner in the workspace, and makes the owner's rights an
-    /// ordinary ACE that the denial comes before; revoking takes all of it back but the desktop user's own ACE.
+    /// ordinary ACE that the denial comes before; revoking takes the added entries back and preserves inherited rights.
     #[test]
     fn the_root_denies_the_group_dacl_changes_ahead_of_owner_rights() {
         let root = scratch("root-control");
@@ -979,6 +979,11 @@ mod tests {
         }
         let user = current_user_sid().unwrap();
         let (group, cap) = ("S-1-5-21-1-2-3-9007", "S-1-5-21-1-2-3-9008");
+        std::fs::write(root.join("src").join("made-before"), "x").unwrap();
+        let inherited_owner_rights: Vec<_> = aces(&root.join("src").join("made-before"))
+            .into_iter()
+            .filter(|(_, _, _, sid)| sid == OWNER_RIGHTS)
+            .collect();
         let directory = open_directory(&root).unwrap().unwrap();
         apply(&directory, &root_entries(group, cap, &user)).unwrap();
         // Applying it twice (one grant per Host process) keeps the denial.
@@ -1008,10 +1013,16 @@ mod tests {
         remove(&directory, &root_trustees(group, cap)).unwrap();
         let list = aces(&root.join("src").join("made-later"));
         assert!(
-            !list
-                .iter()
-                .any(|(_, _, _, s)| s == group || s == cap || s == OWNER_RIGHTS),
+            !list.iter().any(|(_, _, _, s)| s == group || s == cap),
             "{list:?}"
+        );
+        // The parent may already grant OWNER RIGHTS (for example in an agent workspace).
+        // Revocation must remove our grant without removing those pre-existing inherited entries.
+        assert_eq!(
+            list.into_iter()
+                .filter(|(_, _, _, sid)| sid == OWNER_RIGHTS)
+                .collect::<Vec<_>>(),
+            inherited_owner_rights
         );
         drop(directory);
         std::fs::remove_dir_all(&root).unwrap();

@@ -286,6 +286,15 @@ export function normalizeReport(value: Record<string, unknown>): SubAgentSummary
  * the read-only filter keeps have to be named here to be reachable. The current tool and schema sizes are
  * computed by `scripts/docs-facts.mjs` (`npm run docs:generate`), which the docs gate keeps honest.
  */
+/**
+ * Tools no sub-agent may call, whatever its role and whoever built its registry.
+ *
+ * A child sees the delegator's memories and may read them, but what is worth remembering is the delegator's call:
+ * a child's view is one slice of the task, and a memory it saved would be announced to every later session as if
+ * it were settled. So a child reports what it learned, and the parent decides what to keep.
+ */
+export const CHILD_DENIED_TOOLS = ['save_memory', 'forget_memory', 'restore_memory'] as const;
+
 export const EXPLORE_TOOLS = [
   'read_file',
   'read_image',
@@ -308,6 +317,7 @@ export const EXPLORE_TOOLS = [
   'verify_file_delivery',
   'recall_knowledge',
   'list_memories',
+  'read_memory',
   // Asking the user is not an effect, so a read-only child may still ask one thing it cannot decide alone.
   'ask_user_question',
   // The checklist touches no workspace: it records what the child is doing in the child's own session, which

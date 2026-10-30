@@ -177,6 +177,9 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
         // `'false'` and not `'off'`: this key is parsed as `0|1|true|false`, and any other spelling refuses the
         // *whole* environment — which costs a spawned child its life before it reads a single byte.
         YUANTU_SUBAGENTS: 'false',
+        // The scratch workspace has no `.yuantu`, so the child is pointed at the delegator's project to read its
+        // memories. Reading is all it can do there: a memory write needs approval, and the child has no policy.
+        YUANTU_MEMORY_ROOT: request.parent.project ?? request.parent.workspace,
         ...(request.options.toolFilter?.length
           ? { YUANTU_TOOL_ALLOWLIST: request.options.toolFilter.join(',') }
           : {}),

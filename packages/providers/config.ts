@@ -9,6 +9,11 @@ export interface ProviderConfig {
   /** Operator-declared image input support; absence preserves the legacy default. */
   supportsVision?: boolean;
   /**
+   * Send `strict: true` on the tools whose schemas allow it (Anthropic protocol only; `strict-tools.ts`). Opt-in,
+   * because a model or gateway that does not accept the field fails every request.
+   */
+  strictTools?: boolean;
+  /**
    * The window this connection declares for its model.
    *
    * Declared rather than assumed: this runtime cannot know what an endpoint serves, so the number comes from
@@ -115,6 +120,7 @@ export function readConfig(
   const promptCache =
     promptCacheMode(parseSetting(env, 'YUANTU_PROMPT_CACHE') as string | undefined) ?? 'auto';
   const supportsVision = parseSetting(env, 'YUANTU_SUPPORTS_VISION') as boolean | undefined;
+  const strictTools = parseSetting(env, 'YUANTU_STRICT_TOOLS') as boolean | undefined;
   const deepseekCompatibility = parseSetting(
     env,
     'YUANTU_DEEPSEEK_COMPAT',
@@ -125,6 +131,7 @@ export function readConfig(
       : {}),
     ...(deepseekCompatibility === undefined ? {} : { deepseekCompatibility }),
     ...(supportsVision === undefined ? {} : { supportsVision }),
+    ...(strictTools === undefined ? {} : { strictTools }),
     ...(streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs }),
     ...(responseHeadersTimeoutMs === undefined ? {} : { responseHeadersTimeoutMs }),
     // The connection declares its own capacity, from the one owner of those bounds (the settings table).

@@ -238,6 +238,37 @@ export interface PreparedTool {
   approvalIsolation?: string;
   execute(context: ToolContext): Promise<ToolResult>;
 }
+/**
+ * The subsystem a tool belongs to. Internal: it is never sent to a model, which reads names and descriptions.
+ *
+ * One label per tool, so that "which tools are git", "which are memory" is answered in one place rather than by a
+ * list kept next to each feature that needs it. `other` is what an embedder's or an MCP server's tool is when it
+ * declares nothing.
+ */
+export type ToolCategory =
+  | 'files'
+  | 'search'
+  | 'command'
+  | 'job'
+  | 'terminal'
+  | 'validation'
+  | 'git'
+  | 'lsp'
+  | 'browser'
+  | 'office'
+  | 'delivery'
+  | 'web'
+  | 'memory'
+  | 'knowledge'
+  | 'session'
+  | 'goal'
+  | 'interaction'
+  | 'skill'
+  | 'catalog'
+  | 'workspace'
+  | 'subagent'
+  | 'run'
+  | 'other';
 export interface Tool extends ToolSpec {
   /** On deadline, join cooperative cleanup within this bound before returning a timeout. */
   cancellationGraceMs?: number;
@@ -245,6 +276,18 @@ export interface Tool extends ToolSpec {
   permission?: 'write' | 'command' | 'external';
   /** Internal capability used to restrict investigation handoff to workspace file edits. */
   effect?: 'workspace-file' | 'workspace-read';
+  /**
+   * The tool's subsystem, when it declares one. Product tools are classified in `tools/tool-categories.ts`;
+   * this field is how a tool from elsewhere (an embedder, an MCP bridge) says the same about itself.
+   */
+  category?: ToolCategory;
+  /**
+   * Whether the tool is a *query*: it changes nothing, and the same call answers the same until something else
+   * changes. Repeating one unchanged is a model asking a question it already has the answer to, which is what the
+   * repeated-query guard counts. Polling a running job is the counterexample: it changes nothing, but it is
+   * supposed to answer differently as the job moves, so it is not a query.
+   */
+  query?: boolean;
   /**
    * Whether *this* call may run while its siblings from the same assistant message are still running.
    *

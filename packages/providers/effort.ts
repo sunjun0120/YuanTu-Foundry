@@ -1,11 +1,12 @@
 /**
  * Turning "how much reasoning should this request buy" into what each protocol actually accepts.
  *
- * Two of the three protocols speak levels, so they are passed through unchanged. Anthropic has no levels — it
- * takes `thinking.budget_tokens`, a token budget that must be at least 1024 and strictly less than
- * `max_tokens`. There is no reading of Anthropic's API under which "high" is a number, so the mapping is *our*
- * policy and is stated here rather than hidden in the adapter: a level is a fraction of the request's own
- * output limit, because the budget comes out of that same limit.
+ * Two of the three protocols speak levels, so they are passed through unchanged. Anthropic speaks levels too on
+ * its adaptive-thinking models ({@link usesAdaptiveThinking}); older Claude models have no levels — they take
+ * `thinking.budget_tokens`, a token budget that must be at least 1024 and strictly less than `max_tokens`. There
+ * is no reading of that API under which "high" is a number, so the mapping is *our* policy and is stated here
+ * rather than hidden in the adapter: a level is a fraction of the request's own output limit, because the budget
+ * comes out of that same limit.
  */
 import type { ReasoningEffort } from '../protocol/index.ts';
 import { RunFailure } from '../protocol/failure.ts';
@@ -57,4 +58,44 @@ export function anthropicThinkingBudget(
       `Reasoning effort "${effort}" needs an Anthropic thinking budget of at least ${MIN_THINKING_BUDGET_TOKENS} tokens and less than the output limit, which does not fit in this request's output limit of ${maxOutputTokens}`,
     );
   return budget;
+}
+
+/**
+ * Whether a model takes *adaptive* thinking rather than a token budget.
+ *
+ * From Claude Opus 4.6 and Sonnet 4.6 on, Anthropic sizes thinking itself and takes the level as
+ * `output_config.effort`; the budget is deprecated there and refused with a 400 on Opus 4.7 and later and on
+ * every Claude 5 model. Older Claude models (Haiku 4.5, Sonnet and Opus 4.5 and before) only know the budget, and
+ * so does any non-Claude model behind an Anthropic-compatible gateway — which is why the test is the model id and
+ * an unrecognised id keeps the budget it always had. The id may carry a platform prefix or suffix
+ * (`anthropic.claude-opus-5-5`, `claude-opus-4-6@…`), so the family is searched for rather than anchored.
+ */
+const ADAPTIVE_MODEL =
+  /claude-(?:(?:opus|sonnet)-4-[6-9]|(?:opus|sonnet|haiku|fable|mythos)-(?:[5-9]|\d{2,}))(?!\d)/;
+export function usesAdaptiveThinking(model: string): boolean {
+  return ADAPTIVE_MODEL.test(model.toLowerCase());
+}
+
+/**
+ * The request fields that ask an Anthropic model for a level of reasoning, or none when no level was asked for.
+ *
+ * Adaptive models get the level itself (`low`, `medium`, `high` are all levels Anthropic accepts, so nothing is
+ * translated); budget models get {@link anthropicThinkingBudget}, with its refusal when the output limit is too
+ * small. `none` stays the absence of the parameters on both: on the newest models thinking cannot be switched off
+ * at all, and sending `disabled` there is a 400, so leaving the model its default is the only request that works
+ * everywhere.
+ */
+export function anthropicThinkingFields(
+  model: string,
+  effort: ReasoningEffort,
+  maxOutputTokens: number,
+): Record<string, unknown> {
+  if (!usesAdaptiveThinking(model)) {
+    const budget = anthropicThinkingBudget(effort, maxOutputTokens);
+    return budget === undefined ? {} : { thinking: { type: 'enabled', budget_tokens: budget } };
+  }
+  if (effort === 'none') return {};
+  if (SHARE[effort as Exclude<ReasoningEffort, 'none'>] === undefined)
+    throw new RunFailure('unsupported', `Unknown reasoning effort "${String(effort)}"`);
+  return { thinking: { type: 'adaptive' }, output_config: { effort } };
 }

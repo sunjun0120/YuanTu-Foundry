@@ -46,7 +46,8 @@ test('a resident child turn is rebound to the current parent run', async () => {
   let onEvent: ((event: { type: string; data: Record<string, unknown> }) => void) | undefined;
   const childTurns = createChildTurns({
     store: store as never,
-    tools: { forRun: () => ({ close: () => {} }) } as never,
+    // Every child registry is narrowed (memory writes are denied to children), so the stub answers `restrict`.
+    tools: { forRun: () => ({ close: () => {}, restrict: () => () => {} }) } as never,
     emit: emit1,
     sessionId: 'parent',
     taskEffectScope: undefined,
