@@ -688,12 +688,18 @@ test('every delta channel sends a waiting state before its own frame', async () 
   // "preparing the request" back on screen while the model was already answering
   // (`tests/desktop-language.smoke.mjs`, "a stalled title allows the reply").
   const source = await readFile(path.resolve('apps/desktop/main.ts'), 'utf8');
-  const channels = [...source.matchAll(/next\.(subscribe\w*Delta)\(\(delta\) => \{\n([^\n]*)\n/g)];
-  assert.deepEqual(channels.map(([, name]) => name).sort(), [
-    'subscribeDelta',
-    'subscribeStatisticsDelta',
-    'subscribeSubAgentDelta',
-  ]);
-  for (const [, name, first] of channels)
-    assert.match(first!, /^\s*flushState\(\);$/, `${name} flushes the batched state first`);
+  // Git's Windows checkout may use CRLF. Both checkouts must check the same ordering contract.
+  for (const newline of ['\n', '\r\n']) {
+    const checkout = source.replace(/\r?\n/g, newline);
+    const channels = [
+      ...checkout.matchAll(/next\.(subscribe\w*Delta)\(\(delta\) => \{\r?\n([^\r\n]*)\r?\n/g),
+    ];
+    assert.deepEqual(channels.map(([, name]) => name).sort(), [
+      'subscribeDelta',
+      'subscribeStatisticsDelta',
+      'subscribeSubAgentDelta',
+    ]);
+    for (const [, name, first] of channels)
+      assert.match(first!, /^\s*flushState\(\);$/, `${name} flushes the batched state first`);
+  }
 });

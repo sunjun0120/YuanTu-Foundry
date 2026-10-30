@@ -18,7 +18,11 @@ import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
 import { Workspace } from '../packages/tools/files.ts';
 import { workspaceAccess } from '../packages/tools/files.ts';
-import { WorkspaceSearchService } from '../packages/search/service.ts';
+import {
+  WorkspaceSearchService,
+  acquireSearchService,
+  releaseSearchService,
+} from '../packages/search/service.ts';
 import {
   analyzeSymbols,
   blockEnd,
@@ -103,53 +107,55 @@ test('a symbol past 32KiB of a file body is found', async (t) => {
   assert.ok(1201 > 1_000);
 });
 
-test('a symbol in a file past the four hundredth is found, through the tool', async (t) => {
-  const root = await tempRoot(t, 'yuantu-index-many-');
-  for (let index = 0; index < 420; index++) {
-    const directory = path.join(root, `pkg-${String(Math.floor(index / 20)).padStart(2, '0')}`);
-    await mkdir(directory, { recursive: true });
+test(
+  'a symbol in a file past the four hundredth is found, through the tool',
+  { timeout: 60_000 },
+  async (t) => {
+    const root = await tempRoot(t, 'yuantu-index-many-');
+    for (let index = 0; index < 420; index++) {
+      const directory = path.join(root, `pkg-${String(Math.floor(index / 20)).padStart(2, '0')}`);
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        path.join(directory, `file-${String(index).padStart(3, '0')}.ts`),
+        'export const x = 1;',
+      );
+    }
+    // Sorted after every filler file, so it is the four-hundred-and-twenty-first the walk reaches.
     await writeFile(
-      path.join(directory, `file-${String(index).padStart(3, '0')}.ts`),
-      'export const x = 1;',
+      path.join(root, 'zzz-last.ts'),
+      'export function beyondTheCap() { return 1; }\n',
     );
-  }
-  // Sorted after every filler file, so it is the four-hundred-and-twenty-first the walk reaches.
-  await writeFile(path.join(root, 'zzz-last.ts'), 'export function beyondTheCap() { return 1; }\n');
 
-  const tools = createTools(root);
-  /**
-   * The first build runs in the background, and the tool answers `building` while it does — which is the
-   * designed behaviour rather than a failure. A model asks again; this asks again for it.
-   *
-   * The window is generous on purpose: the build parses 421 files and, where the TypeScript compiler is
-   * resolvable, builds a syntax tree for each one. How long that takes is a property of the machine and of how
-   * much else is running, so a tight bound here would test the test host rather than the behaviour. What is being
-   * asserted is that the answer *changes* from "still being built" to the symbol, not how quickly.
-   */
-  let content = '';
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const result = await tools.execute(
-      { id: 'map', name: 'repo_map', arguments: { query: 'beyondTheCap' } },
-      context(),
-    );
-    assert.equal(result.isError, false, result.content);
-    content = result.content;
-    if (!content.includes('still being built')) break;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  assert.doesNotMatch(
-    content,
-    /still being built/,
-    'the background build finished inside the window',
-  );
-  assert.match(content, /zzz-last\.ts:1 function beyondTheCap/);
-  // The list ends with the machine-readable line, so a caller can see the version it came from.
-  assert.match(content, /Retrieval metadata: /);
-  const metadata = JSON.parse(content.slice(content.indexOf('Retrieval metadata: ') + 20));
-  assert.equal(metadata.sourceVersion, 'index:1');
-  assert.equal(metadata.freshness, 'validated');
-  await tools.close();
-});
+    const tools = createTools(root);
+    const search = acquireSearchService(workspaceAccess(new Workspace(root)));
+    try {
+      // The tool starts a background build. Await that shared build rather than racing 421 parses
+      // against a ten-second polling window on the hosted Windows runner.
+      const initial = await tools.execute(
+        { id: 'start-map', name: 'repo_map', arguments: { query: 'beyondTheCap' } },
+        context(),
+      );
+      assert.equal(initial.isError, false, initial.content);
+      await search.ready();
+      const result = await tools.execute(
+        { id: 'map', name: 'repo_map', arguments: { query: 'beyondTheCap' } },
+        context(),
+      );
+      assert.equal(result.isError, false, result.content);
+      const content = result.content;
+      assert.doesNotMatch(content, /still being built/);
+      assert.match(content, /zzz-last\.ts:1 function beyondTheCap/);
+      // The list ends with the machine-readable line, so a caller can see the version it came from.
+      assert.match(content, /Retrieval metadata: /);
+      const metadata = JSON.parse(content.slice(content.indexOf('Retrieval metadata: ') + 20));
+      assert.equal(metadata.sourceVersion, 'index:1');
+      assert.equal(metadata.freshness, 'validated');
+    } finally {
+      await tools.close();
+      await releaseSearchService(search);
+    }
+  },
+);
 
 test('a changed, renamed or deleted file does not keep answering with its old symbol', async (t) => {
   const root = await tempRoot(t, 'yuantu-index-change-');

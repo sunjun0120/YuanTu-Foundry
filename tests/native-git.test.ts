@@ -15,6 +15,7 @@ import { fixture } from './native-git-fixture.ts';
 import { git } from './git-fixture.ts';
 import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
 import { registerSandboxProvider, sandboxProvider } from '../packages/sandbox/sandbox.ts';
+import { nativeGitExecutable } from '../packages/tools/git-native-write.ts';
 
 test('native Git reads use the owned execution environment and preserve repository metadata', async (t) => {
   const { root, tools, policy, counts } = await fixture(t);
@@ -321,8 +322,11 @@ test('native Git refuses a worktree whose committed attributes require a checkou
   await assert.rejects(access(path.join(root, 'filter-ran')));
 });
 
-test('native Git ignores a workspace executable that could forge discovery and config reads', async (t) => {
+test('native Git selects a sandbox-compatible executable outside the workspace', async (t) => {
   const { root, tools, policy } = await fixture(t);
+  // A PATH-selected Homebrew Git loads dylibs outside Seatbelt's platform read grants.
+  // The system launcher and its developer tools are already covered by that policy.
+  if (process.platform === 'darwin') assert.equal(await nativeGitExecutable(root), '/usr/bin/git');
   const bin = path.join(root, 'bin');
   await mkdir(bin);
   if (process.platform === 'win32') await copyFile(process.execPath, path.join(bin, 'git.exe'));

@@ -40,7 +40,8 @@ jobs:
           workspaces: packages/sandbox/windows-sandbox/native -> target
       - run: npm run build:windows-sandbox
       # Report every failing file, as the CI gate does; the exit code is still non-zero on any failure.
-      - run: npm test
+      # Host teardown and the source index compete for I/O on hosted Windows runners.
+      - run: npm test -- --concurrency=2 --timings=.scratch/windows-package-tests.ndjson
         env:
           FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'
       - run: npm run package:windows
@@ -50,6 +51,7 @@ jobs:
           $installer = Get-ChildItem dist/release/*-setup.exe | Select-Object -First 1
           ./scripts/verify-windows-install.ps1 -Installer $installer.FullName -InstallDirectory "$pwd/.scratch/中文 安装验证"
       - name: Installed desktop and bundled runtime
+        id: installed-desktop
         shell: pwsh
         run: |
           $env:PACKAGED_TEST_DIRECTORY = "$pwd/.scratch/中文 安装验证"
@@ -57,13 +59,17 @@ jobs:
           $env:PACKAGED_TEST_WORKSPACE = "$pwd/.scratch/安装保留 workspace"
           $env:PACKAGED_TEST_INSTALLER = (Get-ChildItem dist/release/*-setup.exe | Select-Object -First 1).FullName
           node --test tests/installed-desktop.smoke.mjs
-      - name: Uninstall and retain user data
+      - name: Uninstall installed application
         if: always()
         shell: pwsh
         run: |
           if (Test-Path "$pwd/.scratch/中文 安装验证/YuanTu Agent.exe") {
             ./scripts/verify-windows-install.ps1 -Installer unused -InstallDirectory "$pwd/.scratch/中文 安装验证" -Uninstall
           }
+      - name: Verify retained user data
+        if: always() && steps.installed-desktop.outcome == 'success'
+        shell: pwsh
+        run: |
           if (-not (Test-Path "$pwd/.scratch/安装保留 workspace/.yuantu/sessions.sqlite")) { throw 'Session data was not retained' }
       - name: Build an isolated upgrade candidate
         shell: pwsh
@@ -92,6 +98,16 @@ jobs:
           path: |
             dist/release/*-setup.exe
             dist/release/*-setup.exe.json
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-installation-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            .scratch/test-logs/
+            .scratch/windows-package-tests.ndjson
 
   publish:
     needs: windows-x64

@@ -151,7 +151,10 @@ async function trustedGit(
       /* An absent PATH entry cannot supply Git. */
     }
   }
-  for (const directory of directories) {
+  // Seatbelt grants Apple's Git launcher and its developer tools. Homebrew Git can depend on
+  // Cellar libraries outside those grants; selecting it from PATH makes native Git fail at dyld.
+  // Keep the system tool as the macOS trust anchor rather than widening the sandbox to Homebrew.
+  for (const directory of process.platform === 'darwin' ? ['/usr/bin'] : directories) {
     const candidate = path.join(directory, process.platform === 'win32' ? 'git.exe' : 'git');
     try {
       const executable = await realpath(candidate);
@@ -159,7 +162,13 @@ async function trustedGit(
       const info = await lstat(executable);
       if (!info.isFile()) continue;
       await access(executable, process.platform === 'win32' ? constants.F_OK : constants.X_OK);
-      return { executable, pathValue: directories.join(path.delimiter) };
+      return {
+        executable,
+        pathValue: (process.platform === 'darwin'
+          ? ['/usr/bin', '/bin', '/usr/sbin', '/sbin']
+          : directories
+        ).join(path.delimiter),
+      };
     } catch {
       /* Keep searching trusted absolute PATH entries. */
     }
