@@ -8048,21 +8048,21 @@ body[data-page='settings']
 .chat-page.chat-page-home .composer-statistics {
   display: none;
 }
-.chat-page-home #composer {
+.chat-page.chat-page-home .composer {
   z-index: 1;
   display: flex;
   flex-direction: column;
   min-height: 138px;
   padding: 16px 14px;
 }
-.chat-page-home #composer .prompt {
+.chat-page.chat-page-home .composer .prompt {
   min-height: 64px;
   padding: 0 4px 8px;
   font-size: 14.5px;
   line-height: 22.475px;
   letter-spacing: -0.1912px;
 }
-.chat-page-home #composer .composer-bottom {
+.chat-page.chat-page-home .composer-bottom {
   margin-top: auto;
 }
 .chat-page-home .composer::after {

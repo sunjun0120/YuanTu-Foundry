@@ -17,7 +17,7 @@
     "check:windows-runtime-source": "node scripts/fetch-windows-runtime.mjs --verify-only",
     "package:windows:candidate:dir": "npm run check:windows-runtime-source && npm run build:windows-sandbox && npm run build && node scripts/prepare-windows-package.mjs --candidate=.scratch/windows-runtime/node-v24.19.0-win-x64 && node scripts/copy-search-assets.mjs && electron-builder --config electron-builder.config.cjs --win --x64 --dir && node scripts/check-windows-package.mjs",
     "check:windows-package": "node scripts/check-windows-package.mjs",
-    "package:windows": "npm run build:windows-sandbox && npm run build && node scripts/prepare-windows-package.mjs && node scripts/copy-search-assets.mjs && electron-builder --config electron-builder.config.cjs --win --x64 && node scripts/write-release-manifest.mjs",
+    "package:windows": "npm run build:windows-sandbox && npm run build && node scripts/prepare-windows-package.mjs && node scripts/copy-search-assets.mjs && electron-builder --config electron-builder.config.cjs --win --x64 --publish never && node scripts/write-release-manifest.mjs",
     "package:windows:dir": "npm run build:windows-sandbox && npm run build && node scripts/prepare-windows-package.mjs && node scripts/copy-search-assets.mjs && electron-builder --config electron-builder.config.cjs --win --x64 --dir",
     "package:macos": "node scripts/prepare-macos-package.mjs && node scripts/copy-search-assets.mjs --platform=darwin && npm run build && electron-builder --config electron-builder.config.cjs --mac",
     "package:macos:dir": "node scripts/prepare-macos-package.mjs && node scripts/copy-search-assets.mjs --platform=darwin && npm run build && electron-builder --config electron-builder.config.cjs --mac --dir",
