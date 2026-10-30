@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 /**
@@ -22,7 +23,9 @@ export function traceUnconfirmedShutdown(hostPid: number | undefined, state: str
       hostPid,
       state,
       processes: around(hostPid),
-      ...(process.platform === 'win32' && hostPid !== undefined ? { host: inside(hostPid) } : {}),
+      ...(process.platform === 'win32' && hostPid !== undefined
+        ? { host: inside(hostPid), stacks: stacks(hostPid) }
+        : {}),
     };
     appendFileSync(path.join(artifacts, 'client-shutdown.ndjson'), JSON.stringify(line) + '\n');
   } catch {
@@ -64,6 +67,37 @@ if ($p) {
   } catch {
     return listing.stdout || listing.stderr;
   }
+}
+
+/**
+ * Every thread's stack in a Windows Host that is still alive, from the console debugger of the Windows SDK when the
+ * machine has one (hosted runners do). A Host past its JavaScript `exit` with its main thread in an `Executive` wait
+ * is blocked in a system call; the `ntdll` frame on top names which one. The attach is non-invasive (`-pv`): the
+ * process is suspended only while its stacks are read, and `qd` detaches without ending it. System symbols come from
+ * Microsoft's symbol server into a cache under the runner's temp directory, so only the first trace downloads them.
+ */
+function stacks(hostPid: number): string {
+  const cdb = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles]
+    .filter((root): root is string => Boolean(root))
+    .map((root) => path.join(root, 'Windows Kits', '10', 'Debuggers', 'x64', 'cdb.exe'))
+    .find((candidate) => existsSync(candidate));
+  if (!cdb) return 'cdb.exe is not installed';
+  const cache = path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'foundry-symbols');
+  const listing = spawnSync(
+    cdb,
+    [
+      '-pv',
+      '-p',
+      String(hostPid),
+      '-y',
+      `srv*${cache}*https://msdl.microsoft.com/download/symbols`,
+      '-c',
+      '~*kc 40; qd',
+    ],
+    { encoding: 'utf8', windowsHide: true, timeout: 90_000, maxBuffer: 8 * 1024 * 1024 },
+  );
+  const text = `${listing.stdout ?? ''}${listing.stderr ?? ''}`;
+  return listing.error ? `${String(listing.error)}\n${text}` : text;
 }
 
 function around(hostPid: number | undefined): unknown {
