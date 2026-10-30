@@ -119,31 +119,35 @@ const lowIntegrity = () =>
     code: 1,
   });
 
-test('a helper refusing low integrity is relabelled once and asked again', async (t) => {
-  const state = await tempRoot(t, 'yuantu-account-integrity-');
-  const calls: string[][] = [];
-  const relabels: string[] = [];
-  let labelled = false;
-  configureAccountBackend({
-    helper: 'C:\\fake\\yuantu-sandbox.exe',
-    state,
-    relabel: async (helper) => {
-      relabels.push(helper);
-      labelled = true;
-    },
-    run: async (_helper, args) => {
-      calls.push(args);
-      if (!labelled) throw lowIntegrity();
-      return args[0] === 'account-status' ? status(true) : '{}';
-    },
-  });
-  assert.equal((await refreshAccountReadiness())?.ready, true);
-  assert.deepEqual(relabels, ['C:\\fake\\yuantu-sandbox.exe']);
-  assert.deepEqual(calls, [['account-status'], ['account-status']]);
-  // Later calls find the label already fixed and do not relabel again.
-  await ensureReadRefresh({ PATH: 'C:\\one' });
-  assert.equal(relabels.length, 1);
-});
+test(
+  'a helper refusing low integrity is relabelled once and asked again',
+  { skip: windowsOnly },
+  async (t) => {
+    const state = await tempRoot(t, 'yuantu-account-integrity-');
+    const calls: string[][] = [];
+    const relabels: string[] = [];
+    let labelled = false;
+    configureAccountBackend({
+      helper: 'C:\\fake\\yuantu-sandbox.exe',
+      state,
+      relabel: async (helper) => {
+        relabels.push(helper);
+        labelled = true;
+      },
+      run: async (_helper, args) => {
+        calls.push(args);
+        if (!labelled) throw lowIntegrity();
+        return args[0] === 'account-status' ? status(true) : '{}';
+      },
+    });
+    assert.equal((await refreshAccountReadiness())?.ready, true);
+    assert.deepEqual(relabels, ['C:\\fake\\yuantu-sandbox.exe']);
+    assert.deepEqual(calls, [['account-status'], ['account-status']]);
+    // Later calls find the label already fixed and do not relabel again.
+    await ensureReadRefresh({ PATH: 'C:\\one' });
+    assert.equal(relabels.length, 1);
+  },
+);
 
 test(
   'a helper that stays at low integrity is reported with its own refusal, not as a reinstall',
