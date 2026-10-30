@@ -8,10 +8,11 @@
  * across a rebuild.
  */
 import type { CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
-import type { Message } from '../../../../packages/protocol/index.ts';
+import type { Message, ToolCall } from '../../../../packages/protocol/index.ts';
 import type { RunEnding } from '../../../../packages/protocol/run-cancellation.ts';
 import { isRuntimeContext } from '../../../../packages/protocol/context.ts';
 import type { PresentedFile } from '../../../../packages/protocol/deliverables.ts';
+import { latestTurnStart, mcpTarget, type SummaryCallStatus } from '../panels/summary-model.ts';
 
 export type StepKind = 'result' | 'reasoning' | 'call';
 
@@ -23,9 +24,19 @@ export interface TranscriptStep {
   callIndex: number;
 }
 
+export interface TranscriptMcpCall {
+  key: string;
+  index: number;
+  call: ToolCall;
+  target: NonNullable<ReturnType<typeof mcpTarget>>;
+  resultIndex: number | null;
+  status: SummaryCallStatus;
+}
+
 export type TranscriptSegment =
   | { kind: 'message'; key: string; index: number; message: Message }
   | { kind: 'group'; key: string; steps: TranscriptStep[] }
+  | { kind: 'mcp'; key: string; calls: TranscriptMcpCall[] }
   | {
       kind: 'ending';
       key: string;
@@ -75,6 +86,55 @@ export function transcriptRows(
     });
 }
 
+/** Keep known occurrences anchored before assigning keys to newly loaded or appended calls. */
+function mcpCallKeys(
+  positions: ReadonlyMap<ToolCall, number>,
+  previous: readonly TranscriptMcpCall[],
+): Map<ToolCall, string> {
+  const keys = new Map<ToolCall, string>();
+  const reserved = new Set(previous.map((item) => item.key));
+  const reused = new Set<string>();
+  const signature = (call: ToolCall): string =>
+    JSON.stringify([call.id, call.name, call.arguments]);
+  const previousAt = new Map(
+    previous.map((item) => [`${item.index}:${signature(item.call)}`, item]),
+  );
+  const signatures = new Map([...positions.keys()].map((call) => [call, signature(call)]));
+  const bySignature = new Map<string, TranscriptMcpCall[]>();
+  for (const item of previous) {
+    const key = signature(item.call);
+    const pool = bySignature.get(key) ?? [];
+    pool.push(item);
+    bySignature.set(key, pool);
+  }
+  // Match absolute positions first: prepending an identical older call must not take an existing row's key.
+  for (const [call, index] of positions) {
+    const prior = previousAt.get(`${index}:${signatures.get(call)}`);
+    if (prior) {
+      keys.set(call, prior.key);
+      reused.add(prior.key);
+    }
+  }
+  // Approval refreshes can shift indices. Reconcile the remaining unchanged call values in their old order.
+  for (const call of positions.keys()) {
+    if (keys.has(call)) continue;
+    const pool = bySignature.get(signatures.get(call)!);
+    while (pool?.length && reused.has(pool[0]!.key)) pool.shift();
+    const prior = pool?.shift();
+    if (prior) {
+      keys.set(call, prior.key);
+      reused.add(prior.key);
+      continue;
+    }
+    let ordinal = 0;
+    while (reserved.has(`mcp-call:${call.id}:${ordinal}`)) ordinal++;
+    const key = `mcp-call:${call.id}:${ordinal}`;
+    keys.set(call, key);
+    reserved.add(key);
+  }
+  return keys;
+}
+
 export function transcriptModel(
   snapshot: CarrierSnapshot | null,
   messages: Message[],
@@ -82,6 +142,7 @@ export function transcriptModel(
   turnChanges: Map<number, unknown> = new Map(),
   previousGroups: ReadonlyMap<string, string> = new Map(),
   turnDeliverables: ReadonlyMap<number, PresentedFile[]> = new Map(),
+  previousMcpCalls: readonly TranscriptMcpCall[] = [],
 ): TranscriptModel {
   const rows = transcriptRows(messages, startIndex);
   const endings = [...(snapshot?.session.runEndings ?? [])]
@@ -90,8 +151,36 @@ export function transcriptModel(
   const cards = [...turnChanges.keys()].sort((a, b) => a - b);
   const deliveries = [...turnDeliverables.keys()].sort((a, b) => a - b);
   const segments: TranscriptSegment[] = [];
-  const groups: Extract<TranscriptSegment, { kind: 'group' }>[] = [];
-  let group: Extract<TranscriptSegment, { kind: 'group' }> | null = null;
+  type Group = Extract<TranscriptSegment, { kind: 'group' | 'mcp' }>;
+  const groups: Group[] = [];
+  let group: Group | null = null;
+  // Only absorb a result when its call is visible. A paginated orphan stays a normal result row until
+  // loading older history reveals the call, so an important return value can never disappear.
+  const results = new Map<ToolCall, { index: number; isError: boolean }>();
+  const foldedResults = new Set<number>();
+  const pendingCalls = new Map<string, ToolCall>();
+  const callPositions = new Map<ToolCall, number>();
+  for (const { index, message } of rows) {
+    if (message.role === 'tool') {
+      const call = pendingCalls.get(message.toolCallId);
+      if (call && callPositions.has(call)) {
+        results.set(call, { index, isError: message.isError });
+        foldedResults.add(index);
+      }
+      pendingCalls.delete(message.toolCallId);
+    }
+    if (message.role === 'assistant') {
+      for (const call of message.toolCalls ?? []) {
+        // IDs need only be unique within one response. Include local calls in the pending map so a
+        // later read_file reusing an MCP ID cannot steal that earlier call's result or be hidden.
+        pendingCalls.set(call.id, call);
+        if (mcpTarget(call)) callPositions.set(call, index);
+      }
+    }
+  }
+  const callKeys = mcpCallKeys(callPositions, previousMcpCalls);
+  const turnStart = latestTurnStart(messages) + startIndex;
+  const endedThrough = endings.at(-1)?.afterIndex ?? -1;
   let nextEnding = 0;
   let nextCard = 0;
   let nextDelivery = 0;
@@ -99,26 +188,57 @@ export function transcriptModel(
     group = null;
   };
   const addStep = (step: TranscriptStep): void => {
-    if (!group) {
+    if (!group || group.kind !== 'group') {
       group = { kind: 'group', key: '', steps: [] };
       groups.push(group);
       segments.push(group);
     }
     group.steps.push(step);
   };
+  const addMcpCall = (item: TranscriptMcpCall): void => {
+    if (!group || group.kind !== 'mcp') {
+      group = { kind: 'mcp', key: '', calls: [] };
+      groups.push(group);
+      segments.push(group);
+    }
+    group.calls.push(item);
+  };
   for (const [position, { index, message }] of rows.entries()) {
     const key = (suffix: string): string => `${index}:${suffix}`;
-    if (message.role === 'tool')
-      addStep({ kind: 'result', key: key('result'), index, callIndex: 0 });
-    else if (message.role === 'assistant') {
+    if (message.role === 'tool') {
+      if (!foldedResults.has(index))
+        addStep({ kind: 'result', key: key('result'), index, callIndex: 0 });
+    } else if (message.role === 'assistant') {
       if (message.reasoning && message.reasoning.trim())
         addStep({ kind: 'reasoning', key: key('reasoning'), index, callIndex: 0 });
       if (message.content.trim() || message.interrupted) {
         closeGroup();
         segments.push({ kind: 'message', key: key('message'), index, message });
       }
-      for (const [callIndex] of (message.toolCalls ?? []).entries())
-        addStep({ kind: 'call', key: key(`call:${callIndex}`), index, callIndex });
+      for (const [callIndex, call] of (message.toolCalls ?? []).entries()) {
+        const target = mcpTarget(call);
+        if (!target) {
+          addStep({ kind: 'call', key: key(`call:${callIndex}`), index, callIndex });
+          continue;
+        }
+        const result = results.get(call);
+        addMcpCall({
+          // Approval/context refreshes may insert messages above a call. Its protocol ID survives
+          // that index shift, keeping the card and its open row mounted when the result arrives.
+          key: callKeys.get(call)!,
+          index,
+          call,
+          target,
+          resultIndex: result?.index ?? null,
+          status: result
+            ? result.isError
+              ? 'failed'
+              : 'succeeded'
+            : snapshot?.session.running && index >= turnStart && index > endedThrough
+              ? 'running'
+              : 'interrupted',
+        });
+      }
     } else {
       closeGroup();
       segments.push({ kind: 'message', key: key('message'), index, message });
@@ -168,22 +288,23 @@ export function transcriptModel(
   const used = new Set<string>();
   const groupKeys = new Map<string, string>();
   for (const entry of groups) {
-    const inherited = entry.steps
+    const members = entry.kind === 'group' ? entry.steps : entry.calls;
+    const inherited = members
       .map((step) => previousGroups.get(step.key))
       .find((key): key is string => key !== undefined);
-    let key = inherited ?? `group:${entry.steps[0]!.key}`;
+    let key = inherited ?? `${entry.kind === 'group' ? 'group' : 'mcp'}:${members[0]!.key}`;
     // A boundary revealed inside a previously contiguous interval divides one old group into two: only the first
     // keeps the inherited key, the later ones must stay distinct or React would see duplicate list keys.
     while (used.has(key)) key = `${key}~`;
     used.add(key);
     entry.key = key;
-    for (const step of entry.steps) groupKeys.set(step.key, key);
+    for (const step of members) groupKeys.set(step.key, key);
   }
   return {
     rows,
     segments,
     messageCount: startIndex + messages.length,
-    tail: group === null ? null : segments.indexOf(group),
+    tail: group === null || (group as Group).kind !== 'group' ? null : segments.indexOf(group),
     groupKeys,
   };
 }

@@ -21,10 +21,10 @@ import {
  */
 setLocale('zh-CN');
 
-test('the palette lists the four window commands in order', () => {
+test('the palette lists visible commands in order without export', () => {
   assert.deepEqual(
     commandItems().map((item) => item.value),
-    ['compact', 'export', 'task', 'plan'],
+    ['compact', 'task', 'plan'],
   );
   assert.ok(commandItems().every((item) => item.kind === 'command'));
 });
@@ -44,7 +44,7 @@ test('filtering matches name, description and value, and includes skills', () =>
   ]);
   assert.deepEqual(
     items.map((item) => `${item.kind}:${item.value}`),
-    ['command:compact', 'command:export', 'command:task', 'command:plan', 'skill:review'],
+    ['command:compact', 'command:task', 'command:plan', 'skill:review'],
   );
   const filtered = paletteItems('/pla', false, []);
   assert.deepEqual(
@@ -55,7 +55,7 @@ test('filtering matches name, description and value, and includes skills', () =>
   assert.deepEqual(paletteItems('/', true, []), []);
 });
 
-test('the built-in analysis description follows the interface language without changing local skills', () => {
+test('the palette hides export and code-analysis-report in both languages and all queries', () => {
   const skills = [
     ...builtinSkills({ analysisService: true }),
     { name: 'local-review', description: '项目自定义说明', path: '/workspace/skills/review.md' },
@@ -63,19 +63,25 @@ test('the built-in analysis description follows the interface language without c
   try {
     setLocale('en-US');
     const english = paletteItems('/', false, skills);
-    const analysis = english.find((item) => item.value === 'code-analysis-report');
-    assert.ok(analysis);
-    assert.match(analysis.description, /analys/i);
-    assert.doesNotMatch(analysis.description, /[\u4e00-\u9fff]/);
+    assert.equal(
+      english.some((item) => item.value === 'code-analysis-report' || item.value === 'export'),
+      false,
+    );
+    assert.match(english.find((item) => item.value === 'office-documents')!.description, /Word/);
     assert.equal(
       english.find((item) => item.value === 'local-review')?.description,
       '项目自定义说明',
     );
-    assert.ok(
-      paletteItems('/analyse', false, skills).some((item) => item.value === 'code-analysis-report'),
-    );
+    assert.deepEqual(paletteItems('/analyse', false, skills), []);
+    assert.deepEqual(paletteItems('/export', false, skills), []);
     setLocale('zh-CN');
-    assert.match(paletteItems('/code-analysis', false, skills)[0]!.description, /内置代码分析/);
+    assert.equal(
+      paletteItems('/', false, skills).some(
+        (item) => item.value === 'code-analysis-report' || item.value === 'export',
+      ),
+      false,
+    );
+    assert.deepEqual(paletteItems('/code-analysis', false, skills), []);
   } finally {
     setLocale('zh-CN');
   }
@@ -109,7 +115,11 @@ test('a chosen row leaves the text a person expects', () => {
     promptForChoice({ kind: 'skill', name: 'review', description: '', value: 'review' }),
     '/skill:review ',
   );
-  assert.equal(promptForChoice(commandItems()[1]!), null);
+  assert.equal(promptForChoice(commandItems()[1]!), '/task ');
+  assert.equal(
+    promptForChoice({ kind: 'command', name: 'export', description: '', value: 'export' }),
+    null,
+  );
 });
 
 test('slash commands map to carrier commands and carry the session id for export', () => {

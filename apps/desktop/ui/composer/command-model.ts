@@ -1,8 +1,8 @@
 /**
  * The command vocabulary: the palette rows and the typed slash commands, as data.
  *
- * The menu and the typed form are one vocabulary, so they are defined once here. The two rules that used to live
- * inside the renderer and are easy to lose:
+ * The menu and the typed form are defined here; export remains accepted when typed but is not suggested.
+ * Two important command rules remain:
  *
  * - `/task` is the honest name for the draft command; `/goal` stays accepted for people who learned it;
  * - `/goal` and `/plan` without a description are refused with a sentence, not sent.
@@ -28,12 +28,6 @@ export function commandItems(): PaletteItem[] {
       name: t('ui.compactContext'),
       description: t('command.compactDescription'),
       value: 'compact',
-    },
-    {
-      kind: 'command',
-      name: t('ui.exportSession'),
-      description: t('command.exportDescription'),
-      value: 'export',
     },
     {
       kind: 'command',
@@ -73,15 +67,17 @@ export function paletteItems(
 ): PaletteItem[] {
   const query = commandQuery(text);
   if (query === undefined || dismissed) return [];
-  const skillItems: PaletteItem[] = skills.map((skill) => ({
-    kind: 'skill',
-    name: skill.name,
-    description:
-      skill.path in BUILTIN_SKILL_DESCRIPTIONS
-        ? t(BUILTIN_SKILL_DESCRIPTIONS[skill.path]!)
-        : skill.description,
-    value: skill.name,
-  }));
+  const skillItems: PaletteItem[] = skills
+    .filter((skill) => skill.name !== 'code-analysis-report')
+    .map((skill) => ({
+      kind: 'skill',
+      name: skill.name,
+      description:
+        skill.path in BUILTIN_SKILL_DESCRIPTIONS
+          ? t(BUILTIN_SKILL_DESCRIPTIONS[skill.path]!)
+          : skill.description,
+      value: skill.name,
+    }));
   return [...commandItems(), ...skillItems].filter((item) =>
     `${item.name} ${item.description} ${item.value}`.toLowerCase().includes(query),
   );

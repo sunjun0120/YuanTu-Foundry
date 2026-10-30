@@ -150,6 +150,7 @@ test(
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-ui-'));
     await mkdir(path.join(root, '.yuantu'));
+    await writeFile(path.join(root, 'note.txt'), 'LOCAL_TOOL_OK');
     await writeFile(
       path.join(root, '.yuantu/mcp.json'),
       JSON.stringify({
@@ -168,6 +169,7 @@ test(
         sendFrames(
           res,
           frames('', [
+            { id: 'local-ui', name: 'read_file', input: { path: 'note.txt' } },
             {
               id: 'mcp-ui',
               name: 'mcp_local_call_tool',
@@ -215,6 +217,47 @@ test(
     await page
       .getByRole('heading', { name: translate('approval.title.external', 'zh-CN') })
       .waitFor();
+    const mcpRow = page.locator('.mcp-call[data-call-id="mcp-ui"]');
+    const executionGroup = page.locator('.execution-process');
+    const card = page.locator('.mcp-group');
+    assert.equal(
+      await executionGroup.count(),
+      1,
+      'the MCP execution has one outer process disclosure',
+    );
+    assert.equal(
+      await executionGroup.evaluate((node) => node.open),
+      false,
+      'the whole process starts collapsed',
+    );
+    assert.equal(await card.evaluate((node) => node.open), false, 'MCP cards start collapsed too');
+    assert.equal(
+      await mcpRow.evaluate((node) => node.open),
+      false,
+      'individual calls start collapsed',
+    );
+    await executionGroup.locator(':scope > summary').click();
+    await card.waitFor();
+    assert.equal(
+      await card.evaluate((node) => node.open),
+      false,
+      'opening the process does not expand its cards',
+    );
+    await card.locator(':scope > summary').click();
+    await mcpRow.waitFor();
+    assert.equal(await mcpRow.getAttribute('data-status'), 'running');
+    assert.equal(await mcpRow.locator('.mcp-call-name').innerText(), 'echo');
+    assert.match(await card.locator(':scope > summary').innerText(), /0\/1/);
+    assert.equal(await page.locator('.process-group .tool-call[data-call-id="mcp-ui"]').count(), 0);
+    assert.equal(
+      await page.locator('.process-group .tool-call[data-call-id="local-ui"]').count(),
+      1,
+    );
+    await mcpRow.locator(':scope > summary').click();
+    assert.equal(await mcpRow.evaluate((node) => node.open), true, 'row opens before approval');
+    await page.evaluate(() => {
+      window.__mcpRow = document.querySelector('.mcp-call[data-call-id="mcp-ui"]');
+    });
     await assert.rejects(readFile(path.join(root, 'mcp-pid.txt')), { code: 'ENOENT' });
     await page
       .getByRole('button', { name: translate('approval.allow', 'zh-CN'), exact: true })
@@ -224,6 +267,39 @@ test(
       translate('ui.runStatus.completed', 'zh-CN'),
     );
     assert.match(await page.locator('#messages').textContent(), /MCP_UI_OK/);
+    assert.equal(await mcpRow.getAttribute('data-status'), 'succeeded');
+    assert.equal(
+      await executionGroup.evaluate((node) => node.open),
+      true,
+      'a result keeps the process open',
+    );
+    assert.equal(await card.evaluate((node) => node.open), true, 'a result keeps its card open');
+    assert.match(await card.locator(':scope > summary').innerText(), /1\/1/);
+    assert.equal(
+      await mcpRow.evaluate((node) => node === window.__mcpRow),
+      true,
+      'result arrival retains the row node',
+    );
+    assert.equal(
+      await mcpRow.evaluate((node) => node.open),
+      true,
+      'result arrival retains the open row',
+    );
+    assert.match(await mcpRow.locator('.mcp-call-result').innerText(), /MCP_UI_OK/);
+    assert.equal(
+      await page.locator('.process-group .tool-result').count(),
+      1,
+      'only the local result remains in the ordinary process fold',
+    );
+    await mcpRow.locator(':scope > summary').click();
+    assert.equal(await mcpRow.evaluate((node) => node.open), false);
+    await mcpRow.locator(':scope > summary').focus();
+    await page.keyboard.press('Enter');
+    assert.equal(
+      await mcpRow.evaluate((node) => node.open),
+      true,
+      'the MCP disclosure supports keyboard activation',
+    );
     const pid = Number(await readFile(path.join(root, 'mcp-pid.txt'), 'utf8'));
     // MCP connections are session-scoped now (`packages/catalog/resource-pool.ts`): the stdio server stays
     // alive for the next turn instead of dying with the run. Closing the window closes the Host that pooled it.

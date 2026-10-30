@@ -36,6 +36,7 @@ import {
   type TranscriptModel,
   type TranscriptSegment,
 } from './transcript-model.ts';
+import { buildProcessSections } from './process-sections.ts';
 
 type CardSegment = Extract<TranscriptSegment, { kind: 'card' }>;
 
@@ -120,6 +121,7 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
     sessionId: null,
     revision: 0,
     model: emptyModel(),
+    sections: [],
     fragments: new Map(),
     cards: new Map(),
     footer: null,
@@ -130,6 +132,7 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
   });
   /** Step key → group key of the last model; inherited by the next one so a group can gain steps above it. */
   let previousGroups: ReadonlyMap<string, string> = new Map();
+  let previousProcesses: ReadonlyMap<string, string> = new Map();
   /** Where each fold was scrolled to, keyed by the group key that survives rebuilds. */
   const processScroll = new Map<string, number>();
   /**
@@ -198,7 +201,7 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
     const visible = !chatPage.hidden;
     const scrolls = new Map<string, number>();
     const anchors = new Map<string, ScrollAnchor>();
-    for (const group of host.querySelectorAll<HTMLDetailsElement>(':scope > .process-group')) {
+    for (const group of host.querySelectorAll<HTMLDetailsElement>('.process-group')) {
       const key = group.dataset.processKey;
       const steps = group.querySelector<HTMLElement>('.process-steps');
       if (!key || !steps) continue;
@@ -214,7 +217,7 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
     anchors: Map<string, ScrollAnchor>;
   }): void {
     const current = new Set<string>();
-    for (const group of host.querySelectorAll<HTMLDetailsElement>(':scope > .process-group')) {
+    for (const group of host.querySelectorAll<HTMLDetailsElement>('.process-group')) {
       const key = group.dataset.processKey;
       const steps = group.querySelector<HTMLElement>('.process-steps');
       if (!key || !steps) continue;
@@ -232,8 +235,10 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
     for (const key of processScroll.keys()) if (!current.has(key)) processScroll.delete(key);
   }
 
-  function publish(next: TranscriptState): void {
-    flushSync(() => store.set(next));
+  function publish(next: Omit<TranscriptState, 'sections'>): void {
+    const { sections, keys } = buildProcessSections(next.model.segments, previousProcesses);
+    previousProcesses = keys;
+    flushSync(() => store.set({ ...next, sections }));
   }
 
   function render(messages: Message[], startIndex: number, runPaused: boolean): void {
@@ -246,6 +251,7 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
     if (sessionChanged) {
       sessionId = nextSessionId;
       previousGroups = new Map();
+      previousProcesses = new Map();
       processScroll.clear();
       processOpen.clear();
       runningProcessCalls.clear();
@@ -271,6 +277,11 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
       cards,
       previousGroups,
       deliveries,
+      sessionChanged
+        ? []
+        : store
+            .getSnapshot()
+            .model.segments.flatMap((segment) => (segment.kind === 'mcp' ? segment.calls : [])),
     );
     previousGroups = model.groupKeys;
     const fragments = buildFragments(model, `${sessionId}:${locale()}`);
@@ -301,7 +312,35 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
 
   function updateRunning(): void {
     if (disposed) return;
-    const calls = options.getState()?.session.tools ?? [];
+    const session = options.getState()?.session;
+    const calls = session?.tools ?? [];
+    // Stopping may not append a message. Refresh unfinished MCP statuses without rebuilding the cached
+    // result bodies or disturbing native row disclosures and the local process folds.
+    const current = store.getSnapshot();
+    if (
+      !session?.running &&
+      current.model.segments.some(
+        (segment) =>
+          segment.kind === 'mcp' && segment.calls.some((call) => call.status === 'running'),
+      )
+    ) {
+      publish({
+        ...current,
+        model: {
+          ...current.model,
+          segments: current.model.segments.map((segment) =>
+            segment.kind === 'mcp'
+              ? {
+                  ...segment,
+                  calls: segment.calls.map((call) =>
+                    call.status === 'running' ? { ...call, status: 'interrupted' as const } : call,
+                  ),
+                }
+              : segment,
+          ),
+        },
+      });
+    }
     const started = calls.filter((call) => !runningProcessCalls.has(call.id));
     runningProcessCalls = new Set(calls.map((call) => call.id));
     for (const call of started) {
@@ -375,7 +414,7 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
 
   /** Remember where every fold was scrolled to, before something hides the transcript. */
   function saveScroll(): void {
-    for (const group of host.querySelectorAll<HTMLElement>(':scope > .process-group')) {
+    for (const group of host.querySelectorAll<HTMLElement>('.process-group')) {
       const key = group.dataset.processKey;
       const steps = group.querySelector<HTMLElement>('.process-steps');
       if (key && steps) processScroll.set(key, steps.scrollTop);
@@ -383,7 +422,7 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
   }
   /** Put every fold back where it was; a rebuilt transcript runs this right after its own rebuild. */
   function restoreScroll(): void {
-    for (const group of host.querySelectorAll<HTMLElement>(':scope > .process-group')) {
+    for (const group of host.querySelectorAll<HTMLElement>('.process-group')) {
       const key = group.dataset.processKey;
       const steps = group.querySelector<HTMLElement>('.process-steps');
       if (key && steps) steps.scrollTop = processScroll.get(key) ?? 0;

@@ -1,6 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { directHttpUrl, resolveBrowserAddress, SEARCH_URL } from '../apps/desktop/browser-url.ts';
+import { parseBrowserCommand } from '../apps/desktop/browser-contract.ts';
+
+test('local HTML previews use a bounded document command without widening address navigation', () => {
+  const command = {
+    type: 'preview-html',
+    id: 'report',
+    path: 'report.html',
+    html: '<h1>Report</h1>',
+  };
+  assert.deepEqual(parseBrowserCommand(command), command);
+  for (const input of [
+    { ...command, html: 'x'.repeat(2 * 1024 * 1024 + 1) },
+    { ...command, path: 'report.md' },
+    { ...command, path: 'bad\0.html' },
+    { ...command, html: 22 },
+  ])
+    assert.throws(() => parseBrowserCommand(input));
+  assert.equal(directHttpUrl('data:text/html,<h1>not an address</h1>'), null);
+});
 
 test('direct URLs accept only credential-free http and https', () => {
   assert.equal(directHttpUrl('https://example.com/a?b=1'), 'https://example.com/a?b=1');

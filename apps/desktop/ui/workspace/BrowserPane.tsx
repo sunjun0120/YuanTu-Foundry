@@ -105,6 +105,7 @@ export function BrowserPane({ id, state }: { id: string; state: BrowserState }):
   }, [id, schedule, send]);
 
   const submit = (): void => {
+    if (state.previewPath) return;
     const resolved = resolveBrowserAddress(address);
     if (!resolved) {
       setAddressError(t('browser.unsafeAddress'));
@@ -153,6 +154,7 @@ export function BrowserPane({ id, state }: { id: string; state: BrowserState }):
             aria-label={t('browser.addressLabel')}
             placeholder={t('browser.addressPlaceholder')}
             value={address}
+            readOnly={Boolean(state.previewPath)}
             spellCheck={false}
             autoCapitalize="off"
             autoComplete="off"
@@ -177,7 +179,7 @@ export function BrowserPane({ id, state }: { id: string; state: BrowserState }):
           type="button"
           aria-label={t('browser.openExternal')}
           title={t('browser.openExternal')}
-          disabled={!state.url}
+          disabled={!state.url || Boolean(state.previewPath)}
           onClick={() => send({ type: 'open-external', id, url: state.url })}
         >
           <Icon kind="external" />
@@ -218,6 +220,7 @@ export function BrowserPane({ id, state }: { id: string; state: BrowserState }):
             </button>
             <button
               type="button"
+              disabled={Boolean(state.previewPath)}
               onClick={() => send({ type: 'open-external', id, url: state.error!.url })}
             >
               {t('browser.openExternal')}

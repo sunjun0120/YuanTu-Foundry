@@ -52,7 +52,7 @@ export function turnCardReading(
     key: turn.key,
     afterIndex: turn.afterIndex,
     title: translate('ui.editedFiles', lang, { count: String(files.length) }),
-    hint: translate('ui.previewChanges', lang),
+    hint: translate('ui.clickFileForChanges', lang),
     rows: shown.map((file) => ({ path: file.path, added: file.added, removed: file.removed })),
     hiddenRows: Math.max(0, files.length - shown.length),
     toggleLabel:

@@ -6,6 +6,7 @@
  */
 export const BROWSER_PARTITION = 'persist:yuantu-browser';
 export const MAX_BROWSER_TABS = 8;
+export const MAX_HTML_PREVIEW_CHARS = 2 * 1024 * 1024;
 
 export interface BrowserBounds {
   x: number;
@@ -29,12 +30,15 @@ export interface BrowserState {
   canGoBack: boolean;
   canGoForward: boolean;
   notice: 'popup-blocked' | 'download-blocked' | null;
+  /** A bounded workspace HTML snapshot, loaded without granting the guest filesystem access. */
+  previewPath?: string;
 }
 
 export type BrowserCommand =
   | { type: 'list' }
   | { type: 'create'; id: string }
   | { type: 'navigate'; id: string; url: string }
+  | { type: 'preview-html'; id: string; path: string; html: string }
   | { type: 'back'; id: string }
   | { type: 'forward'; id: string }
   | { type: 'reload'; id: string }
@@ -82,6 +86,19 @@ export function parseBrowserCommand(input: unknown): BrowserCommand {
   if (type === 'list') return { type };
   const tab = id(input.id);
   switch (type) {
+    case 'preview-html': {
+      if (
+        typeof input.path !== 'string' ||
+        !input.path ||
+        input.path.length > 4096 ||
+        /[\x00-\x1f\x7f]/u.test(input.path) ||
+        !/\.html?$/iu.test(input.path) ||
+        typeof input.html !== 'string' ||
+        input.html.length > MAX_HTML_PREVIEW_CHARS
+      )
+        throw new Error('Invalid HTML preview');
+      return { type, id: tab, path: input.path, html: input.html };
+    }
     case 'create':
     case 'back':
     case 'forward':

@@ -13,6 +13,7 @@ import { t } from '../../i18n.ts';
 import { useLocale } from '../i18n.ts';
 import { deliverablesView, goalView, todosView } from './session-panels-model.ts';
 import { ProgressMark } from './ProgressMark.tsx';
+import { DeliverableCard } from './DeliverableCard.tsx';
 
 export function TodosPanel({
   snapshot,
@@ -93,7 +94,7 @@ export function GoalPanel({ goal }: { goal: Goal | null }): ReactNode {
 
 export interface DeliverableActions {
   open?: (path: string) => void;
-  shell?: { open(path: string): void; reveal(path: string): void };
+  shell?: { reveal(path: string): void };
 }
 
 export function DeliverablesPanel({
@@ -124,55 +125,14 @@ export function DeliverablesPanel({
       aria-label={title}
       data-deliverables-turn={turnKey}
     >
-      <div className="deliverables-panel-header">
-        <h2 id={turnKey ? undefined : 'deliverables-title'}>{title}</h2>
-      </div>
       <ul id={turnKey ? undefined : 'deliverables'} className="deliverables">
         {view.rows.map((row) => (
-          <li key={row.path} className="deliverable" title={row.title}>
-            {open ? (
-              <button
-                type="button"
-                className="deliverable-path deliverable-open"
-                translate="no"
-                title={t('ui.openDeliverable')}
-                aria-label={`${t('ui.openDeliverable')}: ${row.path}`}
-                onClick={() => open(row.path)}
-              >
-                {row.path}
-              </button>
-            ) : (
-              <span className="deliverable-path" translate="no">
-                {row.path}
-              </span>
-            )}
-            {shell ? (
-              <span className="deliverable-actions">
-                <button
-                  type="button"
-                  className="deliverable-action"
-                  onClick={() => shell.open(row.path)}
-                >
-                  {t('ui.openWithDefaultApp')}
-                </button>
-                <button
-                  type="button"
-                  className="deliverable-action"
-                  onClick={() => shell.reveal(row.path)}
-                >
-                  {t('ui.revealInFolder')}
-                </button>
-              </span>
-            ) : null}
-            {row.description ? (
-              <>
-                {' — '}
-                <span className="deliverable-description" translate="no">
-                  {row.description}
-                </span>
-              </>
-            ) : null}
-          </li>
+          <DeliverableCard
+            key={row.path}
+            row={row}
+            open={open}
+            reveal={shell ? (path) => shell.reveal(path) : undefined}
+          />
         ))}
       </ul>
     </section>

@@ -89,3 +89,20 @@ export function BuiltMessage({
     <BuiltArticle view={view} message={message} />
   );
 }
+
+/** MCP rows own their disclosure and heading, but keep the exact safe result body and extension slots. */
+export function BuiltToolResultBody({
+  view,
+  message,
+}: {
+  view: HTMLElement;
+  message: Message;
+}): ReactNode {
+  const { body } = useBuiltParts(view, true);
+  return (
+    <div className="mcp-call-result">
+      <div ref={body} className="message-built-body" />
+      <MessageSlot name="tool.result.extra" message={message} />
+    </div>
+  );
+}

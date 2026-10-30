@@ -5,6 +5,32 @@
  */
 /** The conversation: the composer, commands, plans, sub-agents and their transcript. */
 export const conversationMessages: Record<string, [string, string]> = {
+  'mcp.title': ['调用 MCP 能力', 'MCP capabilities'],
+  'process.title': ['执行过程', 'Execution process'],
+  'process.capabilityCalls': ['{count} 次能力调用', '{count} capability calls'],
+  'mcp.completedCount': ['{completed}/{total} 已完成', '{completed}/{total} completed'],
+  'mcp.failedCount': ['{count} 次失败', '{count} failed'],
+  'mcp.builtinTitle': ['调用源图能力', 'YuanTu capabilities'],
+  'mcp.call': ['调用', 'Call'],
+  'mcp.arguments': ['调用参数', 'Arguments'],
+  'mcp.status.running': ['调用中', 'Running'],
+  'mcp.status.succeeded': ['已完成', 'Completed'],
+  'mcp.status.failed': ['失败', 'Failed'],
+  'mcp.status.interrupted': ['未完成', 'Not finished'],
+  'mcp.description.linux_cve_query': [
+    '检索 NVD / MITRE 漏洞数据',
+    'Search NVD / MITRE vulnerability data',
+  ],
+  'mcp.description.kernel_history_analyze': [
+    '聚合年份、严重度与类型分布',
+    'Summarize trends by year, severity, and type',
+  ],
+  'mcp.description.generate_report_html': [
+    '生成可视化分析报告',
+    'Generate a visual analysis report',
+  ],
+  'mcp.description.vuln_query': ['检索漏洞记录', 'Query vulnerability records'],
+  'mcp.description.vuln_impact_analyze': ['分析漏洞影响范围', 'Analyze vulnerability impact'],
   'ui.loadOlderHistory': [
     '加载更早的消息（还有 {count} 条）',
     'Load earlier messages ({count} remaining)',
@@ -273,6 +299,10 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.openLinkFailed': ['打开链接失败', 'Failed to open link'],
   'ui.openWorkspaceFile': ['打开工作区文件', 'Open workspace file'],
   'ui.openWithDefaultApp': ['用默认应用打开', 'Open with default app'],
+  'ui.openInSidebar': ['在右侧打开', 'Open in sidebar'],
+  'ui.viewInSidebar': ['在右侧查看', 'View in sidebar'],
+  'ui.openContainingFolder': ['打开所在文件夹', 'Open containing folder'],
+  'ui.clickFileForChanges': ['点击文件查看具体修改', 'Click a file to view its changes'],
   'ui.revealInFolder': ['显示所在文件夹', 'Show in folder'],
   'ui.image': ['图片', 'Image'],
   'ui.imageNotLoaded': ['未加载', 'not loaded'],

@@ -401,6 +401,11 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'browser.crashed': ['页面进程已退出', 'The page process exited'],
   'browser.reopen': ['重新打开', 'Reopen'],
   'browser.unsafeAddress': ['地址无效或不支持', 'Unsupported or invalid address'],
+  'browser.unavailable': ['右侧浏览器暂不可用', 'The sidebar browser is unavailable'],
+  'browser.htmlPreviewUnavailable': [
+    '此 HTML 文件无法完整预览，请检查文件内容或大小。',
+    'This HTML file cannot be previewed completely. Check its contents or size.',
+  ],
   'browser.tabLimit': ['最多同时打开 8 个浏览器标签', 'At most 8 browser tabs can be open'],
   'browser.postPopupUnsupported': [
     '暂不支持向新标签页提交表单，请在当前页重新操作，或在系统浏览器中重试。',

@@ -99,6 +99,9 @@ export function goalView(goal: Goal | null, lang: UiLanguage): GoalView {
 
 export interface DeliverableRow {
   path: string;
+  label: string;
+  kind: 'html' | 'document';
+  format: string;
   description: string;
   title: string;
 }
@@ -109,10 +112,18 @@ export function deliverablesView(files: PresentedFile[]): {
 } {
   return {
     visible: files.length > 0,
-    rows: files.map((file) => ({
-      path: file.path,
-      description: file.description ?? '',
-      title: `${file.bytes} B · sha256 ${file.sha256.slice(0, 12)}… · ${file.at}`,
-    })),
+    rows: files.map((file) => {
+      const name = file.path.split(/[\\/]/u).pop() || file.path;
+      const extension = name.match(/\.([a-z0-9]{1,10})$/iu)?.[1]?.toUpperCase() ?? 'FILE';
+      const html = extension === 'HTML' || extension === 'HTM';
+      return {
+        path: file.path,
+        label: file.description?.trim() || name,
+        kind: html ? 'html' : 'document',
+        format: html ? 'HTML' : extension,
+        description: file.description ?? '',
+        title: `${file.bytes} B · sha256 ${file.sha256.slice(0, 12)}… · ${file.at}`,
+      };
+    }),
   };
 }

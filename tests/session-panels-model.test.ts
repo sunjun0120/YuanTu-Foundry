@@ -108,6 +108,29 @@ test('presented files keep their path, description and revision title', () => {
   assert.equal(view.visible, true);
   assert.equal(view.rows[0]?.path, 'out/report.md');
   assert.equal(view.rows[0]?.description, 'the report');
+  assert.equal(view.rows[0]?.label, 'the report');
+  assert.equal(view.rows[0]?.kind, 'document');
+  assert.equal(view.rows[0]?.format, 'MD');
   assert.match(view.rows[0]?.title ?? '', /^12 B · sha256 aaaaaaaaaaaa…/);
   assert.equal(deliverablesView([]).visible, false);
+});
+
+test('deliverable cards distinguish HTML from documents and fall back to the filename for a title', () => {
+  const view = deliverablesView(
+    [
+      { path: 'reports/Linux漏洞分析.HTML', description: 'Linux 仓库历史漏洞分析报告' },
+      { path: 'reports/简报.docx', description: '  ' },
+      { path: 'report.htm' },
+      { path: 'README' },
+    ].map((file) => ({ ...file, bytes: 1, sha256: 'a'.repeat(64), at: '' })),
+  );
+  assert.deepEqual(
+    view.rows.map((row) => [row.label, row.kind, row.format]),
+    [
+      ['Linux 仓库历史漏洞分析报告', 'html', 'HTML'],
+      ['简报.docx', 'document', 'DOCX'],
+      ['report.htm', 'html', 'HTML'],
+      ['README', 'document', 'FILE'],
+    ],
+  );
 });

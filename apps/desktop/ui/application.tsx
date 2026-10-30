@@ -145,8 +145,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
         if (!(await invoke({ type: 'openLink', url }))) throw new Error('Open failed');
       },
       async openLocal(path: string) {
-        const reply = await window.yuantu.openWorkspacePath?.(path, 'open');
-        if (!reply?.ok) throw new Error(reply?.error ?? t('ui.openLinkFailed'));
+        await workspaceView.open(path);
       },
     };
 
@@ -332,10 +331,13 @@ export function connectDesktop(runtime: DesktopRuntime) {
       onContinue: () => continuePausedRun(),
       onRequestFullAccess: () => permissionSettings?.requestFullAccess(),
       deliverableActions: {
-        open: (path) => void workspaceView.open(path),
+        open: (path) =>
+          void workspaceView.open(path).catch((error: unknown) => {
+            localError = error instanceof Error ? error.message : String(error);
+            projectSession();
+          }),
         shell: window.yuantu.openWorkspacePath
           ? {
-              open: (path) => openWorkspaceFile(path, 'open'),
               reveal: (path) => openWorkspaceFile(path, 'reveal'),
             }
           : undefined,

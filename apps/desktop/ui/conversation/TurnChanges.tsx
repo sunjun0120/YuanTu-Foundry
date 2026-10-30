@@ -17,12 +17,7 @@ import { translate } from '../../i18n.ts';
 import type { TurnChangedFile, TurnChanges } from '../../turn-changes.ts';
 import type { UiLanguage } from '../../ui-settings.ts';
 import { useLocale } from '../i18n.ts';
-import {
-  turnCardReading,
-  turnPreviewEntries,
-  visibleTurnFiles,
-  type TurnPreviewUndo,
-} from './turn-changes-model.ts';
+import { turnCardReading, turnPreviewEntries, type TurnPreviewUndo } from './turn-changes-model.ts';
 
 /** One card's place in the transcript, and the element React draws its content into. */
 export interface TurnCardView {
@@ -117,7 +112,7 @@ function TurnChangeRow({
   );
 }
 
-/** One card: the heading opens the first file, the rows open theirs, and the toggle unfolds the rest. */
+/** One card: a static heading, file rows that open their changes, and a toggle that unfolds the rest. */
 function TurnChangesCard({
   card,
   lang,
@@ -128,22 +123,15 @@ function TurnChangesCard({
   actions: TurnChangesActions;
 }): ReactNode {
   const reading = turnCardReading(card.turn, card.expanded, lang);
-  const first = visibleTurnFiles(card.turn)[0];
   return (
     <>
-      <button
-        type="button"
-        className="turn-changes-heading"
-        onClick={() => {
-          if (first) actions.open(card.key, first.path);
-        }}
-      >
+      <div className="turn-changes-heading">
         <CardIcon />
         <span className="turn-changes-labels">
           <strong className="turn-changes-title">{reading.title}</strong>
           <span className="turn-changes-hint">{reading.hint}</span>
         </span>
-      </button>
+      </div>
       <div className="turn-changes-list">
         {reading.rows.map((row) => (
           <TurnChangeRow

@@ -23,6 +23,7 @@ interface Entry {
   state: BrowserState;
   visible: boolean;
   bounds: BrowserBounds;
+  htmlUrls: Map<string, string>;
 }
 
 function initialState(id: string): BrowserState {
@@ -110,7 +111,7 @@ export class BrowserViews {
     });
     // A renderer can set location itself; validate every top-level navigation, including redirects.
     const guard = (event: Electron.Event, url: string): void => {
-      if (!directHttpUrl(url)) event.preventDefault();
+      if (!directHttpUrl(url) && !entry.htmlUrls.has(url.split('#', 1)[0]!)) event.preventDefault();
     };
     contents.on('will-navigate', (event, url) => guard(event, url));
     contents.on('will-redirect', (event, url) => guard(event, url));
@@ -124,7 +125,10 @@ export class BrowserViews {
       this.emit(entry);
     });
     const navigated = (_event: Electron.Event, url: string): void => {
-      entry.state.url = url;
+      const path = entry.htmlUrls.get(url.split('#', 1)[0]!);
+      entry.state.url = path ?? url;
+      if (path) entry.state.previewPath = path;
+      else delete entry.state.previewPath;
       entry.state.started = true;
       entry.state.error = null;
       entry.state.notice = null;
@@ -140,7 +144,11 @@ export class BrowserViews {
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
         if (!isMainFrame || errorCode === -3) return;
         entry.state.loading = false;
-        entry.state.error = { code: errorCode, description: errorDescription, url: validatedURL };
+        entry.state.error = {
+          code: errorCode,
+          description: errorDescription,
+          url: entry.htmlUrls.get(validatedURL.split('#', 1)[0]!) ?? validatedURL,
+        };
         this.updateHistory(entry);
         this.emit(entry);
       },
@@ -187,6 +195,7 @@ export class BrowserViews {
       state: initialState(id),
       visible: false,
       bounds: { x: 0, y: 0, width: 0, height: 0 },
+      htmlUrls: new Map(),
     };
     this.entries.set(id, entry);
     this.window.contentView.addChildView(view);
@@ -204,6 +213,38 @@ export class BrowserViews {
     entry.state.crashed = false;
     // A rejected loadURL is for a superseded or cancelled navigation; did-fail-load owns the error page.
     void entry.view.webContents.loadURL(url).catch(() => {});
+    return { ...entry.state };
+  }
+
+  previewHtml(id: string, path: string, html: string): BrowserState {
+    const entry = this.require(id);
+    // The owning Host supplies the bounded text through files.read; the guest receives a snapshot, not a file://
+    // grant. Its scripts run in the existing sandboxed browser with no preload, Node, or application bridge.
+    const url = `data:text/html;charset=utf-8;base64,${Buffer.from(html, 'utf8').toString('base64')}`;
+    entry.htmlUrls.set(url, path);
+    entry.state.url = path;
+    entry.state.previewPath = path;
+    entry.state.title = path.split(/[\\/]/u).pop() || path;
+    entry.state.started = true;
+    entry.state.loading = true;
+    entry.state.error = null;
+    entry.state.crashed = false;
+    entry.state.notice = null;
+    this.emit(entry);
+    void entry.view.webContents
+      .loadURL(url)
+      .then(() => {
+        if (
+          entry.view.webContents.isDestroyed() ||
+          entry.view.webContents.getURL().split('#', 1)[0] !== url
+        )
+          return;
+        entry.view.webContents.navigationHistory.clear();
+        entry.htmlUrls = new Map([[url, path]]);
+        this.updateHistory(entry);
+        this.emit(entry);
+      })
+      .catch(() => {});
     return { ...entry.state };
   }
 
@@ -292,6 +333,8 @@ export class BrowserViews {
         return { ok: true, state: this.create(command.id) };
       case 'navigate':
         return { ok: true, state: this.navigate(command.id, command.url) };
+      case 'preview-html':
+        return { ok: true, state: this.previewHtml(command.id, command.path, command.html) };
       case 'back':
         return { ok: true, state: this.back(command.id) };
       case 'forward':

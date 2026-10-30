@@ -404,6 +404,18 @@ test(
     ]);
     const first = page.locator('.turn-changes').first();
     assert.equal(await first.locator('.turn-change-row').count(), 3);
+    const heading = first.locator('.turn-changes-heading');
+    assert.equal(
+      await heading.evaluate((node) => node.tagName),
+      'DIV',
+      'the change summary heading is static',
+    );
+    await heading.click();
+    assert.equal(
+      await page.locator('#workspace-panel').isVisible(),
+      false,
+      'only a file row opens a change preview',
+    );
     assert.equal(
       await first.evaluate((card) =>
         card.previousElementSibling.textContent.includes('FIRST_FINAL'),

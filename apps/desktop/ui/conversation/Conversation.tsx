@@ -25,8 +25,10 @@ import { useLocale } from '../i18n.ts';
 import type { Message } from '../../../../packages/protocol/index.ts';
 import { BuiltArticle, BuiltDetails } from './BuiltMessage.tsx';
 import { Fold } from './Fold.tsx';
+import { McpCalls } from './McpCalls.tsx';
 import type { TranscriptModel, TranscriptSegment, TranscriptStep } from './transcript-model.ts';
 import { DeliverablesPanel, type DeliverableActions } from '../panels/SessionPanels.tsx';
+import type { ConversationSection, ProcessSegment } from './process-sections.ts';
 
 /** One message's built view, with the pieces the transcript lifts out into process groups. */
 export interface MessageFragment {
@@ -44,6 +46,7 @@ export interface TranscriptState {
   /** Increases on every rebuild; a summary is repainted when it does, exactly as a rebuild used to replace it. */
   revision: number;
   model: TranscriptModel;
+  sections: readonly ConversationSection[];
   fragments: ReadonlyMap<number, MessageFragment>;
   /** Turn-change cards for this rebuild, by the message index they follow. */
   cards: ReadonlyMap<number, HTMLElement>;
@@ -284,6 +287,51 @@ function RunEndingRow({ ending }: { ending: RunEnding }): ReactNode {
   );
 }
 
+function ExecutionProcess({
+  section,
+  registry,
+  children,
+}: {
+  section: { key: string; segments: ProcessSegment[] };
+  registry: GroupRegistry;
+  children: ReactNode;
+}): ReactNode {
+  const count = section.segments.reduce(
+    (total, segment) => total + (segment.kind === 'mcp' ? segment.calls.length : 0),
+    0,
+  );
+  return (
+    <Fold
+      className="execution-process"
+      processKey={section.key}
+      initiallyOpen={registry.wasOpen(section.key) ?? false}
+      onOpenChange={(open) => registry.rememberOpen(section.key, open)}
+      summaryClassName="execution-process-summary"
+      summary={
+        <>
+          <svg
+            className="execution-process-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m4 7 8-4 8 4-8 4Zm0 5 8 4 8-4M4 17l8 4 8-4" />
+          </svg>
+          <span className="execution-process-title">{t('process.title')}</span>
+          <span className="execution-process-count">{t('process.capabilityCalls', { count })}</span>
+          <span className="mcp-chevron" aria-hidden="true" />
+        </>
+      }
+    >
+      <div className="execution-process-body">{children}</div>
+    </Fold>
+  );
+}
+
 export function Conversation({
   state,
   registry,
@@ -297,39 +345,73 @@ export function Conversation({
 }): ReactNode {
   // Every string below comes through `t`/`runEndingText`, and both read the language at call time.
   useLocale();
-  const { model, fragments, cards } = state;
+  const { fragments, cards } = state;
+  const tail = state.sections.at(-1);
+  const liveInProcess =
+    state.liveGroupKey && !state.footer && tail?.kind === 'process' ? tail.key : null;
+  const liveThought = state.liveGroupKey ? (
+    <ProcessGroup
+      key={state.liveGroupKey}
+      groupKey={state.liveGroupKey}
+      steps={[]}
+      fragments={fragments}
+      revision={state.revision}
+      registry={registry}
+      live
+    />
+  ) : null;
+  const renderSegment = (segment: TranscriptSegment): ReactNode => {
+    if (segment.kind === 'mcp')
+      return (
+        <McpCalls
+          key={segment.key}
+          groupKey={segment.key}
+          calls={segment.calls}
+          fragments={fragments}
+          registry={registry}
+        />
+      );
+    if (segment.kind === 'message') {
+      const fragment = fragments.get(segment.index);
+      return fragment ? <MessageRow key={segment.key} fragment={fragment} /> : null;
+    }
+    if (segment.kind === 'group')
+      return (
+        <ProcessGroup
+          key={segment.key}
+          groupKey={segment.key}
+          steps={segment.steps}
+          fragments={fragments}
+          revision={state.revision}
+          registry={registry}
+        />
+      );
+    if (segment.kind === 'ending')
+      return <RunEndingRow key={segment.key} ending={segment.ending} />;
+    if (segment.kind === 'deliverables')
+      return (
+        <DeliverablesPanel
+          key={segment.key}
+          turnKey={segment.key}
+          files={segment.files}
+          {...deliverableActions}
+        />
+      );
+    const view = cards.get(segment.afterIndex);
+    return view ? <TurnChangeRow key={cardKey(segment, view)} view={view} /> : null;
+  };
   return (
     <>
-      {model.segments.map((segment) => {
-        if (segment.kind === 'message') {
-          const fragment = fragments.get(segment.index);
-          return fragment ? <MessageRow key={segment.key} fragment={fragment} /> : null;
-        }
-        if (segment.kind === 'group')
-          return (
-            <ProcessGroup
-              key={segment.key}
-              groupKey={segment.key}
-              steps={segment.steps}
-              fragments={fragments}
-              revision={state.revision}
-              registry={registry}
-            />
-          );
-        if (segment.kind === 'ending')
-          return <RunEndingRow key={segment.key} ending={segment.ending} />;
-        if (segment.kind === 'deliverables')
-          return (
-            <DeliverablesPanel
-              key={segment.key}
-              turnKey={segment.key}
-              files={segment.files}
-              {...deliverableActions}
-            />
-          );
-        const view = cards.get(segment.afterIndex);
-        return view ? <TurnChangeRow key={cardKey(segment, view)} view={view} /> : null;
-      })}
+      {state.sections.map((section) =>
+        section.kind === 'process' ? (
+          <ExecutionProcess key={section.key} section={section} registry={registry}>
+            {section.segments.map(renderSegment)}
+            {liveInProcess === section.key ? liveThought : null}
+          </ExecutionProcess>
+        ) : (
+          renderSegment(section)
+        ),
+      )}
       {state.runPaused ? <PausedNotice onContinue={onContinue} /> : null}
       {state.completion ? (
         <CompletionRow key={completionKey(state.completion)} view={state.completion} />
@@ -340,17 +422,7 @@ export function Conversation({
             return view ? <TurnChangeRow key={cardKey(state.footer, view)} view={view} /> : null;
           })()
         : null}
-      {state.liveGroupKey ? (
-        <ProcessGroup
-          key={state.liveGroupKey}
-          groupKey={state.liveGroupKey}
-          steps={[]}
-          fragments={fragments}
-          revision={state.revision}
-          registry={registry}
-          live
-        />
-      ) : null}
+      {!liveInProcess ? liveThought : null}
     </>
   );
 }

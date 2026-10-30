@@ -41,8 +41,7 @@ export function mountWorkspace(deps: {
       if (!reply.ok) throw new Error(reply.error);
     },
     async openLocal(path: string) {
-      const reply = await window.yuantu.openWorkspacePath?.(path, 'open');
-      if (!reply?.ok) throw new Error(reply?.error ?? 'Open failed');
+      await controller.openPath(path);
     },
   };
   const disposeRegion = host
@@ -108,7 +107,7 @@ export function mountWorkspace(deps: {
       controller.setOpen(true);
       const state = controller.store.getSnapshot();
       if (state.workspace && !state.listings.has('')) void controller.loadDirectory('');
-      await controller.showFile(path);
+      await controller.openPath(path);
     },
     refresh() {
       controller.refresh();

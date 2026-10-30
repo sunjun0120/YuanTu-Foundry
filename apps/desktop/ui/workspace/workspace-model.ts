@@ -16,6 +16,7 @@
 import type { FilesReply } from '../../files-contract.ts';
 import {
   MAX_BROWSER_TABS,
+  MAX_HTML_PREVIEW_CHARS,
   type BrowserCommand,
   type BrowserReply,
   type BrowserState,
@@ -27,6 +28,7 @@ import type {
 } from '../../../../packages/protocol/rpc.ts';
 import type { UiLanguage } from '../../ui-settings.ts';
 import { createStore, type ReadableStore } from '../stores.ts';
+import { translate } from '../../i18n.ts';
 
 export type PanelTab =
   | { kind: 'new' }
@@ -84,7 +86,7 @@ export interface WorkspaceController {
   /** Close the files tab, or fold the panel when it is the last tab. */
   closeFiles(): void;
   /** Create a browser tab in the main process and activate it. */
-  openBrowser(): Promise<string>;
+  openBrowser(options?: { activate?: boolean }): Promise<string>;
   activateBrowser(id: string): void;
   updateBrowser(state: BrowserState): void;
   closeBrowserTab(id: string): void;
@@ -96,6 +98,8 @@ export interface WorkspaceController {
   toggleDirectory(path: string): void;
   refresh(): void;
   showFile(path: string): Promise<void>;
+  /** Open an HTML deliverable in the browser; other files use the existing document/file preview. */
+  openPath(path: string): Promise<void>;
   closeTab(path: string): void;
   setTabScroll(path: string, top: number): void;
   /** Show a diff the transcript already built, without reading the file. */
@@ -152,7 +156,10 @@ export function createWorkspaceController(deps: {
   let tabs = new Map<string, WorkspaceTab>();
   let browserTabs = new Map<string, BrowserState>();
   let browserOrder: string[] = [];
+  const htmlTabs = new Map<string, string>();
+  const htmlReads = new Map<string, number>();
   let browserSequence = 0;
+  let activationIntent = 0;
   const listingTokens = new Map<string, number>();
   const store = createStore<WorkspaceState>({
     workspace,
@@ -191,6 +198,7 @@ export function createWorkspaceController(deps: {
       });
   };
   const setActive = (next: PanelTab): void => {
+    activationIntent++;
     // Activating a closable built-in tab makes it present again; a closed start page is never the active tab.
     if (next.kind === 'new') startOpen = true;
     else if (next.kind === 'files') filesOpen = true;
@@ -317,6 +325,7 @@ export function createWorkspaceController(deps: {
       return true;
     },
     setOpen(next) {
+      if (!next) activationIntent++;
       open = next;
       // Closing the panel leaves fullscreen with it; reopening starts docked.
       if (!next) fullscreen = false;
@@ -347,16 +356,20 @@ export function createWorkspaceController(deps: {
       filesOpen = false;
       finishClose({ kind: 'files' }, index);
     },
-    async openBrowser() {
+    async openBrowser(options) {
       if (!deps.browser) throw new Error('Browser is unavailable');
       if (browserOrder.length >= MAX_BROWSER_TABS) throw new Error('Browser tab limit reached');
+      const activate = options?.activate !== false;
+      const intent = activate ? ++activationIntent : activationIntent;
       const id = `browser-${++browserSequence}`;
       const reply = await deps.browser({ type: 'create', id });
       if (!reply.ok) throw new Error(reply.error);
       browserTabs = new Map(browserTabs).set(id, reply.state ?? emptyBrowserState(id));
       browserOrder = [...browserOrder, id];
-      open = true;
-      setActive({ kind: 'browser', id });
+      if (activate && intent === activationIntent) {
+        open = true;
+        setActive({ kind: 'browser', id });
+      }
       publish();
       return id;
     },
@@ -378,6 +391,7 @@ export function createWorkspaceController(deps: {
       browserTabs = new Map(browserTabs);
       browserTabs.delete(id);
       browserOrder = browserOrder.filter((entry) => entry !== id);
+      for (const [key, tabId] of htmlTabs) if (tabId === id) htmlTabs.delete(key);
       finishClose({ kind: 'browser', id }, index);
     },
     select(path) {
@@ -412,6 +426,72 @@ export function createWorkspaceController(deps: {
       publish();
       for (const path of expanded) void loadDirectory(path);
       for (const tab of tabs.values()) void readTab(tab);
+    },
+    async openPath(path) {
+      if (!/\.html?$/iu.test(path)) {
+        this.setOpen(true);
+        await this.showFile(path);
+        return;
+      }
+      if (!deps.browser) throw new Error(translate('browser.unavailable', deps.locale()));
+      const at = generation;
+      const intent = ++activationIntent;
+      const key = `${workspace}\0${path}`;
+      const token = (htmlReads.get(key) ?? 0) + 1;
+      htmlReads.set(key, token);
+      const current = () =>
+        at === generation &&
+        htmlReads.get(key) === token &&
+        intent === activationIntent &&
+        !disposed;
+      let reply: FilesReply;
+      try {
+        reply = await deps.files({ type: 'read', path, locale: deps.locale() });
+      } catch (error) {
+        if (!current()) return;
+        throw error;
+      }
+      if (!current()) return;
+      if (!reply.ok) throw new Error(reply.error);
+      if (
+        !('preview' in reply) ||
+        reply.preview.kind !== 'text' ||
+        reply.preview.truncated ||
+        typeof reply.preview.text !== 'string' ||
+        reply.preview.text.length > MAX_HTML_PREVIEW_CHARS
+      )
+        throw new Error(translate('browser.htmlPreviewUnavailable', deps.locale()));
+      const existing = htmlTabs.get(key);
+      const id =
+        existing && browserTabs.has(existing)
+          ? existing
+          : await this.openBrowser({ activate: false });
+      if (!current()) {
+        if (id !== existing) this.closeBrowserTab(id);
+        return;
+      }
+      let shown: BrowserReply;
+      try {
+        shown = await deps.browser({ type: 'preview-html', id, path, html: reply.preview.text });
+      } catch (error) {
+        if (!browserTabs.has(id)) return;
+        if (id !== existing) this.closeBrowserTab(id);
+        if (!current()) return;
+        throw error;
+      }
+      // A browser reply can arrive after the user closed its native view. Never recreate that tab in state.
+      if (!browserTabs.has(id)) return;
+      if (!shown.ok) {
+        if (id !== existing) this.closeBrowserTab(id);
+        throw new Error(shown.error);
+      }
+      if (!current()) {
+        if (id !== existing) this.closeBrowserTab(id);
+        return;
+      }
+      htmlTabs.set(key, id);
+      if (shown.state) browserTabs = new Map(browserTabs).set(id, shown.state);
+      this.activateBrowser(id);
     },
     async showFile(path) {
       let tab = tabs.get(path);
@@ -501,6 +581,8 @@ export function createWorkspaceController(deps: {
     },
     dispose() {
       disposed = true;
+      htmlReads.clear();
+      htmlTabs.clear();
       for (const id of browserOrder) void deps.browser?.({ type: 'destroy', id });
     },
   };

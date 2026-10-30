@@ -2,7 +2,7 @@
 // Language switching, sidebar titles, the sub-agent catalog and child pages, and user-message bubbles.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { _electron as electron } from 'playwright';
@@ -134,6 +134,16 @@ test(
   { timeout: 120000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-language-'));
+    // Enough real workspace skills to overflow the palette and exercise scrolling rather than only selection.
+    for (let index = 0; index < 10; index++) {
+      const name = `palette-${String(index).padStart(2, '0')}`;
+      const directory = path.join(root, '.yuantu', 'skills', name);
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        path.join(directory, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: Palette navigation fixture\n---\nRead the current task.`,
+      );
+    }
     const url = await httpFixture(t, async (_body, res) => {
       sendFrames(res, frames('done'));
     });
@@ -193,8 +203,52 @@ test(
         (await page.locator('#command-menu button strong').allTextContents()).filter((name) =>
           name.startsWith('/'),
         ),
-        ['/compact', '/export', '/task', '/plan'],
+        ['/compact', '/task', '/plan'],
       );
+      assert.equal(await page.getByRole('option', { name: /^code-analysis-report\b/ }).count(), 0);
+      const count = await page.locator('#command-menu [role="option"]').count();
+      assert.ok(count >= 13, 'the workspace skills make the menu scrollable');
+      const chatScroll = await page.locator('#chat-page').evaluate((node) => node.scrollTop);
+      const checkSelected = async (index) => {
+        await page.waitForFunction((index) => {
+          const menu = document.getElementById('command-menu');
+          const option = document.getElementById(`command-option-${index}`);
+          if (!menu || !option || option.getAttribute('aria-selected') !== 'true') return false;
+          const bounds = menu.getBoundingClientRect();
+          const row = option.getBoundingClientRect();
+          return (
+            row.top >= bounds.top + menu.clientTop - 1 &&
+            row.bottom <= bounds.top + menu.clientTop + menu.clientHeight + 1
+          );
+        }, index);
+        assert.equal(
+          await page.locator('#prompt').getAttribute('aria-activedescendant'),
+          `command-option-${index}`,
+        );
+        assert.equal(
+          await page.locator('#prompt').evaluate((node) => node === document.activeElement),
+          true,
+        );
+        assert.equal(
+          await page.locator('#chat-page').evaluate((node) => node.scrollTop),
+          chatScroll,
+          'only the palette scrolls',
+        );
+      };
+      // Wrap upward, then downward; also walk through the lower items one by one.
+      await page.locator('#prompt').press('ArrowUp');
+      await checkSelected(count - 1);
+      assert.ok((await page.locator('#command-menu').evaluate((node) => node.scrollTop)) > 0);
+      await page.locator('#prompt').press('ArrowDown');
+      await checkSelected(0);
+      for (let index = 1; index < count; index++) {
+        await page.locator('#prompt').press('ArrowDown');
+        await checkSelected(index);
+      }
+      for (let index = count - 2; index >= 0; index--) {
+        await page.locator('#prompt').press('ArrowUp');
+        await checkSelected(index);
+      }
       await record(found, 'slash-menu');
       await page.locator('#prompt').fill('');
 
