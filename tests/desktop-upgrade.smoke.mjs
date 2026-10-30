@@ -72,13 +72,17 @@ test(
     };
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.NODE_OPTIONS;
-    const launch = () =>
-      electron.launch({
+    // The desktop's stderr carries the UPGRADE_TEST_ERROR dialogs below; without it a failed upgrade is silent.
+    const launch = async () => {
+      const launched = await electron.launch({
         executablePath: path.join(installed, 'YuanTu Agent.exe'),
         args: [`--user-data-dir=${profile}`],
         cwd: installed,
         env,
       });
+      launched.process().stderr?.on('data', (chunk) => process.stderr.write(`[desktop] ${chunk}`));
+      return launched;
+    };
     let app = await launch();
     let newPid;
     t.after(async () => {
@@ -145,7 +149,8 @@ test(
       } catch {}
       await delay(200);
     }
-    assert.equal(journal?.phase, 'completed', JSON.stringify(journal));
+    if (journal?.phase !== 'completed') await reportUpgrade(directoryRoot);
+    assert.equal(journal?.phase, 'completed', `Upgrade journal: ${JSON.stringify(journal)}`);
     assert.equal(journal.confirmedVersion, journal.manifest.version);
     newPid = JSON.parse(await readFile(`${journalFile}.pid`, 'utf8')).pid;
     await closeWindow(newPid);
@@ -163,6 +168,27 @@ test(
     console.log(`Upgrade verified; evidence: ${journalFile}`);
   },
 );
+
+/** Print every small file the upgrade left in its directories (journal, markers, worker log). */
+async function reportUpgrade(directoryRoot) {
+  let directories = [];
+  try {
+    directories = await readdir(directoryRoot);
+  } catch (error) {
+    console.error(`No upgrade directory at ${directoryRoot}: ${error.code}`);
+  }
+  for (const directory of directories) {
+    for (const name of await readdir(path.join(directoryRoot, directory))) {
+      const file = path.join(directoryRoot, directory, name);
+      if (!/\.(json|log|ready|pid)$/.test(name)) {
+        console.error(`[upgrade] ${directory}/${name}`);
+        continue;
+      }
+      const text = await readFile(file, 'utf8').catch((error) => `<${error.code}>`);
+      console.error(`[upgrade] ${directory}/${name}:\n${text.slice(-4000)}`);
+    }
+  }
+}
 
 async function closeWindow(pid) {
   await promisify(execFile)('powershell.exe', [
