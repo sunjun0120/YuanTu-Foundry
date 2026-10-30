@@ -31,6 +31,7 @@ export async function createIsolation(parentRoot, file, resources = [], baseEnv 
     if (/^YUANTU_/.test(key) || /^(?:OPENAI|ANTHROPIC|GEMINI|GOOGLE)_API_KEY$/.test(key))
       delete env[key];
   delete env.NODE_TEST_CONTEXT;
+  delete env.NODE_COMPILE_CACHE;
   // The snapshot regeneration flag is the one variable a worker must never inherit: tests/turn-snapshot reads it
   // and *records* instead of comparing, so an exported value would make the whole snapshot gate pass
   // unconditionally. `scripts/update-snapshots.mjs` re-adds it deliberately for the one run that wants it.
@@ -56,7 +57,10 @@ export async function createIsolation(parentRoot, file, resources = [], baseEnv 
     XDG_CONFIG_HOME: paths.state,
     XDG_DATA_HOME: paths.state,
     XDG_RUNTIME_DIR: paths.tmp,
-    NODE_COMPILE_CACHE: path.join(paths.cache, 'node'),
+    // No compile cache at all. With one, every Node process a test starts persists it as it exits (a temporary file
+    // renamed over the shared entry), after its JavaScript `exit`; on hosted Windows runners that rename stalled
+    // Hosts for over ten seconds and failed their shutdown. Disabling also covers `module.enableCompileCache()`.
+    NODE_DISABLE_COMPILE_CACHE: '1',
     npm_config_cache: path.join(paths.cache, 'npm'),
     // Portable fixtures must not accidentally select a machine-wide native backend.
     // Native acceptance fixtures select their backend explicitly at the operation boundary.
@@ -87,7 +91,7 @@ export async function createIsolation(parentRoot, file, resources = [], baseEnv 
     NODE_OPTIONS: `--import=${bootstrap}`,
   });
   await Promise.all(
-    [env.APPDATA, env.LOCALAPPDATA, env.NODE_COMPILE_CACHE, env.npm_config_cache].map((directory) =>
+    [env.APPDATA, env.LOCALAPPDATA, env.npm_config_cache].map((directory) =>
       mkdir(directory, { recursive: true }),
     ),
   );
