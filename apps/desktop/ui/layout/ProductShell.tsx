@@ -201,6 +201,9 @@ export function ProductShell(): ReactNode {
                   </div>
                 </div>
                 <div className="workspace-anchor">
+                  <div id="summary-root">
+                    <ViewSlot name="summary" />
+                  </div>
                   <button
                     id="open-workspace"
                     className="open-workspace"

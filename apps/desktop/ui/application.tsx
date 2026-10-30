@@ -18,6 +18,7 @@ import { mountModelSettings } from './settings/model-mount.tsx';
 import { diffView } from '../diff-view.ts';
 import { mountAttachments } from './composer/attachment-mount.tsx';
 import { mountBackground } from './panels/background-mount.tsx';
+import { mountSummary } from './panels/summary-mount.tsx';
 import { mountCommandPalette } from './composer/command-mount.tsx';
 import { connectComposer } from './composer/bindings.ts';
 import { mountLiveMessage } from './conversation/live-message-mount.tsx';
@@ -240,6 +241,10 @@ export function connectDesktop(runtime: DesktopRuntime) {
     const backgroundView = mountBackground({ getState: () => state, invoke });
 
     disposers.push(() => backgroundView.dispose());
+
+    const summaryView = mountSummary({ getState: () => state });
+
+    disposers.push(() => summaryView.dispose());
 
     const attachmentsView = mountAttachments({
       getState: () => state,
@@ -561,6 +566,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
         t('ui.untitledSession');
       updateChrome({ workspace: state.workspace, title });
       backgroundView.render();
+      summaryView.render();
 
       renderTasks();
       modelSettings?.updateBusy();
@@ -780,6 +786,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
       'yuantu-settings-open',
       () => {
         backgroundView.close();
+        summaryView.close();
         transcriptView.saveScroll();
       },
       { signal: lifecycle.signal },
@@ -789,6 +796,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
       'yuantu-settings-close',
       () => {
         backgroundView.close();
+        summaryView.close();
         transcriptView.restoreScroll();
       },
       { signal: lifecycle.signal },

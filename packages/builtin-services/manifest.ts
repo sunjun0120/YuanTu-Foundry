@@ -37,11 +37,14 @@ export interface BuiltinServiceManifest {
 /** The production address; `undefined` until the backend publishes one, which registers no service at all. */
 export const PRODUCTION_BASE_URL: string | undefined = undefined;
 
+/** Exported so the window can tell the service's calls apart in a transcript without resolving a manifest. */
+export const BUILTIN_TOOL_PREFIX = 'scan';
+
 const DEFAULTS: Omit<BuiltinServiceManifest, 'baseUrl'> = {
   id: 'yuantu_analysis',
   mcpPath: '/mcp',
   uploadPath: '/upload',
-  toolPrefix: 'scan',
+  toolPrefix: BUILTIN_TOOL_PREFIX,
   callTimeoutMs: 300_000,
   maxTools: 64,
   maxUploadBytes: 200 * 1024 * 1024,
