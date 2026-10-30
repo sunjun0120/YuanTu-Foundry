@@ -2,7 +2,7 @@
 
 本目录把 YuanTu Agent Host 的补丁交给官方 SWE-bench 验收器。冻结子集包含 50 题，另有 5 题冒烟集；no-commands 生成设定仅用于版本间对比，不是排行榜成绩。
 
-数据准备、Host 生成工装、官方验收工作流与报告已完成。2026-10-24 经冒烟后单独授权，完成两版本各 50 题：旧版 `a17ddbc` 为 26/50 resolved（52%），新版 `ec08343` 为 25/50（50%），精确 McNemar p=1，没有检出配对差异。详见[全量报告及可复现记录](runs/full-2026-10-24/README.md)，其中单列空补丁、中断、记录恢复与修改测试文件的样本。两版五题冒烟均为 3/5（60%），见[冒烟记录](runs/smoke-2026-10-24/README.md)。本机不运行被测 Python 仓库的代码，不需要 Docker 或 WSL；全部官方验收均在临时 GitHub-hosted Linux runner 完成。
+数据准备、Host 生成工装、官方验收工作流与报告已完成。仓库不保存历次运行记录。本机不运行被测 Python 仓库的代码，不需要 Docker 或 WSL；全部官方验收均在临时 GitHub-hosted Linux runner 完成。
 
 ## 冻结的数据
 
