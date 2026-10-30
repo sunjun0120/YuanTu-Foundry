@@ -95,6 +95,10 @@ export const conversationMessages: Record<string, [string, string]> = {
     '发消息或描述任务，让想法逐步落地…',
     'Send a message or describe a task...',
   ],
+  'ui.newTaskPlaceholder': [
+    '提出你的需求，@添加上下文，/调用源图能力',
+    'Describe your task, @add context, /use Foundry capabilities',
+  ],
   'ui.newSession': ['新建会话', 'New session'],
   'ui.newTask': ['新建任务', 'New task'],
   'ui.collapseSidebar': ['收起侧边栏', 'Collapse sidebar'],

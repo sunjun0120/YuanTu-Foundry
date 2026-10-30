@@ -17,6 +17,7 @@ import { ModelPicker } from '../settings/ModelPicker.tsx';
 import { modelPicker } from '../settings/model-picker-state.ts';
 import { ProjectSidebar } from '../projects/ProjectSidebar.tsx';
 import { SidebarTooltip } from '../icons/SidebarTooltip.tsx';
+import { OrganicLogo } from '../welcome/OrganicLogo.tsx';
 
 /** Product chrome is owned by React. Child panel containers remain stable across navigation. */
 export function ProductShell(): ReactNode {
@@ -136,7 +137,7 @@ export function ProductShell(): ReactNode {
               active={view.page === 'chat'}
               focusId="open-settings"
               id="chat-page"
-              className="chat-page"
+              className={status.welcomeVisible ? 'chat-page chat-page-home' : 'chat-page'}
             >
               <header>
                 <div className="chat-heading">
@@ -247,23 +248,6 @@ export function ProductShell(): ReactNode {
                 aria-label={t('ui.conversation')}
                 tabIndex={0}
               >
-                <div id="welcome" hidden={!status.welcomeVisible} className="welcome">
-                  <div className="eyebrow">{t('ui.welcomeEyebrow')}</div>
-                  <h1>{t('ui.welcomeStart')}</h1>
-                  <p>{t('ui.welcomeSubtitle')}</p>
-                  <div className="suggestions">
-                    <button data-prompt={t('shell.explorePrompt')}>
-                      <span>01</span>
-                      <strong>{t('ui.exploreProject')}</strong>
-                      <small>{t('ui.learnFolders')}</small>
-                    </button>
-                    <button data-prompt={t('shell.runPrompt')}>
-                      <span>02</span>
-                      <strong>{t('ui.findHowToRun')}</strong>
-                      <small>{t('ui.startWithGuide')}</small>
-                    </button>
-                  </div>
-                </div>
                 <div id="plan-root">
                   <ViewSlot name="plan" />
                 </div>
@@ -345,6 +329,14 @@ export function ProductShell(): ReactNode {
                 </svg>
               </button>
               <footer className="composer-area">
+                <div id="welcome" hidden={!status.welcomeVisible} className="welcome">
+                  <h1 className="welcome-brand">
+                    <span className="welcome-icon">
+                      {status.welcomeVisible && view.page === 'chat' && <OrganicLogo />}
+                    </span>
+                    <span>{t('ui.brandName')}</span>
+                  </h1>
+                </div>
                 <div className="run-status">
                   <span id="run-status" role="status">
                     {status.runStatus || t('shell.connecting')}
@@ -368,7 +360,9 @@ export function ProductShell(): ReactNode {
                     id="prompt"
                     className="prompt"
                     aria-label={t('ui.taskDescription')}
-                    placeholder={t('ui.promptPlaceholder')}
+                    placeholder={t(
+                      status.welcomeVisible ? 'ui.newTaskPlaceholder' : 'ui.promptPlaceholder',
+                    )}
                     rows={2}
                     maxLength={100000}
                     disabled={status.promptDisabled}

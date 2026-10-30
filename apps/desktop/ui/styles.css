@@ -7989,6 +7989,152 @@ body[data-page='settings']
   background: #f3f3f3;
 }
 
+/* New-task hero uses the reference Foundry mark and composer entrance. */
+:root .chat-page-home {
+  overflow-y: auto;
+}
+.chat-page-home .conversation {
+  flex: 0 0 auto;
+  overflow: visible;
+  padding: 0;
+}
+:root .chat-page.chat-page-home .composer-area {
+  max-width: 1020px;
+  margin: clamp(40px, calc((100dvh - 320px) * 0.28), 180px) auto auto;
+  padding: 0 40px 32px;
+}
+.chat-page-home .welcome {
+  position: relative;
+  z-index: 0;
+  max-width: none;
+  margin: 0 auto clamp(18px, 3dvh, 31px);
+}
+.chat-page .welcome .welcome-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.0172px;
+  line-height: normal;
+  white-space: nowrap;
+}
+.welcome-icon,
+.organic-lift {
+  display: block;
+  width: 66.43px;
+  height: 66.43px;
+  flex-shrink: 0;
+}
+.welcome-icon {
+  position: relative;
+}
+.organic-lift {
+  will-change: transform;
+}
+.organic-logo {
+  display: block;
+  overflow: visible;
+  isolation: isolate;
+  opacity: 0;
+}
+.organic-logo.is-ready {
+  opacity: 1;
+}
+.chat-page-home .composer-area > .run-status,
+.chat-page.chat-page-home .composer-statistics {
+  display: none;
+}
+.chat-page-home #composer {
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 138px;
+  padding: 16px 14px;
+}
+.chat-page-home #composer .prompt {
+  min-height: 64px;
+  padding: 0 4px 8px;
+  font-size: 14.5px;
+  line-height: 22.475px;
+  letter-spacing: -0.1912px;
+}
+.chat-page-home #composer .composer-bottom {
+  margin-top: auto;
+}
+.chat-page-home .composer::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: 5;
+  padding: 2px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: conic-gradient(
+    from var(--neon-angle),
+    transparent 0deg,
+    transparent 275deg,
+    #c3fbff 305deg,
+    #707bfe 324deg,
+    #2644ec 337deg,
+    #b0affe 348deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.chat-page-home[data-page-active='true'] .composer::after {
+  animation: composer-neon-scan 3s linear 1 both;
+}
+.chat-page-home .composer:has(.prompt:not(:placeholder-shown), .attachments:not(:empty))::after {
+  visibility: hidden;
+}
+@property --neon-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes composer-neon-scan {
+  0% {
+    --neon-angle: 0deg;
+    opacity: 0;
+  }
+  10%,
+  80% {
+    opacity: 0.9;
+  }
+  100% {
+    --neon-angle: 360deg;
+    opacity: 0;
+  }
+}
+@media (max-width: 900px) {
+  :root .chat-page.chat-page-home .composer-area {
+    padding-inline: 24px;
+  }
+}
+@media (max-width: 600px) {
+  :root .chat-page.chat-page-home .composer-area {
+    padding-inline: 16px;
+  }
+  .chat-page .welcome .welcome-brand {
+    font-size: 26px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-page-home[data-page-active='true'] .composer::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
 /* Reference column colors and follow-up composer. */
 :root[data-theme] .chat-page,
 :root[data-theme] .chat-page > header,

@@ -232,7 +232,7 @@ test(
     assert.equal((await page.locator('#new-session').innerText()).trim(), 'New task');
     assert.equal(
       await page.locator('#prompt').getAttribute('placeholder'),
-      'Send a message or describe a task...',
+      'Describe your task, @add context, /use Foundry capabilities',
     );
     assert.deepEqual(
       await visibleHan(),
@@ -383,6 +383,43 @@ test(
 
     await page.locator('#settings-back').click();
     await fits();
+
+    // New-task entry keeps the typing focus without suppressing its entrance light.
+    await page.locator('#new-session').click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector('#chat-page.chat-page-home') &&
+        document.activeElement?.id === 'prompt' &&
+        !document.querySelector('#prompt').disabled,
+    );
+    const entrance = await page.locator('#composer').evaluate((form) => {
+      const light = getComputedStyle(form, '::after');
+      return { animation: light.animationName, visibility: light.visibility };
+    });
+    assert.equal(entrance.animation, 'composer-neon-scan');
+    assert.equal(entrance.visibility, 'visible');
+
+    // Switching the OS preference at runtime must stop and then resume the live material.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.waitForFunction(
+      () => document.querySelector('.organic-logo')?.dataset.motionState === 'reduced',
+    );
+    const contour = () => page.locator('[data-petal]').first().getAttribute('d');
+    const stillContour = await contour();
+    const nextFrames = () =>
+      page.evaluate(
+        () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      );
+    await nextFrames();
+    assert.equal(await contour(), stillContour);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.waitForFunction(() => {
+      const logo = document.querySelector('.organic-logo');
+      return logo?.dataset.motionState !== 'reduced' && logo?.dataset.phase === 'idle';
+    });
+    const animatedContour = await contour();
+    await nextFrames();
+    assert.notEqual(await contour(), animatedContour);
   },
 );
 

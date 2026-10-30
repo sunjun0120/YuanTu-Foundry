@@ -100,6 +100,7 @@ async function desktopPage(t: test.TestContext) {
         "export {mountSubagents} from './apps/desktop/ui/conversation/subagents-mount.tsx';",
         "export {mountQuestions} from './apps/desktop/ui/conversation/questions-mount.tsx';",
         "export {ProductShell} from './apps/desktop/ui/layout/ProductShell.tsx';",
+        "export {updateChrome} from './apps/desktop/ui/chrome.ts';",
         "export {useLocale} from './apps/desktop/ui/i18n.ts';",
         "export {MantineProvider} from '@mantine/core';",
         "export {flushSync} from 'react-dom';",
@@ -145,7 +146,7 @@ async function planApprovalPage(t: test.TestContext) {
     (async () => {
     localeApi.setLocale('zh-CN');
     document.documentElement.dataset.theme='dark';
-    document.querySelector('#welcome').hidden=true;
+    localeApi.flushSync(() => localeApi.updateChrome({welcomeVisible:false}));
     document.querySelector('#messages').style.height='1800px';
     window.planQuestions=[{id:'approval',request:{questions:[{
       id:'approve',header:'Plan approval',
