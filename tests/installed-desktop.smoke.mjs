@@ -187,7 +187,7 @@ test(
     let page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
     try {
-      await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
+      await page.waitForFunction(() => document.querySelector('#prompt')?.disabled === false);
     } catch (error) {
       console.error(
         'Installed startup snapshot:',
@@ -287,7 +287,7 @@ test(
     app = await launch();
     console.error('[verify] desktop relaunched');
     page = await app.firstWindow();
-    await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
+    await page.waitForFunction(() => document.querySelector('#prompt')?.disabled === false);
     await page.getByText('INSTALLED_HOST_REPLY', { exact: true }).waitFor();
     const loaded = await page.evaluate(() => window.yuantu.invoke({ type: 'snapshot' }));
     assert.equal(loaded.ok, true, loaded.error);

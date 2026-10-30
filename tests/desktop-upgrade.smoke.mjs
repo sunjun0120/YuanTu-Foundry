@@ -80,7 +80,7 @@ test(
     });
     let page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
-    await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
+    await page.waitForFunction(() => document.querySelector('#prompt')?.disabled === false);
     const saved = await page.evaluate(
       (url) =>
         window.yuantu.settings({
@@ -131,7 +131,7 @@ test(
     assert.deepEqual(await readFile(path.join(profile, 'model-settings.json')), settings);
     app = await launch();
     page = await app.firstWindow();
-    await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
+    await page.waitForFunction(() => document.querySelector('#prompt')?.disabled === false);
     await page.getByText('UPGRADE_PRESERVED_REPLY', { exact: true }).waitFor();
     const retained = await page.evaluate(() => window.yuantu.settings({ type: 'get' }));
     assert.equal(retained.settings.hasKey, true);

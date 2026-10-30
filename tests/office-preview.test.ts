@@ -39,7 +39,9 @@ async function fixture(
     renderer: createLibreOfficePreview({
       executable: process.execPath,
       prefixArgs: [script],
-      timeoutMs: mode === 'hang' ? 300 : 5000,
+      // The budget starts before the converter does (the source is copied into a private directory first), so
+      // a hang must outlast that preparation on a slow runner or it times out without a process to terminate.
+      timeoutMs: mode === 'hang' ? 2000 : 5000,
       terminate,
     }),
   };

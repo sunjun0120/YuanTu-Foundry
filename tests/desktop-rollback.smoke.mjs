@@ -141,7 +141,7 @@ test(
     assert.equal(JSON.parse(result.stdout.trim().split('\n').at(-1)).phase, 'rolled-back');
     app = await launch();
     page = await app.firstWindow();
-    await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
+    await page.waitForFunction(() => document.querySelector('#prompt')?.disabled === false);
     await page.getByText('UPGRADE_PRESERVED_REPLY', { exact: true }).waitFor();
     const retained = await page.evaluate(() => window.yuantu.settings({ type: 'get' }));
     assert.equal(retained.settings.hasKey, true);
