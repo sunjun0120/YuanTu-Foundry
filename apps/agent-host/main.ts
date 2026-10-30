@@ -13,6 +13,7 @@ import { createDispatcher, createRequestHandler } from './dispatch.ts';
 import { serveHost } from './lifecycle.ts';
 import { createSchedulerNotifier } from './params.ts';
 import { TaskScheduler } from './scheduler.ts';
+import { markShutdown } from './shutdown-trace.ts';
 import { openHostServices } from './services.ts';
 import { createHostState, fileClaims, lockConflict, runSlotFree, sessionCanRun } from './state.ts';
 
@@ -44,6 +45,10 @@ async function main(): Promise<void> {
     await runHost(launch);
   } finally {
     hostLock.release();
+    // Nothing explicit exits the Host: the process ends once the event loop is empty, so whatever is still
+    // holding it open is the rest of a slow shutdown.
+    markShutdown('lock-released', { resources: process.getActiveResourcesInfo() });
+    process.once('exit', (code) => markShutdown('exit', { code }));
   }
 }
 

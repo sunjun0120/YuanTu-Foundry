@@ -8,6 +8,7 @@ import { settleInteraction } from './approvals.ts';
 import type { HostContext } from './state.ts';
 import { cancelSessionTitles } from './session-title.ts';
 import { startIdleReclaim } from './space-reclaim.ts';
+import { markShutdown } from './shutdown-trace.ts';
 
 /** The one resident release started by shutdown, observed immediately and awaited before store close. */
 const residentCleanup = new WeakMap<HostContext, Promise<void>>();
@@ -101,12 +102,13 @@ export async function serveHost(ctx: HostContext): Promise<void> {
   let reaper: ReturnType<typeof setInterval> | undefined;
   /** Free database pages go back to the disk while nothing runs (`./space-reclaim.ts`). */
   let stopReclaim: (() => void) | undefined;
-  const release = async (action: () => unknown): Promise<void> => {
+  const release = async (action: () => unknown, step?: string): Promise<void> => {
     try {
       await action();
     } catch (error) {
       failures.push(error);
     }
+    if (step) markShutdown(step);
   };
   try {
     // Started only once the read loop is live, so a trigger that fires immediately can dispatch
@@ -151,18 +153,25 @@ export async function serveHost(ctx: HostContext): Promise<void> {
     // Removed before the long unwinding starts, which is what the contract above promises: while these listeners
     // are installed, a second interrupt is swallowed by the idempotent shutdown, so a Host waiting on a
     // minutes-long in-flight request could not be stopped from the console at all.
+    markShutdown('read-loop-ended', {
+      runs: ctx.active.size,
+      tasks: ctx.tasks.size,
+      sessions: ctx.announced.size,
+    });
     removeSignals();
     clearInterval(reaper);
     stopReclaim?.();
-    await release(shutdown);
+    await release(shutdown, 'shutdown');
     // Every answer is written now, including those of the runs the shutdown aborted; stdout is flushed by the
     // exit itself.
     await Promise.allSettled([...ctx.tasks]);
+    markShutdown('tasks-settled');
     // A failed release must not skip the remaining resources, but it must not turn shutdown into success.
     await residentCleanup.get(ctx)?.catch((error: unknown) => {
       residentFailed = true;
       failures.push(error);
     });
+    markShutdown('residents-disposed');
     // Every still-announced session ends with the host, so a hook can flush state it opened.
     for (const sessionId of ctx.announced) {
       const failures = await Promise.resolve()
@@ -187,13 +196,14 @@ export async function serveHost(ctx: HostContext): Promise<void> {
     }
     ctx.announced.clear();
     ctx.sessionLifecyclePhases?.clear();
+    markShutdown('sessions-ended');
     // Every release is attempted, in order, even when another resource refuses to close.
-    await release(() => ctx.terminals.closeAllAndWait());
+    await release(() => ctx.terminals.closeAllAndWait(), 'terminals');
     // The language servers, browsers and MCP connections sessions kept between runs (`resource-pool.ts`).
-    await release(() => closeAllToolResources());
-    await release(() => ctx.background.close());
-    await release(() => ctx.store.close());
-    await release(() => ctx.hooks.close());
+    await release(() => closeAllToolResources(), 'tool-resources');
+    await release(() => ctx.background.close(), 'background');
+    await release(() => ctx.store.close(), 'store');
+    await release(() => ctx.hooks.close(), 'hooks');
   }
   if (failures.length === 1 && !residentFailed) throw failures[0];
   if (failures.length)
