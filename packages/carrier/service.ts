@@ -249,6 +249,14 @@ export class CarrierService {
    * one the question is worth exactly one bounded request (see `SessionController.catchUp`).
    */
   private interrupted = false;
+  /**
+   * Whether the current Host process reached `ready` before it failed.
+   *
+   * Only such a Host is restarted. One that failed on its way up (a database written by a newer build, a store it
+   * cannot open) fails the same way every time: restarting it repeated the refusal three times behind the error
+   * already on screen, and a quit during one of those tries ended in an "exited abnormally" shutdown failure.
+   */
+  private hostReached = false;
   private stopping = false;
   private listeners = new Set<(snapshot: CarrierSnapshot) => void>();
   private deltaListeners = new Set<(delta: MessageDelta) => void>();
@@ -348,13 +356,16 @@ export class CarrierService {
       this.client.subscribeStatus((status) => {
         // A Host that exited on its own is not the end of the session: the log outlives the process, and the
         // app's job is to start a new Host and rebuild from it. Only a stop the user asked for is terminal.
+        if (status === 'ready') this.hostReached = true;
         if (status === 'failed' && !this.stopping) {
+          const wasRunning = this.hostReached;
+          this.hostReached = false;
           this.interrupted = true;
           this.startupStage = 'failed';
           this.error ||= this.supervisesHost
             ? new CarrierError('hostExited')
             : new CarrierError('hostDisconnected');
-          void this.recoverHost();
+          if (wasRunning) void this.recoverHost();
         } else if (
           status === 'ready' &&
           this.interrupted &&

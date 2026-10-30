@@ -106,6 +106,7 @@ test(
     };
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.NODE_OPTIONS;
+    let errors = '';
     const launch = async () => {
       const launched = await electron.launch({
         executablePath: executable,
@@ -113,7 +114,10 @@ test(
         cwd: journal.softwareBackup,
         env,
       });
-      launched.process().stderr?.on('data', (chunk) => process.stderr.write(`[rollback] ${chunk}`));
+      launched.process().stderr?.on('data', (chunk) => {
+        errors += String(chunk);
+        process.stderr.write(`[rollback] ${chunk}`);
+      });
       await launched.evaluate(({ dialog }) => {
         dialog.showErrorBox = (title, message) =>
           console.error(`ROLLBACK_NATIVE_ERROR ${title}: ${message}`);
@@ -131,6 +135,8 @@ test(
     assert.equal(await page.locator('#prompt').isDisabled(), true);
     await app.close();
     app = undefined;
+    // The refusal is already on screen; closing that window must not add an "exited unexpectedly" dialog.
+    assert.doesNotMatch(errors, /ROLLBACK_NATIVE_ERROR/, errors);
     const result = await promisify(execFile)(
       path.join(journal.directory, 'maintenance-node.exe'),
       [

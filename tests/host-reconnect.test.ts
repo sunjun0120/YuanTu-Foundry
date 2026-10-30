@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { AgentHostClient, HostDisconnectedError } from '../packages/client/host-client.ts';
+import { CarrierService } from '../packages/carrier/index.ts';
 import { SCHEMA_VERSION, SessionStore } from '../packages/storage/sqlite.ts';
 import { auditEntries, foldMessages } from '../packages/storage/events.ts';
 import type { Message } from '../packages/protocol/index.ts';
@@ -435,6 +436,47 @@ test('a database written by a newer build is refused with the version named', as
   assert.match(String(failure), new RegExp(`is v${newer}, written by a newer build`));
   assert.match(String(failure), /back up \.yuantu\/sessions\.sqlite/);
   assert.equal(client.status, 'failed');
+});
+
+test('a carrier whose first Host cannot open the database reports it once and closes quietly', async (t) => {
+  // The window that refused a newer database used to keep restarting the Host behind the error, three doomed
+  // tries, and quitting during one of them failed the shutdown with "exited abnormally": an "exited unexpectedly"
+  // dialog after a refusal the person had already been shown. Recovery is for a Host that was running.
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-newer-db-carrier-'));
+  const db = path.join(root, 'sessions.sqlite');
+  new SessionStore(db).close();
+  const stamp = new DatabaseSync(db);
+  stamp.exec(`PRAGMA user_version=${SCHEMA_VERSION + 1}`);
+  stamp.close();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const carrier = new CarrierService({
+    nodePath: process.execPath,
+    hostPath,
+    workspace: root,
+    db,
+    env: {
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_API_KEY: 'newer-db-fixture',
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_SESSION_TITLES: '0',
+    },
+  });
+  const failure = await carrier.start().then(
+    () => assert.fail('the start must fail'),
+    (error: unknown) => error,
+  );
+  assert.match(String(failure), /DATABASE_VERSION/);
+  const refused = carrier['client'].lastPid;
+  // Longer than the recovery pause: a restart would have spawned another Host by now.
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.equal(
+    carrier['client'].lastPid,
+    refused,
+    'no Host is restarted after a failed first start',
+  );
+  assert.equal(carrier.snapshot.startupStage, 'failed');
+  await carrier.stop();
 });
 
 test('a client that missed the approval frame gets it from the queue answer and can still answer it', async (t) => {
