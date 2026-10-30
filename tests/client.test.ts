@@ -696,6 +696,13 @@ test('abnormal exit while stopping is reported as failed shutdown', async (t) =>
 test('unresponsive Host shutdown is bounded and reports forced termination', async (t) => {
   const temp = await tempRoot(t, 'yuantu-forced-');
   const marker = path.join(temp, 'child.txt');
+  // This timeout is the point of the test, and the shutdown trace inspects the Host before it is killed: seconds on
+  // a slow runner, by which time the descendant below has written the marker the kill should have prevented.
+  const trace = process.env.FOUNDRY_TEST_SHUTDOWN_TRACE;
+  delete process.env.FOUNDRY_TEST_SHUTDOWN_TRACE;
+  t.after(() => {
+    if (trace !== undefined) process.env.FOUNDRY_TEST_SHUTDOWN_TRACE = trace;
+  });
   const { client } = await setup(
     t,
     { FIXTURE_MODE: 'ignore-eof', FIXTURE_CHILD_MARKER: marker },

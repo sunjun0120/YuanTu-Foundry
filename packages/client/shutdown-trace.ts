@@ -23,8 +23,13 @@ export function traceUnconfirmedShutdown(hostPid: number | undefined, state: str
       hostPid,
       state,
       processes: around(hostPid),
-      ...(process.platform === 'win32' && hostPid !== undefined
-        ? { host: inside(hostPid), stacks: stacks(hostPid) }
+      ...(process.platform === 'win32' && hostPid !== undefined ? { host: inside(hostPid) } : {}),
+      // Seconds of attach and symbol download, all before the Host is killed, so only when asked for: a test that
+      // times a forced stop on purpose would otherwise watch the Host's descendants outlive the delay.
+      ...(process.platform === 'win32' &&
+      hostPid !== undefined &&
+      process.env.FOUNDRY_TEST_SHUTDOWN_STACKS === '1'
+        ? { stacks: stacks(hostPid) }
         : {}),
     };
     appendFileSync(path.join(artifacts, 'client-shutdown.ndjson'), JSON.stringify(line) + '\n');
@@ -70,8 +75,9 @@ if ($p) {
 }
 
 /**
- * Every thread's stack in a Windows Host that is still alive, from the console debugger of the Windows SDK when the
- * machine has one (hosted runners do). A Host past its JavaScript `exit` with its main thread in an `Executive` wait
+ * Every thread's stack in a Windows Host that is still alive, with `FOUNDRY_TEST_SHUTDOWN_STACKS=1` as well, from the
+ * console debugger of the Windows SDK when the machine has one (hosted runners do). It found the stalls that compile
+ * cache persistence caused after `exit`, which the isolated test environment no longer turns on. A Host past its JavaScript `exit` with its main thread in an `Executive` wait
  * is blocked in a system call; the `ntdll` frame on top names which one. The attach is non-invasive (`-pv`): the
  * process is suspended only while its stacks are read, and `qd` detaches without ending it. System symbols come from
  * Microsoft's symbol server into a cache under the runner's temp directory, so only the first trace downloads them.
