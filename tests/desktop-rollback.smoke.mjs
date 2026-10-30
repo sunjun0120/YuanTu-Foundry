@@ -146,7 +146,32 @@ test(
     app = await launch();
     page = await app.firstWindow();
     await page.waitForFunction(() => document.querySelector('#prompt')?.disabled === false);
-    await page.getByText('UPGRADE_PRESERVED_REPLY', { exact: true }).waitFor();
+    try {
+      await page.getByText('UPGRADE_PRESERVED_REPLY', { exact: true }).waitFor();
+    } catch (error) {
+      // Which workspace and session the restored desktop opened says whether the transcript is missing or elsewhere.
+      const state = await page
+        .evaluate(async () => {
+          const snapshot = await window.yuantu.invoke({ type: 'snapshot' });
+          const { workspace, currentSession, sessions, session, error, errorDetail } =
+            snapshot.state ?? {};
+          return {
+            ok: snapshot.ok,
+            workspace,
+            currentSession,
+            sessions: sessions?.map((item) => ({ id: item.id, title: item.title })),
+            messages: session?.messages?.map((message) => String(message.content).slice(0, 80)),
+            error,
+            errorDetail,
+          };
+        })
+        .catch((reason) => String(reason));
+      console.error(
+        'Restored desktop snapshot:',
+        JSON.stringify({ expectedWorkspace: env.YUANTU_WORKSPACE, state }),
+      );
+      throw error;
+    }
     const retained = await page.evaluate(() => window.yuantu.settings({ type: 'get' }));
     assert.equal(retained.settings.hasKey, true);
     assert.equal(await app.evaluate(({ app }) => app.getVersion()), journal.current.version);
