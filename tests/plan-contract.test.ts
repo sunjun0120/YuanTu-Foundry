@@ -13,6 +13,7 @@ import { LEASE_RENEW_INTERVAL_MS } from '../packages/protocol/session-lease.ts';
 import { SqlitePlanStore } from '../packages/storage/plans.ts';
 import { createPlanningTools } from '../packages/core/plan-tools.ts';
 import type { Plan, Questioner, ToolContext } from '../packages/protocol/index.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 const body = { title: '  Plan  ', summary: '  Summary  ', steps: ['  First  '] };
 function memoryPlans(t: test.TestContext): { db: DatabaseSync; store: SqlitePlanStore } {
@@ -201,13 +202,13 @@ test('plan panel shows its pending question and jumps to it, clearing after answ
   };
   const waiting = planView(plan, true, 'question-1', 'zh-CN');
   assert.equal(waiting.visible, true);
-  assert.equal(waiting.status, '规划正在等待你的回答');
+  assert.equal(waiting.status, translate('plan.waitingAnswer', 'zh-CN'));
   assert.deepEqual(
     waiting.actions.map((action) => action.kind),
     ['question'],
   );
   assert.equal(waiting.actions[0]?.questionId, 'question-1');
-  assert.equal(waiting.actions[0]?.label, '前往问题');
+  assert.equal(waiting.actions[0]?.label, translate('plan.showQuestion', 'zh-CN'));
 
   assert.equal(
     planView(plan, true, 'question-1', 'en-US').status,
@@ -216,19 +217,16 @@ test('plan panel shows its pending question and jumps to it, clearing after answ
   // A waiting question still outranks a proposed plan: approval is not the next step while the run waits.
   assert.equal(
     planView({ ...plan, status: 'proposed' }, true, 'question-1', 'zh-CN').status,
-    '规划正在等待你的回答',
+    translate('plan.waitingAnswer', 'zh-CN'),
   );
   // Answered and idle, the row says waiting for the next step and offers the action that leaves plan mode.
   const idle = planView(plan, false, null, 'zh-CN');
-  assert.equal(idle.status, '计划模式 · 等待下一步');
+  assert.equal(idle.status, translate('plan.status.planningIdle', 'zh-CN'));
   assert.deepEqual(
     idle.actions.map((action) => [action.kind, action.label]),
-    [['discard', '退出计划模式']],
+    [['discard', translate('plan.exitMode', 'zh-CN')]],
   );
-  assert.equal(
-    idle.hint,
-    '这次运行没有产出计划。可以直接回复补充信息，让它继续制定；不想再计划就退出计划模式。',
-  );
+  assert.equal(idle.hint, translate('plan.idleHint', 'zh-CN'));
 });
 
 test('the plan gate offers approval, execution and the stopped states', () => {
@@ -253,17 +251,17 @@ test('the plan gate offers approval, execution and the stopped states', () => {
       ['reject', true],
     ],
   );
-  assert.equal(proposed.hint, '批准前不会执行任何写入；执行时代理会再次校验计划内容未变。');
+  assert.equal(proposed.hint, translate('plan.gateHint', 'zh-CN'));
   const approved = planView({ ...plan, status: 'approved' }, false, null, 'en-US');
   assert.deepEqual(
     approved.actions.map((action) => [action.kind, action.disabled]),
     [['execute', false]],
   );
-  assert.equal(approved.hint, 'Approved; ready to execute.');
+  assert.equal(approved.hint, translate('plan.approvedHint', 'en-US'));
   assert.deepEqual(planView({ ...plan, status: 'rejected' }, false, null, 'zh-CN').actions, []);
   assert.equal(
     planView({ ...plan, status: 'rejected' }, false, null, 'zh-CN').hint,
-    '计划已被拒绝，可重新制定。',
+    translate('plan.rejectedHint', 'zh-CN'),
   );
   assert.equal(planView({ ...plan, status: 'abandoned' }, false, null, 'zh-CN').visible, true);
   // No plan at all: the panel is gone, not an empty dialog.

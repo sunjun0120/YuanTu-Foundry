@@ -3,6 +3,7 @@
 // the error boundary. The page under test is the product index.html (its CSP, nonce meta and stylesheet order),
 // bundled with a probe component because no product region has moved yet.
 import test from 'node:test';
+import { translate } from '../apps/desktop/i18n.ts';
 import assert from 'node:assert/strict';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
@@ -679,22 +680,26 @@ test('the React layer mounts into the product document', { skip: electronSkip },
 
   // Language: the walker translates the legacy node, React re-renders through useLocale, and the walker leaves
   // the React-owned raw text exactly as React rendered it.
-  assert.equal(await page.locator('#legacy-copy').innerText(), '新建会话');
+  assert.equal(await page.locator('#legacy-copy').innerText(), translate('ui.newSession', 'zh-CN'));
   await page.evaluate(() => window.__ui.setLocale('en-US'));
   await page.waitForFunction(
     () => document.getElementById('react-copy').textContent === 'New session',
   );
-  assert.equal(await page.locator('#react-copy').innerText(), 'New session');
+  assert.equal(await page.locator('#react-copy').innerText(), translate('ui.newSession', 'en-US'));
   assert.equal(
     await page.locator('#legacy-copy').innerText(),
-    '新建会话',
+    translate('ui.newSession', 'zh-CN'),
     'locale changes do not rewrite unrelated DOM',
   );
-  assert.equal(await page.locator('#react-raw').innerText(), '新建会话');
-  assert.equal(await page.locator('#react-input').getAttribute('placeholder'), 'Search sessions');
+  assert.equal(await page.locator('#react-raw').innerText(), translate('ui.newSession', 'zh-CN'));
+  assert.equal(
+    await page.locator('#react-input').getAttribute('placeholder'),
+    translate('ui.searchSessions', 'en-US'),
+  );
   await page.evaluate(() => window.__ui.setLocale('zh-CN'));
   await page.waitForFunction(
-    () => document.getElementById('legacy-copy').textContent === '新建会话',
+    (text) => document.getElementById('legacy-copy').textContent === text,
+    translate('ui.newSession', 'zh-CN'),
   );
 
   // The error boundary says what happened in the interface language and offers the retry that remounts the region.
@@ -705,7 +710,7 @@ test('the React layer mounts into the product document', { skip: electronSkip },
   await page.evaluate(() => window.__ui.setExplode(false));
   await page.locator('[data-ui-error] button').click();
   await page.waitForSelector('#react-copy');
-  assert.equal(await page.locator('#react-copy').innerText(), 'New session');
+  assert.equal(await page.locator('#react-copy').innerText(), translate('ui.newSession', 'en-US'));
 });
 
 test(
@@ -848,7 +853,10 @@ test(
     await page.waitForSelector('#ui-appearance');
     const system = page.locator('#ui-appearance button[data-value="system"]');
     assert.equal(await system.getAttribute('aria-pressed'), 'true');
-    await page.locator('#ui-appearance').getByRole('button', { name: '深色', exact: true }).click();
+    await page
+      .locator('#ui-appearance')
+      .getByRole('button', { name: translate('general.appearanceDark', 'zh-CN'), exact: true })
+      .click();
     const alert = page.locator('[data-settings-error]');
     await alert.waitFor();
     assert.match(await alert.innerText(), /save refused by test/);

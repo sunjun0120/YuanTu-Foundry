@@ -15,6 +15,7 @@ import {
 } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 // ---- merged from task-editor.smoke.mjs ----
 
@@ -91,7 +92,9 @@ test(
     await idle();
     const card = page.locator('.task-card').first();
     assert.equal(
-      await card.getByRole('button', { name: '开始执行', exact: true }).isVisible(),
+      await card
+        .getByRole('button', { name: translate('task.start', 'zh-CN'), exact: true })
+        .isVisible(),
       true,
     );
     let state = await page.evaluate(
@@ -101,39 +104,65 @@ test(
     assert.equal(state.tasks[0].attemptCount, 0);
     assert.equal(state.session.messages.filter((m) => m.role === 'tool').length, 0);
     const proposalRequests = requests;
-    await card.getByRole('button', { name: '编辑', exact: true }).click();
+    await card.getByRole('button', { name: translate('task.edit', 'zh-CN'), exact: true }).click();
     assert.equal(
       await card.locator('select').count(),
       0,
       'the React task editor uses visible Mantine controls',
     );
-    await card.getByLabel('标题', { exact: true }).fill('Edited output review');
+    await card
+      .getByLabel(translate('task.editor.title', 'zh-CN'), { exact: true })
+      .fill('Edited output review');
     // Snapshot refresh must preserve the active editor and its draft input.
     await page.locator('#refresh-tasks').click();
     await idle();
     assert.equal(
-      await card.getByLabel('标题', { exact: true }).inputValue(),
+      await card.getByLabel(translate('task.editor.title', 'zh-CN'), { exact: true }).inputValue(),
       'Edited output review',
     );
-    await card.getByRole('button', { name: '添加验收标准', exact: true }).click();
+    await card
+      .getByRole('button', { name: translate('task.editor.add', 'zh-CN'), exact: true })
+      .click();
     const criterion = card.locator('.task-criterion').last();
-    await criterion.getByLabel('标准描述', { exact: true }).fill('File content matches');
-    await criterion.getByLabel('检查方式', { exact: true }).click();
-    await page.getByRole('option', { name: '执行验收命令', exact: true }).click();
-    await criterion.getByLabel('命令 / 可执行文件', { exact: true }).fill('node');
-    await criterion.getByLabel('参数（可选，JSON 字符串数组）', { exact: true }).fill('[1]');
-    await card.getByRole('button', { name: '保存草稿', exact: true }).click();
+    await criterion
+      .getByLabel(translate('task.editor.criterion', 'zh-CN'), { exact: true })
+      .fill('File content matches');
+    await criterion
+      .getByLabel(translate('task.editor.checkKind', 'zh-CN'), { exact: true })
+      .click();
+    await page
+      .getByRole('option', { name: translate('task.editor.commandKind', 'zh-CN'), exact: true })
+      .click();
+    await criterion
+      .getByLabel(translate('task.editor.command', 'zh-CN'), { exact: true })
+      .fill('node');
+    await criterion.getByLabel(translate('task.editor.args', 'zh-CN'), { exact: true }).fill('[1]');
+    await card
+      .getByRole('button', { name: translate('task.editor.save', 'zh-CN'), exact: true })
+      .click();
     assert.equal(await card.locator('.task-editor').isVisible(), true);
-    await criterion.getByText('请输入字符串数组，例如 ["--check"]', { exact: true }).waitFor();
-    await criterion.getByLabel('检查方式', { exact: true }).click();
-    await page.getByRole('option', { name: '文件内容完全匹配', exact: true }).click();
-    await criterion.getByLabel('相对工作区路径', { exact: true }).fill('result.txt');
-    await criterion.getByLabel('期望文本', { exact: true }).fill('expected output');
-    await card.getByRole('button', { name: '保存草稿', exact: true }).click();
+    await criterion
+      .getByText(translate('task.editor.argsInvalid', 'zh-CN'), { exact: true })
+      .waitFor();
+    await criterion
+      .getByLabel(translate('task.editor.checkKind', 'zh-CN'), { exact: true })
+      .click();
+    await page
+      .getByRole('option', { name: translate('task.editor.fileExact', 'zh-CN'), exact: true })
+      .click();
+    await criterion
+      .getByLabel(translate('task.editor.path', 'zh-CN'), { exact: true })
+      .fill('result.txt');
+    await criterion
+      .getByLabel(translate('task.editor.expected', 'zh-CN'), { exact: true })
+      .fill('expected output');
+    await card
+      .getByRole('button', { name: translate('task.editor.save', 'zh-CN'), exact: true })
+      .click();
     await card.locator('.task-editor').waitFor({ state: 'hidden' });
     await idle();
     assert.equal(requests, proposalRequests);
-    await card.getByRole('button', { name: '开始执行', exact: true }).click();
+    await card.getByRole('button', { name: translate('task.start', 'zh-CN'), exact: true }).click();
     await idle();
     await waitForPage(page, async () => {
       const reply = await window.yuantu.invoke({ type: 'snapshot' });
@@ -150,9 +179,13 @@ test(
     assert.equal(state.tasks[0].steps[0].status, 'completed');
     assert.equal(state.tasks[0].acceptance.find((a) => !a.check).met, false);
     await card.locator('input[type=checkbox]').check();
-    await card.getByRole('button', { name: '确认勾选的人工结果', exact: true }).click();
+    await card
+      .getByRole('button', { name: translate('task.confirm', 'zh-CN'), exact: true })
+      .click();
     await idle();
-    await card.getByRole('button', { name: '验收', exact: true }).click();
+    await card
+      .getByRole('button', { name: translate('task.verify', 'zh-CN'), exact: true })
+      .click();
     await idle();
     state = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state,
@@ -239,11 +272,16 @@ test(
     await page.locator('.task-card').waitFor();
     await idle();
     const card = page.locator('.task-card').first();
-    assert.equal(await card.locator('.task-schedule-summary').textContent(), '无自动触发');
+    assert.equal(
+      await card.locator('.task-schedule-summary').textContent(),
+      translate('task.trigger.none', 'zh-CN'),
+    );
     // No trigger has ever run, so there is nothing to show yet.
     assert.equal(await card.locator('.task-step-journal').count(), 0);
 
-    await card.getByRole('button', { name: '触发设置', exact: true }).click();
+    await card
+      .getByRole('button', { name: translate('task.schedule', 'zh-CN'), exact: true })
+      .click();
     const form = card.locator('.task-schedule');
     await form.waitFor();
     assert.equal(
@@ -251,10 +289,16 @@ test(
       0,
       'the React trigger editor uses visible Mantine controls',
     );
-    await chooseLabeledOption(form, '触发方式', '固定间隔');
-    await form.getByLabel('间隔（分钟，1–10080）', { exact: true }).fill('15');
-    await form.getByLabel('启用', { exact: true }).check();
-    await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
+    await chooseLabeledOption(
+      form,
+      translate('task.schedule.kind', 'zh-CN'),
+      translate('task.schedule.kind.interval', 'zh-CN'),
+    );
+    await form.getByLabel(translate('task.schedule.interval', 'zh-CN'), { exact: true }).fill('15');
+    await form.getByLabel(translate('task.schedule.enabled', 'zh-CN'), { exact: true }).check();
+    await form
+      .getByRole('button', { name: translate('task.schedule.save', 'zh-CN'), exact: true })
+      .click();
     await form.waitFor({ state: 'hidden' });
     await idle();
 
@@ -272,17 +316,29 @@ test(
     assert.match(await card.locator('.task-schedule-summary').textContent(), /下次/);
 
     // Calendar settings travel through the renderer, Carrier and Host without losing their zone or anchor.
-    await card.getByRole('button', { name: '触发设置', exact: true }).click();
+    await card
+      .getByRole('button', { name: translate('task.schedule', 'zh-CN'), exact: true })
+      .click();
     assert.equal(
-      await form.getByLabel('间隔（分钟，1–10080）', { exact: true }).inputValue(),
+      await form
+        .getByLabel(translate('task.schedule.interval', 'zh-CN'), { exact: true })
+        .inputValue(),
       '15',
     );
-    await chooseLabeledOption(form, '触发方式', '每周定时');
+    await chooseLabeledOption(
+      form,
+      translate('task.schedule.kind', 'zh-CN'),
+      translate('task.schedule.kind.weekly', 'zh-CN'),
+    );
     await form
-      .getByLabel('IANA 时区（每天留空沿用本机）', { exact: true })
+      .getByLabel(translate('task.schedule.zone', 'zh-CN'), { exact: true })
       .fill('America/New_York');
-    await form.getByLabel('日历时间', { exact: true }).fill('09:00');
-    await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
+    await form
+      .getByLabel(translate('task.schedule.calendarTime', 'zh-CN'), { exact: true })
+      .fill('09:00');
+    await form
+      .getByRole('button', { name: translate('task.schedule.save', 'zh-CN'), exact: true })
+      .click();
     await form.waitFor({ state: 'hidden' });
     await idle();
     state = await page.evaluate(
@@ -299,10 +355,18 @@ test(
     }).format(new Date(state.tasks[0].nextRunAt));
     assert.match(local, /Mon/);
     assert.match(local, /09:00/);
-    await card.getByRole('button', { name: '触发设置', exact: true }).click();
-    await chooseLabeledOption(form, '触发方式', '延迟后，仅一次');
-    await form.getByLabel('延迟分钟（1～525600）', { exact: true }).fill('120');
-    await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
+    await card
+      .getByRole('button', { name: translate('task.schedule', 'zh-CN'), exact: true })
+      .click();
+    await chooseLabeledOption(
+      form,
+      translate('task.schedule.kind', 'zh-CN'),
+      translate('task.schedule.kind.after', 'zh-CN'),
+    );
+    await form.getByLabel(translate('task.schedule.delay', 'zh-CN'), { exact: true }).fill('120');
+    await form
+      .getByRole('button', { name: translate('task.schedule.save', 'zh-CN'), exact: true })
+      .click();
     await form.waitFor({ state: 'hidden' });
     await idle();
     state = await page.evaluate(
@@ -310,28 +374,40 @@ test(
     );
     const anchored = state.tasks[0].nextRunAt;
     assert.equal(Date.parse(anchored) - Date.parse(state.tasks[0].trigger.anchorAt), 120 * 60000);
-    await card.getByRole('button', { name: '触发设置', exact: true }).click();
+    await card
+      .getByRole('button', { name: translate('task.schedule', 'zh-CN'), exact: true })
+      .click();
     assert.match(
       await form.locator('.task-schedule-preview').textContent(),
       new RegExp(anchored.replaceAll('.', '\\.')),
     );
-    await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
+    await form
+      .getByRole('button', { name: translate('task.schedule.save', 'zh-CN'), exact: true })
+      .click();
     await form.waitFor({ state: 'hidden' });
     await idle();
     state = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state,
     );
     assert.equal(state.tasks[0].nextRunAt, anchored);
-    await card.getByRole('button', { name: '触发设置', exact: true }).click();
-    await chooseLabeledOption(form, '触发方式', '指定时刻，仅一次');
+    await card
+      .getByRole('button', { name: translate('task.schedule', 'zh-CN'), exact: true })
+      .click();
+    await chooseLabeledOption(
+      form,
+      translate('task.schedule.kind', 'zh-CN'),
+      translate('task.schedule.kind.at', 'zh-CN'),
+    );
     await form
-      .getByLabel('绝对时刻（必须包含 UTC 偏移）', { exact: true })
+      .getByLabel(translate('task.schedule.timestamp', 'zh-CN'), { exact: true })
       .fill('2030-01-01T09:00:00+08:00');
     assert.match(
       await form.locator('.task-schedule-preview').textContent(),
       /2030-01-01T01:00:00.000Z/,
     );
-    await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
+    await form
+      .getByRole('button', { name: translate('task.schedule.save', 'zh-CN'), exact: true })
+      .click();
     await form.waitFor({ state: 'hidden' });
     await idle();
     state = await page.evaluate(
@@ -340,23 +416,43 @@ test(
     assert.equal(state.tasks[0].nextRunAt, '2030-01-01T01:00:00.000Z');
 
     // Reopening the editor must show the stored schedule, not a blank form.
-    await card.getByRole('button', { name: '触发设置', exact: true }).click();
+    await card
+      .getByRole('button', { name: translate('task.schedule', 'zh-CN'), exact: true })
+      .click();
     assert.equal(
-      await form.getByLabel('绝对时刻（必须包含 UTC 偏移）', { exact: true }).inputValue(),
+      await form
+        .getByLabel(translate('task.schedule.timestamp', 'zh-CN'), { exact: true })
+        .inputValue(),
       '2030-01-01T01:00:00.000Z',
     );
-    await chooseLabeledOption(form, '触发方式', 'Cron 定时');
-    await form.getByLabel('Cron 表达式（五字段）', { exact: true }).fill('0 0 30 2 *');
-    await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
+    await chooseLabeledOption(
+      form,
+      translate('task.schedule.kind', 'zh-CN'),
+      translate('task.schedule.kind.cron', 'zh-CN'),
+    );
+    await form
+      .getByLabel(translate('task.schedule.cron', 'zh-CN'), { exact: true })
+      .fill('0 0 30 2 *');
+    await form
+      .getByRole('button', { name: translate('task.schedule.save', 'zh-CN'), exact: true })
+      .click();
     assert.equal(await form.isVisible(), true);
     assert.match(await form.locator('.task-edit-warning').textContent(), /reachable|occurrence/);
-    await form.getByLabel('Cron 表达式（五字段）', { exact: true }).fill('0 9 * * 1-5');
     await form
-      .getByLabel('IANA 时区（每天留空沿用本机）', { exact: true })
+      .getByLabel(translate('task.schedule.cron', 'zh-CN'), { exact: true })
+      .fill('0 9 * * 1-5');
+    await form
+      .getByLabel(translate('task.schedule.zone', 'zh-CN'), { exact: true })
       .fill('America/New_York');
-    await chooseLabeledOption(form, '错过触发', '跳过漏跑');
+    await chooseLabeledOption(
+      form,
+      translate('task.schedule.misfire', 'zh-CN'),
+      translate('task.schedule.misfire.skip', 'zh-CN'),
+    );
     assert.match(await form.locator('.task-schedule-preview').textContent(), /Next|预计下次/);
-    await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
+    await form
+      .getByRole('button', { name: translate('task.schedule.save', 'zh-CN'), exact: true })
+      .click();
     await form.waitFor({ state: 'hidden' });
     await idle();
     state = await page.evaluate(
@@ -374,21 +470,45 @@ test(
     }).format(new Date(state.tasks[0].nextRunAt));
     assert.match(cronClock, /09:00/);
     assert.doesNotMatch(cronClock, /Sat|Sun/);
-    await card.getByRole('button', { name: '触发设置', exact: true }).click();
+    await card
+      .getByRole('button', { name: translate('task.schedule', 'zh-CN'), exact: true })
+      .click();
     assert.equal(
-      await form.getByLabel('Cron 表达式（五字段）', { exact: true }).inputValue(),
+      await form.getByLabel(translate('task.schedule.cron', 'zh-CN'), { exact: true }).inputValue(),
       '0 9 * * 1-5',
     );
     // A Mantine Select's input shows the option's label; the stored value is asserted from the snapshot above.
-    assert.equal(await form.getByLabel('错过触发', { exact: true }).inputValue(), '跳过漏跑');
-    await chooseLabeledOption(form, '触发方式', '事件触发');
-    assert.equal(await form.getByLabel('监听事件', { exact: true }).isDisabled(), false);
     assert.equal(
-      await form.getByLabel('来源任务（仅“任务通过验收”）', { exact: true }).isDisabled(),
+      await form
+        .getByLabel(translate('task.schedule.misfire', 'zh-CN'), { exact: true })
+        .inputValue(),
+      translate('task.schedule.misfire.skip', 'zh-CN'),
+    );
+    await chooseLabeledOption(
+      form,
+      translate('task.schedule.kind', 'zh-CN'),
+      translate('task.schedule.kind.event', 'zh-CN'),
+    );
+    assert.equal(
+      await form
+        .getByLabel(translate('task.schedule.listen', 'zh-CN'), { exact: true })
+        .isDisabled(),
       false,
     );
-    await chooseLabeledOption(form, '触发方式', '不自动触发');
-    await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
+    assert.equal(
+      await form
+        .getByLabel(translate('task.schedule.source', 'zh-CN'), { exact: true })
+        .isDisabled(),
+      false,
+    );
+    await chooseLabeledOption(
+      form,
+      translate('task.schedule.kind', 'zh-CN'),
+      translate('task.schedule.kind.none', 'zh-CN'),
+    );
+    await form
+      .getByRole('button', { name: translate('task.schedule.save', 'zh-CN'), exact: true })
+      .click();
     await form.waitFor({ state: 'hidden' });
     await idle();
     state = await page.evaluate(
@@ -396,11 +516,14 @@ test(
     );
     assert.equal(state.tasks[0].trigger, undefined);
     assert.equal(state.tasks[0].nextRunAt, undefined);
-    assert.equal(await card.locator('.task-schedule-summary').textContent(), '无自动触发');
+    assert.equal(
+      await card.locator('.task-schedule-summary').textContent(),
+      translate('task.trigger.none', 'zh-CN'),
+    );
 
     // Running the task checkpoints a step; the journal must survive to the UI even though the
     // attempt ends awaiting human review.
-    await card.getByRole('button', { name: '开始执行', exact: true }).click();
+    await card.getByRole('button', { name: translate('task.start', 'zh-CN'), exact: true }).click();
     await idle();
     await waitForPage(page, async () => {
       const reply = await window.yuantu.invoke({ type: 'snapshot' });
@@ -498,7 +621,9 @@ test(
     }
     await card.locator('.task-approval').waitFor();
     assert.match(await card.locator('.task-approval').textContent(), /write_file/);
-    await card.getByRole('button', { name: '批准并续跑', exact: true }).click();
+    await card
+      .getByRole('button', { name: translate('task.approval.approve', 'zh-CN'), exact: true })
+      .click();
     let observed;
     const resumedDeadline = Date.now() + 20000;
     while (Date.now() < resumedDeadline) {
@@ -597,7 +722,9 @@ test(
     assert.match(await page.locator('#plan-title').textContent(), /Refactor the loader/);
     assert.equal(await page.locator('#plan-steps li').count(), 3);
     assert.equal(
-      await page.getByRole('button', { name: '批准计划', exact: true }).isVisible(),
+      await page
+        .getByRole('button', { name: translate('plan.approve', 'zh-CN'), exact: true })
+        .isVisible(),
       true,
       'a proposed plan offers approval',
     );
@@ -619,20 +746,27 @@ test(
     );
     assert.doesNotMatch(await page.locator('#plan-actions').textContent(), /[\u4e00-\u9fff]/);
     await openLanguage('zh-CN');
-    await page.waitForFunction(() =>
-      (document.querySelector('#plan-actions')?.textContent ?? '').includes('批准计划'),
+    await page.waitForFunction(
+      (text) => (document.querySelector('#plan-actions')?.textContent ?? '').includes(text),
+      translate('plan.approve', 'zh-CN'),
     );
 
     // Approving reveals execution; the plan itself is then run by the Host, which re-checks the hash.
-    await page.getByRole('button', { name: '批准计划', exact: true }).click();
-    await page.getByRole('button', { name: '按计划执行', exact: true }).waitFor();
+    await page
+      .getByRole('button', { name: translate('plan.approve', 'zh-CN'), exact: true })
+      .click();
+    await page
+      .getByRole('button', { name: translate('plan.execute', 'zh-CN'), exact: true })
+      .waitFor();
     await idle();
     assert.equal(
       await page.locator('#plan-status').textContent(),
-      '已批准',
+      translate('plan.status.approved', 'zh-CN'),
       'the panel reflects the approved status',
     );
-    await page.getByRole('button', { name: '按计划执行', exact: true }).click();
+    await page
+      .getByRole('button', { name: translate('plan.execute', 'zh-CN'), exact: true })
+      .click();
     await page.waitForFunction(() =>
       (document.querySelector('#messages')?.textContent ?? '').includes(
         'Executed the approved plan',

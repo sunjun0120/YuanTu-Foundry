@@ -9,6 +9,7 @@ import electronPath from 'electron';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { artifactPath } from './desktop-smoke-support.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 
 for (const reduced of [false, true]) {
   test(
@@ -70,7 +71,7 @@ for (const reduced of [false, true]) {
         if (message.type() === 'error') failures.push(message.text());
       });
       await page
-        .getByRole('textbox', { name: '任务描述' })
+        .getByRole('textbox', { name: translate('ui.taskDescription', 'zh-CN') })
         .fill('A draft survives page navigation');
       await page.locator('input[type=file]').setInputFiles(attachment);
       await page.getByText('draft-note.txt', { exact: true }).first().waitFor();
@@ -114,7 +115,9 @@ for (const reduced of [false, true]) {
         };
         requestAnimationFrame(sample);
       });
-      await page.getByRole('button', { name: '设置', exact: true }).click();
+      await page
+        .getByRole('button', { name: translate('ui.settings', 'zh-CN'), exact: true })
+        .click();
       await page.waitForFunction(
         () =>
           Number(getComputedStyle(document.getElementById('settings-page')).opacity) === 1 &&
@@ -144,11 +147,13 @@ for (const reduced of [false, true]) {
           Buffer.from(frame.data, 'base64'),
         );
       await page.screenshot({ path: path.join(dir, 'settings.png') });
-      await page.getByRole('button', { name: '返回对话' }).click();
+      await page.getByRole('button', { name: translate('ui.backToChat', 'zh-CN') }).click();
       await page.locator('.settings-dialog').waitFor({ state: 'hidden' });
       await page.waitForFunction(() => !document.getElementById('chat-page').inert);
       assert.equal(
-        await page.getByRole('textbox', { name: '任务描述' }).inputValue(),
+        await page
+          .getByRole('textbox', { name: translate('ui.taskDescription', 'zh-CN') })
+          .inputValue(),
         'A draft survives page navigation',
       );
       assert.equal(

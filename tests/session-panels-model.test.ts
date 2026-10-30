@@ -6,6 +6,7 @@ import {
   goalView,
   deliverablesView,
 } from '../apps/desktop/ui/panels/session-panels-model.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 /**
  * The three session panels as readings: what the checklist shows, what the goal banner says, and which presented
@@ -32,7 +33,10 @@ test('the checklist belongs to the question being answered', () => {
     'zh-CN',
   );
   assert.equal(afterPlan.visible, true);
-  assert.equal(afterPlan.summary, '1 已完成 · 1 进行中 · 1 待处理');
+  assert.equal(
+    afterPlan.summary,
+    translate('ui.todosSummary', 'zh-CN', { completed: 1, inProgress: 1, pending: 1 }),
+  );
   assert.equal(afterPlan.rows[0]?.mark, '✓');
   assert.equal(afterPlan.rows[1]?.className, 'todo todo-in-progress');
   assert.match(afterPlan.countText, /^3 项：1 已完成，1 进行中，1 待办$/);
@@ -74,7 +78,7 @@ test('the goal banner carries rounds, a blocked reason, and a stand-down notice'
     'zh-CN',
   );
   assert.equal(active.visible, true);
-  assert.equal(active.statusText, '进行中');
+  assert.equal(active.statusText, translate('ui.todoStatus.in_progress', 'zh-CN'));
   assert.match(active.meta, /已用 3\/3 轮/);
   assert.match(active.meta, /2/);
   const blocked = goalView(

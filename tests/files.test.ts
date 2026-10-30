@@ -23,6 +23,7 @@ import { fileHandlers } from '../apps/agent-host/handlers/files.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
 import { runSpreadsheetOperation } from '../packages/office/spreadsheet.ts';
 import { tempRoot } from './temp-fixture.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 test('an Office document is previewed as a page instead of "binary"', async (t) => {
   const root = await tempRoot(t, 'yuantu-preview-office-');
@@ -610,7 +611,7 @@ test('case insensitive literal search agrees with escaped regex independent of l
       'i',
       'İ',
       'ı',
-      '中文',
+      translate('general.languageZh', 'zh-CN'),
       'a+b[0]',
       'S',
       'ſ',
@@ -638,7 +639,7 @@ test('case insensitive literal search agrees with escaped regex independent of l
     'i',
     'İ',
     'ı',
-    '中文',
+    translate('general.languageZh', 'zh-CN'),
     'a+b[0]',
     'S',
     'ſ',
@@ -660,7 +661,10 @@ test('case insensitive literal search agrees with escaped regex independent of l
   assert.deepEqual(await matches('literal', 'I', 'insensitive'), [1, 2]);
   assert.deepEqual(await matches('literal', 'İ', 'insensitive'), [3]);
   assert.deepEqual(await matches('literal', 'ı', 'insensitive'), [4]);
-  assert.deepEqual(await matches('literal', '中文', 'insensitive'), [5]);
+  assert.deepEqual(
+    await matches('literal', translate('general.languageZh', 'zh-CN'), 'insensitive'),
+    [5],
+  );
   // The default stays case-sensitive and exact: no folding of any kind, including the folds above.
   assert.deepEqual(await matches('literal', 'I', 'sensitive'), [1]);
   assert.deepEqual(await matches('literal', 'i', 'sensitive'), [2]);

@@ -128,3 +128,35 @@ test('the view is offered for a session and adds calls still executing', () => {
     ],
   );
 });
+
+test('a new turn clears earlier calls, including stale entries in the live tool list', () => {
+  const snapshot = {
+    session: {
+      sessionId: 's1',
+      running: true,
+      messages: [
+        { role: 'user', content: 'first' },
+        assistant(call('old', 'scan_cve_info')),
+        result('old'),
+        { role: 'user', content: 'second' },
+        { role: 'user', content: '<runtime-context kind="x">snapshot</runtime-context>' },
+      ],
+      tools: [call('old', 'scan_cve_info')],
+    },
+  } as unknown as CarrierSnapshot;
+  assert.deepEqual(summaryView(snapshot).calls, []);
+  snapshot.session.tools.push(call('new', 'scan_vuln_query'));
+  assert.deepEqual(
+    summaryView(snapshot).calls.map(({ id, status }) => [id, status]),
+    [['new', 'running']],
+  );
+  snapshot.session.messages.push(assistant(call('new', 'scan_vuln_query')), result('new'));
+  snapshot.session.tools = [];
+  snapshot.session.running = false;
+  assert.deepEqual(
+    summaryView(snapshot).calls.map(({ id, status }) => [id, status]),
+    [['new', 'succeeded']],
+  );
+  snapshot.session.messages.push({ role: 'user', content: 'third, no tools needed' });
+  assert.deepEqual(summaryView(snapshot).calls, []);
+});

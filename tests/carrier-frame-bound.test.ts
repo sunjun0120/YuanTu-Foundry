@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { PassThrough, Writable } from 'node:stream';
 import { HostCarrier } from '../apps/agent-host/carrier.ts';
 import { MAX_INPUT_BYTES } from '../packages/protocol/images.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 /**
  * The framing bound on the stdio carrier, which is the carrier the desktop actually uses.
@@ -34,7 +35,11 @@ for (const [highWaterMark, decodeStrings] of [
       output.destroy();
     });
     carrier.attach();
-    const reply = { text: decodeStrings ? 'x'.repeat(16_000_000) : '你'.repeat(5_333_333) };
+    const reply = {
+      text: decodeStrings
+        ? 'x'.repeat(16_000_000)
+        : translate('ui.export.roleUser', 'zh-CN').repeat(5_333_333),
+    };
     for (let i = 0; i < 7; i++) carrier.send(reply);
     assert.equal(carrier.connected, false);
     assert.ok(output.writableLength <= 64_000_000, `queued ${output.writableLength} bytes`);
@@ -138,7 +143,7 @@ test('a reader can replenish a partially drained queue without being disconnecte
     output.destroy();
   });
   carrier.attach();
-  const reply = { text: '你'.repeat(5_333_333) };
+  const reply = { text: translate('ui.export.roleUser', 'zh-CN').repeat(5_333_333) };
   for (let i = 0; i < 3; i++) carrier.send(reply);
   for (let i = 0; i < 5; i++) {
     assert.ok(release);

@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { tempRoot } from './temp-fixture.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 const { commonJsModuleUrl } = await import(
   new URL('../scripts/commonjs-module-url.mjs', import.meta.url).href
@@ -132,7 +133,8 @@ test('CommonJS desktop regex search loads its packaged worker from another cwd',
    */
   await writeFile(
     path.join(workspace, 'locale.txt'),
-    ['I', 'i', 'İ', 'ı', '中文', 'a+b[0]', 'S', 'ſ'].join('\n') + '\n',
+    ['I', 'i', 'İ', 'ı', translate('general.languageZh', 'zh-CN'), 'a+b[0]', 'S', 'ſ'].join('\n') +
+      '\n',
   );
   await copyFile('packages/sandbox/windows-sandbox/acl.ps1', path.join(assets, 'acl.ps1'));
   /**
@@ -154,7 +156,16 @@ test('CommonJS desktop regex search loads its packaged worker from another cwd',
    * open. The fixture only runs each query both ways and reports what each mode matched.
    */
   const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const queries = ['I', 'i', 'İ', 'ı', '中文', 'a+b[0]', 'S', 'ſ'];
+  const queries = [
+    'I',
+    'i',
+    'İ',
+    'ı',
+    translate('general.languageZh', 'zh-CN'),
+    'a+b[0]',
+    'S',
+    'ſ',
+  ];
   const plan = queries.flatMap((query) =>
     ['insensitive', 'sensitive'].map((caseMode) => ({
       query,

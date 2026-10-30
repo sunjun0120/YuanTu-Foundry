@@ -19,6 +19,7 @@ import {
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 
 /**
  * The Host snapshot can report a verified completion before the renderer has repainted the previous notice.
@@ -39,10 +40,10 @@ test(
     await mkdir(path.join(root, '.yuantu'));
     const store = new SessionStore(path.join(root, '.yuantu', 'sessions.sqlite'));
     const cases = [
-      ['verified', 'verified', '检查通过'],
-      ['needs_review', 'environment-error', '未能验证（环境限制）'],
-      ['unverified', 'missing-verification', '尚未验证'],
-      ['limited', 'repair-limit', '达到修复限制'],
+      ['verified', 'verified', translate('ui.verificationChecksPassed', 'zh-CN')],
+      ['needs_review', 'environment-error', translate('ui.completionState.environment', 'zh-CN')],
+      ['unverified', 'missing-verification', translate('ui.completionState.unverified', 'zh-CN')],
+      ['limited', 'repair-limit', translate('ui.completionState.limited', 'zh-CN')],
     ];
     const sessions = cases.map(([state, reason, label]) => {
       const session = store.create(root);
@@ -251,7 +252,10 @@ test(
       await page.locator('#approvals .approval-subject').innerText(),
       /OUTPUT_CHECK_PASSED/,
     );
-    await page.locator('#approvals').getByRole('button', { name: '允许一次', exact: true }).click();
+    await page
+      .locator('#approvals')
+      .getByRole('button', { name: translate('approval.allow', 'zh-CN'), exact: true })
+      .click();
     await waitForPage(
       page,
       async () =>
@@ -395,8 +399,8 @@ test(
     await page.locator('.turn-changes').nth(1).waitFor();
     assert.equal(await page.locator('#changes').count(), 0);
     assert.deepEqual(await page.locator('.turn-changes-title').allTextContents(), [
-      '已编辑 6 个文件',
-      '已编辑 1 个文件',
+      translate('ui.editedFiles', 'zh-CN', { count: 6 }),
+      translate('ui.editedFiles', 'zh-CN', { count: 1 }),
     ]);
     const first = page.locator('.turn-changes').first();
     assert.equal(await first.locator('.turn-change-row').count(), 3);
@@ -413,9 +417,16 @@ test(
         .evaluate((card) => card.previousElementSibling.textContent.includes('SECOND_FINAL')),
       true,
     );
-    await first.getByRole('button', { name: '全部 6 个文件', exact: true }).click();
+    await first
+      .getByRole('button', {
+        name: translate('ui.allChangedFiles', 'zh-CN', { count: 6 }),
+        exact: true,
+      })
+      .click();
     assert.equal(await first.locator('.turn-change-row').count(), 6);
-    await first.getByRole('button', { name: '收起文件列表', exact: true }).click();
+    await first
+      .getByRole('button', { name: translate('ui.collapseChangedFiles', 'zh-CN'), exact: true })
+      .click();
     assert.equal(await first.locator('.turn-change-row').count(), 3);
     if (process.env.CODEX_TURN_CHANGES_SCREENSHOT_DIR) {
       const output = artifactPath('turn-changes');
@@ -434,7 +445,12 @@ test(
     await diffNode.evaluate((diff) => {
       diff.open = false;
     });
-    await first.getByRole('button', { name: '全部 6 个文件', exact: true }).click();
+    await first
+      .getByRole('button', {
+        name: translate('ui.allChangedFiles', 'zh-CN', { count: 6 }),
+        exact: true,
+      })
+      .click();
     const firstCardNode = await first.elementHandle();
     await page.locator('#prompt').fill('THIRD_QUESTION');
     await page.locator('#send').click();
@@ -540,7 +556,9 @@ test(
     await choosePermissionPreset(page, 'guarded');
     await page.locator('#prompt').fill('run the background fixture');
     await page.locator('#send').click();
-    await page.getByRole('button', { name: '允许一次', exact: true }).waitFor();
+    await page
+      .getByRole('button', { name: translate('approval.allow', 'zh-CN'), exact: true })
+      .waitFor();
     assert.match(await page.locator('#approvals').innerText(), /start_command/);
     await page.locator('#permission-trigger').click();
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
@@ -824,20 +842,28 @@ test(
       const page = await app.firstWindow();
       await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(15_000);
-      await page.getByRole('button', { name: '发送', exact: true }).waitFor();
+      await page
+        .getByRole('button', { name: translate('ui.send', 'zh-CN'), exact: true })
+        .waitFor();
       await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
       return page;
     };
     let page = await launch();
     // Replace only the native picker; exercise the real IPC and Host switch below.
-    await page.getByRole('textbox', { name: '任务描述' }).fill('保留这段尚未发送的任务');
+    await page
+      .getByRole('textbox', { name: translate('ui.taskDescription', 'zh-CN') })
+      .fill('保留这段尚未发送的任务');
     await app.evaluate(({ dialog }) => {
       dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] });
     });
-    await page.getByRole('button', { name: '添加空间', exact: true }).click();
+    await page
+      .getByRole('button', { name: translate('projects.add', 'zh-CN'), exact: true })
+      .click();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(
-      await page.getByRole('textbox', { name: '任务描述' }).inputValue(),
+      await page
+        .getByRole('textbox', { name: translate('ui.taskDescription', 'zh-CN') })
+        .inputValue(),
       '保留这段尚未发送的任务',
     );
     const badRoot = path.join(root, 'unavailable-workspace');
@@ -846,11 +872,15 @@ test(
     await app.evaluate(({ dialog }, target) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] });
     }, badRoot);
-    await page.getByRole('button', { name: '添加空间', exact: true }).click();
+    await page
+      .getByRole('button', { name: translate('projects.add', 'zh-CN'), exact: true })
+      .click();
     await page.locator('.project-error[role="alert"]').waitFor();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(
-      await page.getByRole('textbox', { name: '任务描述' }).inputValue(),
+      await page
+        .getByRole('textbox', { name: translate('ui.taskDescription', 'zh-CN') })
+        .inputValue(),
       '保留这段尚未发送的任务',
     );
     assert.equal(
@@ -860,8 +890,10 @@ test(
       root,
     );
     const send = async (prompt) => {
-      await page.getByRole('textbox', { name: '任务描述' }).fill(prompt);
-      await page.getByRole('button', { name: '发送', exact: true }).click();
+      await page
+        .getByRole('textbox', { name: translate('ui.taskDescription', 'zh-CN') })
+        .fill(prompt);
+      await page.getByRole('button', { name: translate('ui.send', 'zh-CN'), exact: true }).click();
     };
     // The composer stays editable during runs for Steer/Follow-up. Session controls
     // become available only after the run and history reconciliation have finished.
@@ -898,7 +930,7 @@ test(
     await page.getByText('处理完成。项目内容已核对。', { exact: true }).waitFor();
     await idle();
     await send('创建文件');
-    await page.getByRole('button', { name: '允许一次' }).waitFor();
+    await page.getByRole('button', { name: translate('approval.allow', 'zh-CN') }).waitFor();
     await assert.rejects(readFile(path.join(root, 'approved.txt')), { code: 'ENOENT' });
     assert.match(await page.locator('#approvals').innerText(), /approved.txt/);
     await page.locator('.approval-raw > summary').click();
@@ -920,7 +952,9 @@ test(
     await page.locator('#permission-trigger').click();
     await page.locator('#permission-menu [data-preset="guarded"]').click();
     await send('拒绝写入');
-    await page.getByRole('button', { name: '拒绝', exact: true }).click();
+    await page
+      .getByRole('button', { name: translate('approval.deny', 'zh-CN'), exact: true })
+      .click();
     await idle();
     await assert.rejects(readFile(path.join(root, 'denied.txt')), { code: 'ENOENT' });
     await waitForPage(page, async () => {
@@ -940,10 +974,10 @@ test(
       );
     });
     await send('取消写入');
-    await page.getByRole('button', { name: '允许一次' }).waitFor();
-    await page.getByRole('button', { name: '停止', exact: true }).click();
+    await page.getByRole('button', { name: translate('approval.allow', 'zh-CN') }).waitFor();
+    await page.getByRole('button', { name: translate('ui.stop', 'zh-CN'), exact: true }).click();
     await idle();
-    await page.getByText('已停止', { exact: true }).waitFor();
+    await page.getByText(translate('ui.runStatus.cancelled', 'zh-CN'), { exact: true }).waitFor();
     await assert.rejects(readFile(path.join(root, 'cancelled.txt')), { code: 'ENOENT' });
     await waitForPage(page, async () =>
       (await window.yuantu.invoke({ type: 'snapshot' })).state.audit.some(
@@ -981,9 +1015,12 @@ test(
     const original = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.sessionId,
     );
-    await page.getByRole('button', { name: '新建任务', exact: true }).click();
-    await page.getByRole('heading', { name: '从一个任务开始。' }).waitFor();
-    await page.locator('#chat-title').getByText('新会话', { exact: true }).waitFor();
+    await page.getByRole('button', { name: translate('ui.newTask', 'zh-CN'), exact: true }).click();
+    await page.locator('#welcome').waitFor();
+    await page
+      .locator('#chat-title')
+      .getByText(translate('ui.untitledSession', 'zh-CN'), { exact: true })
+      .waitFor();
     await app.close();
     app = undefined;
     page = await launch();
@@ -1009,18 +1046,22 @@ test(
     await app.evaluate(({ dialog }, target) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] });
     }, otherRoot);
-    await page.getByRole('button', { name: '添加空间', exact: true }).click();
+    await page
+      .getByRole('button', { name: translate('projects.add', 'zh-CN'), exact: true })
+      .click();
     await page.waitForFunction(
       (target) =>
         document.querySelector('#workspace').textContent === target &&
         !document.querySelector('#prompt').disabled,
       otherRoot,
     );
-    await page.getByRole('heading', { name: '从一个任务开始。' }).waitFor();
+    await page.locator('#welcome').waitFor();
     await app.evaluate(({ dialog }, target) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] });
     }, root);
-    await page.getByRole('button', { name: '添加空间', exact: true }).click();
+    await page
+      .getByRole('button', { name: translate('projects.add', 'zh-CN'), exact: true })
+      .click();
     await page.waitForFunction(
       (target) =>
         document.querySelector('#workspace').textContent === target &&
@@ -1031,7 +1072,7 @@ test(
     await page.locator('#messages').getByText('读取项目', { exact: true }).waitFor();
     await choosePermissionPreset(page, 'guarded');
     await send('取消写入');
-    await page.getByRole('button', { name: '允许一次' }).waitFor();
+    await page.getByRole('button', { name: translate('approval.allow', 'zh-CN') }).waitFor();
     await app.close();
     app = undefined;
     await assert.rejects(readFile(path.join(root, 'cancelled.txt')), { code: 'ENOENT' });
@@ -1042,7 +1083,12 @@ test(
     });
     page = await app.firstWindow();
     await page.locator('#configuration').waitFor();
-    assert.equal(await page.getByRole('textbox', { name: '任务描述' }).isDisabled(), true);
+    assert.equal(
+      await page
+        .getByRole('textbox', { name: translate('ui.taskDescription', 'zh-CN') })
+        .isDisabled(),
+      true,
+    );
     await page.locator(`[data-session-id="${original}"]`).click();
     await page.locator('#messages').getByText('读取项目', { exact: true }).waitFor();
     const history = await page.evaluate(
@@ -1140,7 +1186,7 @@ test(
       await page.screenshot({
         path: artifactPath('qa.png').replace(/\.png$/, '-diff.png'),
       });
-    await page.getByRole('button', { name: '允许一次' }).click();
+    await page.getByRole('button', { name: translate('approval.allow', 'zh-CN') }).click();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(await readFile(path.join(root, 'main.ts'), 'utf8'), 'const count = 2;\n');
     assert.equal(await page.locator('#messages .markdown h2').textContent(), '修改完成');
@@ -1164,8 +1210,10 @@ test(
     assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
       'https://example.com/guide',
     ]);
-    await page.getByRole('button', { name: '复制代码', exact: true }).click();
-    await page.getByRole('button', { name: '已复制', exact: true }).waitFor();
+    await page.getByRole('button', { name: translate('ui.copy', 'zh-CN'), exact: true }).click();
+    await page
+      .getByRole('button', { name: translate('ui.copied', 'zh-CN'), exact: true })
+      .waitFor();
     assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), 'const count = 2;');
     await page.locator('#messages .turn-changes').waitFor();
     assert.match(await page.locator('.turn-changes-title').textContent(), /已编辑 1 个文件/);
@@ -1173,7 +1221,7 @@ test(
     const id = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.sessionId,
     );
-    await page.getByRole('button', { name: '新建任务', exact: true }).click();
+    await page.getByRole('button', { name: translate('ui.newTask', 'zh-CN'), exact: true }).click();
     // Rows remain clickable during a session switch; the action gate ignores a click while creation is pending.
     // Wait for the new session and the completed operation before asking the UI to load the persisted diff.
     await waitForPage(
@@ -1200,10 +1248,15 @@ test(
     }
     await page.locator('.turn-change-row').click();
     await page.locator('#workspace-preview-body .file-diff').waitFor();
-    await page.getByRole('button', { name: '撤销此修改', exact: true }).click();
-    await page.getByRole('button', { name: '确认恢复修改前内容', exact: true }).click();
-    await page.waitForFunction(() =>
-      document.querySelector('#workspace-preview-body').textContent.includes('已撤销'),
+    await page
+      .getByRole('button', { name: translate('ui.undoChange', 'zh-CN'), exact: true })
+      .click();
+    await page
+      .getByRole('button', { name: translate('ui.undoContent', 'zh-CN'), exact: true })
+      .click();
+    await page.waitForFunction(
+      (text) => document.querySelector('#workspace-preview-body').textContent.includes(text),
+      translate('ui.undone', 'zh-CN'),
     );
     assert.equal(await readFile(path.join(root, 'main.ts'), 'utf8'), 'const count = 1;\n');
     assert.match(await page.locator('#messages').textContent(), /\[Files restored by user\]/);

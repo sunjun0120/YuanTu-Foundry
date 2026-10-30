@@ -10,6 +10,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { waitForPage } from './page-wait.mjs';
 import { chooseSelectOption } from './desktop-smoke-support.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 
 test(
   'desktop pages older history while preserving existing message nodes and the reading position',
@@ -141,10 +142,10 @@ test(
     assert.deepEqual(
       markers.map((n) => n.text),
       [
-        '运行在应用关闭时中断，未产生回答。',
-        '已停止，未产生回答。',
-        '运行已中断或停止，未产生回答。',
-        '运行因应用异常退出而中断。',
+        translate('ui.unanswered.shutdown', 'zh-CN'),
+        translate('ui.unanswered.user', 'zh-CN'),
+        translate('ui.unanswered.cancelled', 'zh-CN'),
+        translate('ui.unanswered.crash', 'zh-CN'),
       ],
     );
     for (const [index, anchor] of [20, 80, 180, 230].entries())

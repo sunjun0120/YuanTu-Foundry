@@ -68,30 +68,42 @@ test('running status distinguishes preparation, model waiting, thinking, text an
       loading: false,
       ...over,
     });
-  assert.equal(say({}), '正在准备请求…');
-  assert.equal(say({ activity: { kind: 'model' } }), '正在等待模型响应…');
+  assert.equal(say({}), translate('ui.runStatus.preparing', 'zh-CN'));
+  assert.equal(
+    say({ activity: { kind: 'model' } }),
+    translate('ui.runStatus.waitingModel', 'zh-CN'),
+  );
   // A silent model past the threshold is counted, so a 30 s first token does not read as a hang.
   assert.equal(
     say({ activity: { kind: 'model', startedAt: 0 }, now: 10_000 }),
-    '正在等待模型响应…',
+    translate('ui.runStatus.waitingModel', 'zh-CN'),
   );
   assert.equal(
     say({ activity: { kind: 'model', startedAt: 0 }, now: 31_500 }),
-    '仍在等待模型响应（已等待 31 秒）…',
+    translate('ui.runStatus.waitingModelLong', 'zh-CN', { seconds: 31 }),
   );
   // A check the environment could not run is not a failed acceptance.
   assert.equal(
     say({ status: 'needs_review', completionReason: 'repeated-failure' }),
-    '验收未通过，需检查',
+    translate('ui.runStatus.needsReview', 'zh-CN'),
   );
   assert.equal(
     say({ status: 'needs_review', completionReason: 'environment-error' }),
-    '未能验证：检查在当前环境里无法运行',
+    translate('ui.runStatus.environmentLimited', 'zh-CN'),
   );
-  assert.equal(say({ activity: { kind: 'model', phase: 'reasoning' } }), '正在推理…');
-  assert.equal(say({ activity: { kind: 'model', phase: 'text' } }), '正在生成回复…');
-  assert.equal(say({ activity: { kind: 'model', phase: 'tool_call' } }), '正在生成工具调用…');
-  assert.equal(say({ activity: { kind: 'tool' } }), '正在执行工具…');
+  assert.equal(
+    say({ activity: { kind: 'model', phase: 'reasoning' } }),
+    translate('ui.modelReasoning', 'zh-CN'),
+  );
+  assert.equal(
+    say({ activity: { kind: 'model', phase: 'text' } }),
+    translate('ui.runStatus.responding', 'zh-CN'),
+  );
+  assert.equal(
+    say({ activity: { kind: 'model', phase: 'tool_call' } }),
+    translate('ui.modelToolCall', 'zh-CN'),
+  );
+  assert.equal(say({ activity: { kind: 'tool' } }), translate('ui.runStatus.tools', 'zh-CN'));
   // The first Windows workspace authorization can take minutes before the command starts: saying a tool is
   // running would describe work that has not begun.
   assert.equal(
@@ -99,21 +111,27 @@ test('running status distinguishes preparation, model waiting, thinking, text an
       activity: { kind: 'tool' },
       preparation: { stage: 'workspace-authorization', root: 'E:\\work' },
     }),
-    '正在授权工作区…',
+    translate('ui.runStatus.authorizingWorkspace', 'zh-CN'),
   );
   assert.equal(
     say({ preparation: { stage: 'workspace-authorization', root: 'E:\\work' }, approvals: 1 }),
-    '等待你的确认',
+    translate('ui.runStatus.awaitingApproval', 'zh-CN'),
   );
   // A preparation for another stage is not a workspace authorization, and must not borrow its wording.
   assert.equal(
     say({ activity: { kind: 'tool' }, preparation: { stage: 'other', root: 'E:\\work' } }),
-    '正在执行工具…',
+    translate('ui.runStatus.tools', 'zh-CN'),
   );
-  assert.equal(say({ tools: 1 }), '正在执行工具…');
-  assert.equal(say({ tools: 1, approvals: 1 }), '等待你的确认');
+  assert.equal(say({ tools: 1 }), translate('ui.runStatus.tools', 'zh-CN'));
+  assert.equal(
+    say({ tools: 1, approvals: 1 }),
+    translate('ui.runStatus.awaitingApproval', 'zh-CN'),
+  );
   setLocale('en-US');
-  assert.equal(say({ activity: { kind: 'model' } }), 'Waiting for the model…');
+  assert.equal(
+    say({ activity: { kind: 'model' } }),
+    translate('ui.runStatus.waitingModel', 'en-US'),
+  );
   assert.equal(
     say({
       activity: { kind: 'tool' },
@@ -169,10 +187,13 @@ test('the conditions the status line reports outrank each other in a fixed order
     'Tidying up the context…',
   );
   // An approval outranks a connection that is not ready: the run is waiting on the person, not on the Host.
-  assert.equal(say({ approvals: 1, ready: false, loading: true }), 'Waiting for your confirmation');
-  assert.equal(say({ ready: false, loading: true }), 'The connection is not ready');
-  assert.equal(say({ loading: true }), 'Loading the session…');
-  assert.equal(say({}), 'Preparing the request…');
+  assert.equal(
+    say({ approvals: 1, ready: false, loading: true }),
+    translate('ui.runStatus.awaitingApproval', 'en-US'),
+  );
+  assert.equal(say({ ready: false, loading: true }), translate('ui.runStatus.connecting', 'en-US'));
+  assert.equal(say({ loading: true }), translate('ui.runStatus.loadingSession', 'en-US'));
+  assert.equal(say({}), translate('ui.runStatus.preparing', 'en-US'));
   // A sandbox preparation is about the work already dispatched, so it outranks "running a tool" but not the
   // person-facing waits above.
   assert.equal(
@@ -190,7 +211,7 @@ test('the conditions the status line reports outrank each other in a fixed order
     'Waiting for your confirmation',
   );
   // And with nothing else true, the status itself decides.
-  assert.equal(say({ status: 'limited' }), 'The run limit was reached');
+  assert.equal(say({ status: 'limited' }), translate('ui.runStatus.limited', 'en-US'));
 });
 
 test('the exported conversation is written in the interface language and keeps its content verbatim', (t) => {
@@ -328,15 +349,21 @@ test('the plan approval question is read in Chinese, and the digest stays out of
     'Plan digest: f04f4f93e4c9…',
   ].join('\n');
   const copy = localizedQuestion('Plan approval', question, false);
-  assert.equal(copy.header, '计划批准');
+  assert.equal(copy.header, translate('question.plan.header', 'zh-CN'));
   assert.match(copy.question, /批准这份计划，并在本轮开始执行吗？/);
   assert.equal(copy.plan, '# README 补充\n\n1. 读取 README');
   assert.doesNotMatch(copy.plan, /Plan digest/);
-  assert.equal(copy.label('Approve and execute'), '批准并执行');
-  assert.equal(copy.label('Keep planning'), '继续修改计划');
+  assert.equal(
+    copy.label(translate('question.plan.approve', 'en-US')),
+    translate('question.plan.approve', 'zh-CN'),
+  );
+  assert.equal(
+    copy.label(translate('question.plan.keepPlanning', 'en-US')),
+    translate('question.plan.keepPlanning', 'zh-CN'),
+  );
   assert.equal(
     copy.description('Lift read-only mode now and carry out the plan in this run.'),
-    '现在就解除只读模式，在本轮执行这份计划。',
+    translate('question.plan.approveDescription', 'zh-CN'),
   );
   // Only the product's own question is reworded: a question the model wrote is its text, not ours.
   const asked = localizedQuestion('模型提问', 'Which database?', false);
@@ -345,10 +372,13 @@ test('the plan approval question is read in Chinese, and the digest stays out of
   assert.equal(asked.label('Postgres'), 'Postgres');
   // The English interface keeps the kernel's wording.
   const english = localizedQuestion('Plan approval', question, true);
-  assert.equal(english.header, 'Plan approval');
-  assert.equal(english.question, 'Approve this plan and start carrying it out in this run?');
+  assert.equal(english.header, translate('question.plan.header', 'en-US'));
+  assert.equal(english.question, translate('question.plan.intro', 'en-US'));
   assert.equal(english.plan, '# README 补充\n\n1. 读取 README');
-  assert.equal(english.label('Approve and execute'), 'Approve and execute');
+  assert.equal(
+    english.label(translate('question.plan.approve', 'en-US')),
+    translate('question.plan.approve', 'en-US'),
+  );
 });
 
 test('a run waiting on a question says so instead of "running tools"', (t) => {
@@ -365,10 +395,13 @@ test('a run waiting on a question says so instead of "running tools"', (t) => {
       tools: 1,
       ...over,
     });
-  assert.equal(say({ questions: 1 }), '等待你的回答');
+  assert.equal(say({ questions: 1 }), translate('ui.runStatus.awaitingAnswer', 'zh-CN'));
   // An approval outranks a question: the person has two things to look at, and the approval is the blocking one.
-  assert.equal(say({ questions: 1, approvals: 1 }), '等待你的确认');
-  assert.equal(say({}), '正在执行工具…');
+  assert.equal(
+    say({ questions: 1, approvals: 1 }),
+    translate('ui.runStatus.awaitingApproval', 'zh-CN'),
+  );
+  assert.equal(say({}), translate('ui.runStatus.tools', 'zh-CN'));
 });
 
 test('a provider failure is explained in the interface language', () => {
@@ -439,7 +472,7 @@ test('a model carried by the launch environment is visible in the picker', () =>
   // The window worked while the picker said 尚无模型, because only saved connections were listed.
   assert.equal(
     environmentModelLabel({ source: 'environment', model: 'deepseek-flash' }, false),
-    'deepseek-flash（环境变量）',
+    translate('settings.environmentModel', 'zh-CN', { model: 'deepseek-flash' }),
   );
   assert.equal(
     environmentModelLabel({ source: 'environment', model: 'deepseek-flash' }, true),

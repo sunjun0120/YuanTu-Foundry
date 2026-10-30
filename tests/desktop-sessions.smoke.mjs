@@ -13,6 +13,7 @@ import { artifactPath } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 
 // ---- merged from session-management.smoke.mjs ----
 
@@ -80,7 +81,9 @@ test(
     assert.equal(await project.locator('.project-name').getAttribute('aria-current'), 'true');
     await project.hover();
     await project.locator('.project-actions button').first().click();
-    await page.getByRole('menuitem', { name: '重命名', exact: true }).click();
+    await page
+      .getByRole('menuitem', { name: translate('projects.rename', 'zh-CN'), exact: true })
+      .click();
     await page.locator('.project-rename input').fill('Renamed project');
     await page.locator('.project-rename input').press('Enter');
     await page.waitForFunction(
@@ -135,7 +138,7 @@ test(
     };
     // Rename edits the row in place: Enter saves and the field gives the row back.
     const rename = async (id, title) => {
-      await open(id, '重命名');
+      await open(id, translate('session.rename', 'zh-CN'));
       await page.locator('#session-title-input').fill(title);
       await page.locator('#session-title-input').press('Enter');
       await page.locator('#session-title-input').waitFor({ state: 'detached' });
@@ -164,7 +167,9 @@ test(
       'hover must not open session actions',
     );
     await more(other.id).click();
-    await page.getByRole('menuitem', { name: '重命名', exact: true }).waitFor();
+    await page
+      .getByRole('menuitem', { name: translate('session.rename', 'zh-CN'), exact: true })
+      .waitFor();
     assert.equal(
       await page.locator('#sidebar-icon-tooltip').count(),
       0,
@@ -184,7 +189,7 @@ test(
     await page.keyboard.press('ArrowDown');
     assert.equal(
       await page
-        .getByRole('menuitem', { name: '重命名', exact: true })
+        .getByRole('menuitem', { name: translate('session.rename', 'zh-CN'), exact: true })
         .evaluate((el) => el === document.activeElement),
       true,
     );
@@ -223,14 +228,19 @@ test(
     await page.locator('#session-search').fill('不存在的词');
     await page.locator('#session-search-empty').waitFor({ state: 'visible' });
     assert.equal(await page.evaluate(() => window.searchBlurCount), 0);
-    assert.equal(await page.locator('#session-search-empty').innerText(), '无匹配会话');
+    assert.equal(
+      await page.locator('#session-search-empty').innerText(),
+      translate('ui.noMatchingSessions', 'zh-CN'),
+    );
     assert.equal(await page.locator('#session-search-note').count(), 0);
     await idle();
     assert.equal(
       await page.locator('#session-search').evaluate((el) => el === document.activeElement),
       true,
     );
-    await page.getByRole('button', { name: '关闭搜索', exact: true }).click();
+    await page
+      .getByRole('button', { name: translate('ui.closeSearch', 'zh-CN'), exact: true })
+      .click();
     await page.locator('#session-search').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#open-session-search').isVisible(), true);
     assert.equal(await page.locator('#session-search').isVisible(), false);
@@ -240,10 +250,10 @@ test(
     assert.equal(await page.locator('#session-search').inputValue(), '');
     await page.keyboard.press('Escape');
     await page.locator('#session-search').waitFor({ state: 'hidden' });
-    await open(other.id, '删除');
+    await open(other.id, translate('session.delete', 'zh-CN'));
     await page.locator('#session-dialog-cancel').click();
     assert.equal(await row(other.id).count(), 1);
-    await open(other.id, '删除');
+    await open(other.id, translate('session.delete', 'zh-CN'));
     await confirm();
     assert.equal(await row(other.id).count(), 0);
     assert.equal(
@@ -257,7 +267,7 @@ test(
     page = await launch();
     assert.match(await row(source.id).innerText(), /登录流程/);
     assert.equal(await page.locator('#messages .message').count(), 2);
-    await open(source.id, '删除');
+    await open(source.id, translate('session.delete', 'zh-CN'));
     await confirm();
     assert.equal(await row(source.id).count(), 0);
     // The window moves to a new session, which stays out of the list until something happens in it.
@@ -345,7 +355,10 @@ test(
     // The header is the eyebrow, the question is the title, and a recommendation is a badge rather than part of
     // the label — the label is what the model reads back, so the interface does not edit it to draw one.
     assert.equal(await questions.locator('.question-eyebrow').innerText(), '主题');
-    assert.equal(await questions.locator('.question-recommended').innerText(), '推荐');
+    assert.equal(
+      await questions.locator('.question-recommended').innerText(),
+      translate('ui.questionRecommended', 'zh-CN'),
+    );
     await mkdir(artifactPath(''), { recursive: true });
     await page.screenshot({ path: artifactPath('question-panel.png') });
     await questions.locator('.question-option', { hasText: '红色' }).click();
@@ -354,7 +367,7 @@ test(
     const chosen = questions.locator('.question-option.selected');
     assert.equal(await chosen.count(), 1);
     assert.match(await chosen.innerText(), /蓝色/);
-    await questions.getByRole('button', { name: '提交' }).click();
+    await questions.getByRole('button', { name: translate('ui.questionSubmit', 'zh-CN') }).click();
     await page.getByText('已按蓝色继续。', { exact: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     // The panel has to go with the answer, or it invites a second one nobody will read.
@@ -524,7 +537,8 @@ test(
     });
     assert.equal(await page.locator('#messages .tool-result img').count(), 1);
     await page.waitForFunction(
-      () => document.querySelector('#run-status').textContent === '本轮已结束',
+      (text) => document.querySelector('#run-status').textContent === text,
+      translate('ui.runStatus.completed', 'zh-CN'),
     );
     assert.match(await page.locator('#messages').textContent(), /图里是一个红色像素/);
   },
@@ -700,7 +714,10 @@ test(
     // The exit code, the two streams and the command itself: the four things a failing command is read for.
     const command = page.locator('#messages .tool-card-command').first();
     assert.match(await command.locator('.tool-card-command-line').innerText(), /node fail\.cjs/);
-    assert.equal(await command.locator('.tool-card-badge').first().innerText(), '退出码 3');
+    assert.equal(
+      await command.locator('.tool-card-badge').first().innerText(),
+      translate('ui.toolCardExit', 'zh-CN', { code: 3 }),
+    );
     assert.match(await command.locator('.tool-card-stdout').innerText(), /out/);
     assert.match(await command.locator('.tool-card-stderr').innerText(), /err/);
     // The file card says which lines it is, and draws the raw lines rather than the numbered text form.
@@ -1312,7 +1329,10 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   assert.equal(await page.locator('#workspace-panel').isVisible(), false);
   await page.locator('#open-workspace').click();
   await page.locator('#workspace-new-tab-page').waitFor();
-  assert.equal(await page.locator('#workspace-new-tab span').innerText(), '开始');
+  assert.equal(
+    await page.locator('#workspace-new-tab span').innerText(),
+    translate('workspace.startTab', 'zh-CN'),
+  );
   await page.locator('#workspace-close').click();
   await page.waitForFunction(() => document.body.dataset.workspaceView === 'closed');
   await page.locator('#workspace-panel').waitFor({ state: 'hidden' });

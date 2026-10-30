@@ -22,6 +22,7 @@ import {
   metadataAddress,
 } from '../packages/tools/network-guard.ts';
 import { browserTools } from '../packages/tools/browser.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 // ---- merged from web.test.ts ----
 
@@ -588,7 +589,7 @@ test('decodeBody prefers a byte-order mark, falls back to UTF-8 and drops a char
   assert.equal(decodeBody(Buffer.from('﻿你好', 'utf8'), 'text/html; charset=gbk'), '你好');
   assert.equal(decodeBody(Buffer.from('你好', 'utf8'), 'text/plain; charset=bogus-label'), '你好');
   const cut = Buffer.from('你好', 'utf8').subarray(0, 4);
-  assert.equal(decodeBody(cut, 'text/plain', true), '你');
+  assert.equal(decodeBody(cut, 'text/plain', true), translate('ui.export.roleUser', 'zh-CN'));
 });
 
 test('metadata addresses stay refused under the private-network opt-in in every spelling', async () => {

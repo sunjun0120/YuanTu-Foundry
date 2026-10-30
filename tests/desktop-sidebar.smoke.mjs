@@ -8,6 +8,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { artifactPath } from './desktop-smoke-support.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 
 test(
   'project names collapse, global search opens an unopened project and new-tab controls stay compact',
@@ -71,7 +72,7 @@ test(
       return (await window.yuantu.invoke({ type: 'snapshot' })).state.session.sessionId;
     });
     await toggle.hover();
-    const tip = page.getByRole('tooltip', { name: '收起侧边栏' });
+    const tip = page.getByRole('tooltip', { name: translate('ui.collapseSidebar', 'zh-CN') });
     await tip.waitFor();
     assert.deepEqual(
       await tip.evaluate((el) => {
@@ -99,7 +100,9 @@ test(
     const spacesCard = page.locator('#collapsed-spaces-card');
     await spacesCard.waitFor();
     assert.equal(
-      await spacesCard.getByRole('heading', { name: '空间', exact: true }).isVisible(),
+      await spacesCard
+        .getByRole('heading', { name: translate('projects.title', 'zh-CN'), exact: true })
+        .isVisible(),
       true,
     );
     assert.equal(await spacesCard.getByText('Alpha', { exact: true }).isVisible(), true);
@@ -144,9 +147,12 @@ test(
     );
     assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
     assert.equal(await page.locator('.project-sidebar').isVisible(), true);
-    assert.equal((await page.locator('.project-group-toggle').innerText()).trim(), '空间');
+    assert.equal(
+      (await page.locator('.project-group-toggle').innerText()).trim(),
+      translate('projects.title', 'zh-CN'),
+    );
     await page.locator('#open-session-search').hover();
-    const searchTip = page.getByRole('tooltip', { name: '全局搜索' });
+    const searchTip = page.getByRole('tooltip', { name: translate('projects.search', 'zh-CN') });
     await searchTip.waitFor();
     assert.equal(
       await searchTip.evaluate((el) => getComputedStyle(el).backgroundColor),
@@ -175,7 +181,10 @@ test(
         permissionRadius: '20px',
       },
     );
-    assert.equal((await page.locator('#new-session').innerText()).trim(), '新建任务');
+    assert.equal(
+      (await page.locator('#new-session').innerText()).trim(),
+      translate('ui.newTask', 'zh-CN'),
+    );
     assert.equal(
       await page.evaluate(
         async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.sessionId,
@@ -192,7 +201,12 @@ test(
     });
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
-    assert.equal(await page.getByRole('button', { name: '更换目录', exact: true }).count(), 0);
+    assert.equal(
+      await page
+        .getByRole('button', { name: translate('ui.changeFolder', 'zh-CN'), exact: true })
+        .count(),
+      0,
+    );
     assert.equal(await page.locator('#recent-sessions-label').count(), 0);
     const current = page.locator('.project-row.selected');
     await current.locator('.project-name').click();

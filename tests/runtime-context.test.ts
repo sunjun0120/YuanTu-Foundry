@@ -43,6 +43,7 @@ import type {
  * simulated by reopening it.
  */
 import { reply, toolCall } from './provider-fixture.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 async function fixture(t: test.TestContext, provider: Provider, db?: string) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-runtime-context-'));
   const file = db ?? path.join(root, 'sessions.sqlite');
@@ -632,7 +633,7 @@ test('a snapshot the model can no longer see is announced again after a compacti
     tools: createTools(root),
     approve: async () => true,
   });
-  await second.run({ sessionId, prompt: '继续' });
+  await second.run({ sessionId, prompt: translate('ui.continueRun', 'zh-CN') });
 
   const carried = snapshotsIn(requests[1]!.messages, 'workspace-outline');
   assert.equal(carried.length, 1, 'the outline is back in the window the model is sent');
@@ -660,7 +661,7 @@ test('an approved task is announced, and a step that completes updates it in pla
       : reply('第一步完成。'),
   );
   const agent = new Agent({ store, provider, tools: createTools(root), approve: async () => true });
-  await agent.run({ sessionId, taskId: task.id, prompt: '开始' });
+  await agent.run({ sessionId, taskId: task.id, prompt: translate('workspace.startTab', 'zh-CN') });
 
   // The checkpoint and the answer, then one repair round for the step left open: a pending manual criterion no
   // longer ends the run while there is model work left, and the identical failure after it stops the run.
@@ -709,7 +710,12 @@ test('a task resumed with work already on disk is told what not to repeat', asyn
   const agent = new Agent({ store, provider, tools: createTools(root), approve: async () => true });
   // `resumeTask` is what the host sends when it picks an interrupted attempt back up, and it is also what
   // carries the earlier attempt's checkpoints into this one: without it a new attempt starts the steps over.
-  await agent.run({ sessionId, taskId: task.id, prompt: '继续', resumeTask: true });
+  await agent.run({
+    sessionId,
+    taskId: task.id,
+    prompt: translate('ui.continueRun', 'zh-CN'),
+    resumeTask: true,
+  });
 
   const carried = snapshotsIn(requests[0]!.messages, 'task');
   assert.equal(carried.length, 1);
@@ -735,7 +741,11 @@ test('a task resumed with work already on disk is told what not to repeat', asyn
     tools: createTools(root),
     approve: async () => true,
   });
-  await second.run({ sessionId, taskId: fresh.id, prompt: '开始' });
+  await second.run({
+    sessionId,
+    taskId: fresh.id,
+    prompt: translate('workspace.startTab', 'zh-CN'),
+  });
   /**
    * The *newest* task snapshot is this run's, not the earlier task's.
    *

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { SessionStore } from '../packages/storage/sqlite.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 test(
   'each turn shows its own deliverables after the answer, opens previews, and survives reload',
@@ -77,7 +78,10 @@ test(
       'First report',
       'Revised report',
     ]);
-    assert.deepEqual(await cards.locator('h2').allTextContents(), ['本轮产物', '本轮产物']);
+    assert.deepEqual(await cards.locator('h2').allTextContents(), [
+      translate('ui.turnDeliverablesTitle', 'zh-CN'),
+      translate('ui.turnDeliverablesTitle', 'zh-CN'),
+    ]);
     assert.equal(await cards.locator('.deliverable-action').count(), 4);
     const order = await page.locator('#messages > *').evaluateAll((nodes) =>
       nodes

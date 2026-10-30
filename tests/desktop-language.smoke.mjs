@@ -16,6 +16,7 @@ import {
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 
 test(
   'desktop exports the complete paged session through its save dialog in the selected language',
@@ -332,7 +333,10 @@ test(
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('登录后跳回首页，请修复');
     await page.locator('#send').click();
-    await page.locator('#run-status').getByText('正在等待模型响应…', { exact: true }).waitFor();
+    await page
+      .locator('#run-status')
+      .getByText(translate('ui.runStatus.waitingModel', 'zh-CN'), { exact: true })
+      .waitFor();
     await bothRequests;
     assert.equal(requests, 2, 'the reply starts even with a pending title');
     assert.equal(await page.getByText('修复登录跳转', { exact: true }).count(), 0);
@@ -604,7 +608,8 @@ test('a child page opens while that child is still running', { timeout: 60_000 }
   releaseChild?.();
   await waitForPage(
     page,
-    () => document.querySelector('#subagent-transcript-result-title')?.textContent === '最终结果',
+    (text) => document.querySelector('#subagent-transcript-result-title')?.textContent === text,
+    translate('subagent.finalResult', 'zh-CN'),
   );
   await page
     .locator('#subagent-transcript-result')
@@ -673,8 +678,11 @@ test(
     await user.locator('.copy-user-message').click();
     assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), question);
     // The acknowledgement is React state set after the clipboard write settles; wait for it rather than racing it.
-    await user.locator('[role=status]').filter({ hasText: '已复制' }).waitFor({ timeout: 5000 });
-    assert.equal(await user.locator('[role=status]').innerText(), '已复制');
+    await user
+      .locator('[role=status]')
+      .filter({ hasText: translate('ui.copied', 'zh-CN') })
+      .waitFor({ timeout: 5000 });
+    assert.equal(await user.locator('[role=status]').innerText(), translate('ui.copied', 'zh-CN'));
     await page.evaluate(() => {
       document.documentElement.dataset.theme = 'dark';
     });

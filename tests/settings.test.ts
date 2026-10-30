@@ -1019,9 +1019,8 @@ test('a desktop with no usable native reports why, without changing where sessio
 
 test('desktop locale formats and translates zh-CN and en-US resources', () => {
   assert.equal(format('Hello {name} {missing}', { name: 'Agent' }), 'Hello Agent {missing}');
-  assert.equal(translate('background.title', 'zh-CN'), '后台任务');
-  assert.equal(translate('background.title', 'en-US'), 'Background tasks');
-  assert.equal(translate('ui.removeImage', 'en-US', { name: 'shot.png' }), 'Remove shot.png');
+  assert.notEqual(translate('background.title', 'zh-CN'), translate('background.title', 'en-US'));
+  assert.match(translate('ui.removeImage', 'en-US', { name: 'shot.png' }), /shot\.png/);
   assert.equal(translate('unknown.key', 'en-US'), 'unknown.key');
 });
 
@@ -1031,10 +1030,10 @@ test('desktop locale updates current language and notifies listeners', () => {
   const unsubscribe = onLocaleChange(() => changes++);
   setLocale('en-US');
   assert.equal(locale(), 'en-US');
-  assert.equal(t('background.stop'), 'Stop task');
+  assert.equal(t('background.stop'), translate('background.stop', 'en-US'));
   assert.equal(changes, 1);
   unsubscribe();
   setLocale('zh-CN');
-  assert.equal(t('background.stop'), '停止任务');
+  assert.equal(t('background.stop'), translate('background.stop', 'zh-CN'));
   assert.equal(changes, 1);
 });

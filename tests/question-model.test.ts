@@ -17,6 +17,7 @@ import {
   toggleQuestionCollapsed,
   toggleQuestionOption,
 } from '../apps/desktop/ui/conversation/question-model.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 /**
  * The question panel's state, away from the DOM.
@@ -197,28 +198,31 @@ test('the plan approval card separates the prompt from the plan and keeps the ke
   ]);
   const drafts = createQuestionDrafts();
   const chinese = questionCards([plan], drafts, 'zh-CN')[0]!;
-  assert.equal(chinese.header, '计划批准');
-  assert.equal(chinese.question, '批准这份计划，并在本轮开始执行吗？');
+  assert.equal(chinese.header, translate('question.plan.header', 'zh-CN'));
+  assert.equal(chinese.question, translate('question.plan.intro', 'zh-CN'));
   assert.equal(chinese.plan, '# README 补充\n\n1. 读取 README');
   assert.doesNotMatch(chinese.plan!, /Plan digest/);
   assert.equal(chinese.isPlan, true);
   assert.deepEqual(
     chinese.options.map((option) => [option.value, option.label]),
     [
-      ['Approve and execute', '批准并执行'],
-      ['Keep planning', '继续修改计划'],
+      ['Approve and execute', translate('question.plan.approve', 'zh-CN')],
+      ['Keep planning', translate('question.plan.keepPlanning', 'zh-CN')],
     ],
   );
-  assert.equal(chinese.options[0]!.description, '现在就解除只读模式，在本轮执行这份计划。');
+  assert.equal(
+    chinese.options[0]!.description,
+    translate('question.plan.approveDescription', 'zh-CN'),
+  );
   // The translation changes the label only: selecting the translated row answers with the kernel's value.
   toggleQuestionOption(drafts, 'approval', plan.request.questions[0]!, chinese.options[0]!.value);
   assert.deepEqual(questionAnswers(plan.request, questionDraft(drafts, 'approval')), [
     { id: 'approve', selected: ['Approve and execute'] },
   ]);
   const english = questionCards([plan], drafts, 'en-US')[0]!;
-  assert.equal(english.header, 'Plan approval');
-  assert.equal(english.question, 'Approve this plan and start carrying it out in this run?');
-  assert.equal(english.options[0]!.label, 'Approve and execute');
+  assert.equal(english.header, translate('question.plan.header', 'en-US'));
+  assert.equal(english.question, translate('question.plan.intro', 'en-US'));
+  assert.equal(english.options[0]!.label, translate('question.plan.approve', 'en-US'));
   assert.equal(english.plan, '# README 补充\n\n1. 读取 README');
 });
 

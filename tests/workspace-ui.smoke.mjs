@@ -9,6 +9,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { waitForPage } from './page-wait.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 
 /**
  * The two things the interface must get right about isolation, checked without a window.
@@ -365,7 +366,7 @@ test(
     };
     await step(
       'the send button',
-      page.getByRole('button', { name: '发送', exact: true }).waitFor(),
+      page.getByRole('button', { name: translate('ui.send', 'zh-CN'), exact: true }).waitFor(),
       30_000,
     );
     await step(

@@ -16,6 +16,7 @@ import { verificationNudge } from './desktop-smoke-support.mjs';
 import { quoteWindowsArgument } from '../packages/sandbox/windows-command.ts';
 import { windowsAccountTests, useAccountTests } from './windows-account-fixture.ts';
 import { accountHelper } from '../scripts/windows-account-ci.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 
 useAccountTests();
 
@@ -195,7 +196,9 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
       await page.locator('#prompt').fill(prompt);
       await page.locator('#send').click();
       try {
-        await page.getByRole('button', { name: '允许一次', exact: true }).click();
+        await page
+          .getByRole('button', { name: translate('approval.allow', 'zh-CN'), exact: true })
+          .click();
       } catch (error) {
         const state = await snapshot(page);
         console.error(
@@ -273,7 +276,7 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
       });
     const cancelledPid = await readPid();
     assert.doesNotThrow(() => process.kill(cancelledPid, 0));
-    await page.getByRole('button', { name: '停止', exact: true }).click();
+    await page.getByRole('button', { name: translate('ui.stop', 'zh-CN'), exact: true }).click();
     await idle(page);
     assert.throws(() => process.kill(cancelledPid, 0), { code: 'ESRCH' });
     await app.close();

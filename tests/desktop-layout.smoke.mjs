@@ -15,6 +15,7 @@ import {
   verificationNudge,
   waitFor,
 } from './desktop-smoke-support.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 process.env.YUANTU_SESSION_TITLES = 'false';
 
 /**
@@ -26,20 +27,23 @@ process.env.YUANTU_SESSION_TITLES = 'false';
  */
 async function approveOnce(page) {
   await page.waitForFunction(
-    () =>
+    (text) =>
       [...document.querySelectorAll('#approvals button')].some(
-        (button) => button.textContent?.trim() === '允许一次',
+        (button) => button.textContent?.trim() === text,
       ),
-    undefined,
+    translate('approval.allow', 'zh-CN'),
     { timeout: 15000 },
   );
-  await page.evaluate(() => {
-    const button = [...document.querySelectorAll('#approvals button')].find(
-      (candidate) => candidate.textContent?.trim() === '允许一次',
-    );
-    if (!(button instanceof HTMLButtonElement)) throw new Error('approval button disappeared');
-    button.click();
-  });
+  await page.evaluate(
+    (text) => {
+      const button = [...document.querySelectorAll('#approvals button')].find(
+        (candidate) => candidate.textContent?.trim() === text,
+      );
+      if (!(button instanceof HTMLButtonElement)) throw new Error('approval button disappeared');
+      button.click();
+    },
+    translate('approval.allow', 'zh-CN'),
+  );
 }
 
 // ---- merged from layout.smoke.mjs ----
@@ -97,35 +101,28 @@ test(
       expected: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
     }));
     assert.equal(scheme.mantine, scheme.expected);
-    const logo = async (theme) => {
-      assert.equal(await page.getByRole('combobox', { name: '切换模型' }).isVisible(), true);
+    const appearance = async (theme) => {
+      assert.equal(await page.locator('#model').isVisible(), true);
       assert.equal(await page.locator('select#model').count(), 0);
       assert.equal(
         await page.locator('#chat-page').evaluate((el) => getComputedStyle(el).backgroundColor),
         theme === 'dark' ? 'rgb(20, 20, 22)' : 'rgb(248, 248, 247)',
       );
-      assert.equal(await page.locator('.brand-logo[role="img"]').isVisible(), true);
-      assert.equal(await page.locator('.brand-mark').isVisible(), true);
-      await page.waitForFunction(() => {
-        const mark = document.querySelector('.brand-mark');
-        return mark instanceof HTMLImageElement && mark.complete && mark.naturalWidth > 0;
-      });
-      assert.equal(
-        await page.locator('.brand-mark').evaluate((el) => getComputedStyle(el).filter),
-        theme === 'dark' ? 'invert(1)' : 'none',
-      );
     };
     await page.emulateMedia({ colorScheme: 'dark' });
-    await logo('dark');
+    await appearance('dark');
     await page.emulateMedia({ colorScheme: 'light' });
-    await logo('light');
+    await appearance('light');
     await page.locator('#prompt').fill('保留这段草稿');
     await page.locator('#open-settings').click();
     await page.locator('#general-settings').click();
     await chooseSelectOption(page, 'ui-language', 'English');
     await page.waitForFunction(() => document.documentElement.lang === 'en-US');
     assert.equal(await page.locator('#general-settings-title').innerText(), 'General');
-    assert.equal(await page.locator('#settings-back').getAttribute('aria-label'), 'Back to chat');
+    assert.equal(
+      await page.locator('#settings-back').getAttribute('aria-label'),
+      translate('ui.backToChat', 'en-US'),
+    );
     assert.equal(
       (await page.locator('#model-settings').innerText()).replace(/\s+/g, ' '),
       'Models',
@@ -229,7 +226,10 @@ test(
       );
     }
     await page.locator('#settings-back').click();
-    assert.equal((await page.locator('#new-session').innerText()).trim(), 'New task');
+    assert.equal(
+      (await page.locator('#new-session').innerText()).trim(),
+      translate('ui.newTask', 'en-US'),
+    );
     assert.equal(
       await page.locator('#prompt').getAttribute('placeholder'),
       'Describe your task, @add context, /use Foundry capabilities',
@@ -239,7 +239,10 @@ test(
       [],
       'chat must not contain visible Chinese in English mode',
     );
-    assert.equal(await page.locator('#permission-mode option:checked').innerText(), 'Read only');
+    assert.equal(
+      await page.locator('#permission-mode option:checked').innerText(),
+      translate('permission.label.observe', 'en-US'),
+    );
     await page.locator('#open-settings').click();
     await page.locator('#general-settings').click();
     await chooseSelectOption(page, 'ui-language', 'Chinese');
@@ -248,7 +251,14 @@ test(
     const theme = async (value) => {
       await page.locator('#open-settings').click();
       await page.locator('#general-settings').click();
-      await chooseSelectOption(page, 'ui-appearance', { dark: '深色', light: '浅色' }[value]);
+      await chooseSelectOption(
+        page,
+        'ui-appearance',
+        {
+          dark: translate('general.appearanceDark', 'zh-CN'),
+          light: translate('general.appearanceLight', 'zh-CN'),
+        }[value],
+      );
       const colors = await page.evaluate(() => ({
         settings: getComputedStyle(document.querySelector('#general-settings-content'))
           .backgroundColor,
@@ -273,12 +283,12 @@ test(
       await page.screenshot({ path: artifactPath('settings-general-') + value + '.png' });
 
       await page.locator('#settings-back').click();
-      await logo(value);
+      await appearance(value);
       assert.equal(await page.locator('#prompt').inputValue(), '保留这段草稿');
     };
     await theme('dark');
     await page.emulateMedia({ colorScheme: 'light' });
-    await logo('dark');
+    await appearance('dark');
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].setContentSize(1232, 720),
     );
@@ -310,7 +320,7 @@ test(
     await page.locator('#prompt').fill('保留这段草稿');
     await theme('light');
     await page.emulateMedia({ colorScheme: 'dark' });
-    await logo('light');
+    await appearance('light');
     await page.locator('#prompt').fill('');
     await page.screenshot({ path: artifactPath('desktop-layout-light.png') });
     await app.evaluate(({ BrowserWindow }) =>
@@ -398,28 +408,6 @@ test(
     });
     assert.equal(entrance.animation, 'composer-neon-scan');
     assert.equal(entrance.visibility, 'visible');
-
-    // Switching the OS preference at runtime must stop and then resume the live material.
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.waitForFunction(
-      () => document.querySelector('.organic-logo')?.dataset.motionState === 'reduced',
-    );
-    const contour = () => page.locator('[data-petal]').first().getAttribute('d');
-    const stillContour = await contour();
-    const nextFrames = () =>
-      page.evaluate(
-        () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-      );
-    await nextFrames();
-    assert.equal(await contour(), stillContour);
-    await page.emulateMedia({ reducedMotion: 'no-preference' });
-    await page.waitForFunction(() => {
-      const logo = document.querySelector('.organic-logo');
-      return logo?.dataset.motionState !== 'reduced' && logo?.dataset.phase === 'idle';
-    });
-    const animatedContour = await contour();
-    await nextFrames();
-    assert.notEqual(await contour(), animatedContour);
   },
 );
 
@@ -586,11 +574,18 @@ test(
         !document.querySelector('#open-background').hidden ||
         document.querySelector('#approvals button') !== null,
     );
-    if (await page.getByRole('button', { name: '允许一次', exact: true }).isVisible())
+    if (
+      await page
+        .getByRole('button', { name: translate('approval.allow', 'zh-CN'), exact: true })
+        .isVisible()
+    )
       await approveOnce(page);
     await page.locator('#open-background').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#background-policy, #background-popover-footer').count(), 0);
-    assert.equal(await page.locator('#open-background').innerText(), '1 个后台任务运行中');
+    assert.equal(
+      await page.locator('#open-background').innerText(),
+      translate('background.runningCount', 'zh-CN', { count: 1 }),
+    );
     assert.equal(
       await page
         .locator('#open-background')
@@ -719,15 +714,19 @@ test(
           JSON.stringify(await page.evaluate(() => window.__backgroundPopoverTrace)),
       );
     assert.equal(unexpectedlyHidden, false);
-    await row.getByRole('button', { name: '停止任务' }).click();
+    await row.getByRole('button', { name: translate('background.stop', 'zh-CN') }).click();
     await page.waitForFunction(
-      () =>
+      (text) =>
         document
           .querySelector('#background-list .background-card')
-          ?.querySelector('.background-status')?.textContent === '已取消',
+          ?.querySelector('.background-status')?.textContent === text,
+      translate('background.cancelled', 'zh-CN'),
     );
     assert.notEqual(await row.locator('.background-duration').innerText(), '—');
-    assert.equal(await page.locator('#open-background').innerText(), '1 个后台任务');
+    assert.equal(
+      await page.locator('#open-background').innerText(),
+      translate('background.totalCount', 'zh-CN', { count: 1 }),
+    );
     await page.locator('#chat-title').hover();
     await page.locator('#background-popover').waitFor({ state: 'hidden' });
     // Let the first run finish its verification round: a prompt sent into a live run is a steer, and the
@@ -744,7 +743,11 @@ test(
         document.querySelectorAll('#background-list .background-card').length === 2 ||
         document.querySelector('#approvals button') !== null,
     );
-    if (await page.getByRole('button', { name: '允许一次', exact: true }).isVisible())
+    if (
+      await page
+        .getByRole('button', { name: translate('approval.allow', 'zh-CN'), exact: true })
+        .isVisible()
+    )
       await approveOnce(page);
     await page.waitForFunction(
       () =>
@@ -752,7 +755,10 @@ test(
         document.querySelectorAll('#background-list .background-status')[1]?.textContent ===
           '退出码：0',
     );
-    assert.equal(await page.locator('#open-background').innerText(), '2 个后台任务');
+    assert.equal(
+      await page.locator('#open-background').innerText(),
+      translate('background.totalCount', 'zh-CN', { count: 2 }),
+    );
     await page.waitForTimeout(2200);
     assert.equal(await page.locator('#open-background').isVisible(), true);
     assert.equal(await page.locator('#background-list .background-card').count(), 2);

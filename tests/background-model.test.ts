@@ -9,6 +9,7 @@ import {
   backgroundView,
   shellOf,
 } from '../apps/desktop/ui/panels/background-model.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 /**
  * The background card list: which jobs are the current session's, what the header says while they run, and how a
@@ -53,7 +54,7 @@ test('the header label counts running jobs first, otherwise all of them', () => 
     'zh-CN',
   );
   assert.equal(running.overall, 'running');
-  assert.equal(running.label, '1 个后台任务运行中');
+  assert.equal(running.label, translate('background.runningCount', 'zh-CN', { count: 1 }));
   assert.equal(running.ariaLabel, '1 个后台任务运行中 · 运行中');
 
   const done = backgroundView(
@@ -61,13 +62,13 @@ test('the header label counts running jobs first, otherwise all of them', () => 
     'zh-CN',
   );
   assert.equal(done.overall, 'failed');
-  assert.equal(done.label, '2 个后台任务');
+  assert.equal(done.label, translate('background.totalCount', 'zh-CN', { count: 2 }));
   assert.equal(done.rows[0]?.exitLabel, '退出码：0');
   assert.equal(done.rows[1]?.exitLabel, null, 'a failed job without an exit code names its status');
 
   const empty = backgroundView(snapshot([]), 'zh-CN');
   assert.equal(empty.visible, false);
-  assert.equal(empty.label, '后台任务');
+  assert.equal(empty.label, translate('background.title', 'zh-CN'));
   assert.equal(empty.overall, 'idle');
 });
 

@@ -9,6 +9,7 @@ import path from 'node:path';
 import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
 import { projectRoot } from './process-fixture.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 /**
  * The installed Electron executable, found the way the `electron` package finds it but without its fallback.
@@ -99,6 +100,7 @@ async function desktopPage(t: test.TestContext) {
         "export * from './apps/desktop/i18n.ts';",
         "export {mountSubagents} from './apps/desktop/ui/conversation/subagents-mount.tsx';",
         "export {mountQuestions} from './apps/desktop/ui/conversation/questions-mount.tsx';",
+        "export {mountSummary} from './apps/desktop/ui/panels/summary-mount.tsx';",
         "export {ProductShell} from './apps/desktop/ui/layout/ProductShell.tsx';",
         "export {updateChrome} from './apps/desktop/ui/chrome.ts';",
         "export {useLocale} from './apps/desktop/ui/i18n.ts';",
@@ -180,7 +182,7 @@ test(
     if (!page) return;
     assert.equal(
       await page.locator('#questions .question-title').innerText(),
-      '批准这份计划，并在本轮开始执行吗？',
+      translate('question.plan.intro', 'zh-CN'),
     );
     const steps = page.locator('#questions .question-plan ol > li');
     assert.equal(await steps.count(), 4);
@@ -282,12 +284,18 @@ test(
     await card.locator('.question-prev').click();
     await count.filter({ hasText: '1/2' }).waitFor();
     assert.equal(await input.inputValue(), '保留这一题的答案');
-    const collapse = card.getByRole('button', { name: '收起', exact: true });
+    const collapse = card.getByRole('button', {
+      name: translate('ui.questionCollapse', 'zh-CN'),
+      exact: true,
+    });
     assert.equal(await collapse.locator('svg').isVisible(), true);
     assert.equal(await collapse.getAttribute('aria-expanded'), 'true');
     await collapse.click();
     assert.equal(await card.locator('.question-body').isVisible(), false);
-    const expand = card.getByRole('button', { name: '展开', exact: true });
+    const expand = card.getByRole('button', {
+      name: translate('ui.questionExpand', 'zh-CN'),
+      exact: true,
+    });
     assert.equal(await expand.getAttribute('aria-expanded'), 'false');
     await expand.click();
     assert.equal(await input.isVisible(), true);
@@ -385,7 +393,10 @@ test(
     assert.equal(await page.locator('#locale-attribute').getAttribute('title'), 'Settings');
     await page.evaluate(`localeApi.flushSync(() => localeApi.setLocale('zh-CN'));`);
     for (const attribute of ['title', 'aria-label', 'placeholder'])
-      assert.equal(await page.locator('#locale-attribute').getAttribute(attribute), '设置');
+      assert.equal(
+        await page.locator('#locale-attribute').getAttribute(attribute),
+        translate('ui.settings', 'zh-CN'),
+      );
     // A React label can change while English is selected; its new key survives the locale round trip.
     await page.evaluate(
       `localeApi.flushSync(() => { localeApi.setLocale('en-US'); changeAttributeKey('ui.newSession'); });`,
@@ -394,7 +405,83 @@ test(
       `document.querySelector('#locale-attribute').title === 'New session'`,
     );
     await page.evaluate(`localeApi.flushSync(() => localeApi.setLocale('zh-CN'))`);
-    assert.equal(await page.locator('#locale-attribute').getAttribute('title'), '新建会话');
+    assert.equal(
+      await page.locator('#locale-attribute').getAttribute('title'),
+      translate('ui.newSession', 'zh-CN'),
+    );
     assert.equal(await page.locator('#locale-user-content').innerText(), '设置/新建会话.txt');
+  },
+);
+
+test(
+  'summary stays compact and refreshes an open popover for each turn and live result',
+  { timeout: 30000, skip: electronSkip },
+  async (t) => {
+    const page = await desktopPage(t);
+    if (!page) return;
+    await page.setViewportSize({ width: 1100, height: 700 });
+    for (const file of [
+      'styles.css',
+      'styles-panels.css',
+      'layout.css',
+      'layout-surfaces.css',
+      'ui/styles.css',
+    ])
+      await page.addStyleTag({
+        content: await readFile(path.join(projectRoot, 'apps/desktop', file), 'utf8'),
+      });
+    await page.evaluate(`(() => {
+      localeApi.setLocale('zh-CN');
+      localeApi.flushSync(() => localeApi.updateChrome({welcomeVisible:false}));
+      const calls = Array.from({length:18}, (_,i) => ({id:'old-'+i,name:'scan_target_resolve',arguments:{purl:'pkg:github/torvalds/linux',limit:5}}));
+      window.summarySnapshot = {session:{sessionId:'summary-session',running:false,tools:[],messages:[
+        {role:'user',content:'first'},
+        {role:'assistant',content:'',toolCalls:calls},
+        ...calls.map(call=>({role:'tool',toolCallId:call.id,content:'ok',isError:false}))
+      ]}};
+      window.summaryHandle = localeApi.mountSummary({getState:()=>summarySnapshot});
+      summaryHandle.render();
+    })()`);
+    await page.locator('#open-summary').click();
+    const popover = page.locator('#summary-popover');
+    const rows = popover.locator('.summary-call');
+    await page.waitForFunction(`document.querySelectorAll('.summary-call').length === 18`);
+    const layout = await popover.evaluate((element) => {
+      const list = element.querySelector('.summary-calls')!;
+      return {
+        height: element.getBoundingClientRect().height,
+        scrollable: list.scrollHeight > list.clientHeight,
+      };
+    });
+    assert.ok(layout.height <= 330, `summary should stay compact: ${layout.height}`);
+    assert.equal(layout.scrollable, true, 'only the call list should scroll');
+    await page.evaluate(`(() => {
+      // The bridge's mirror retains the outer object and replaces the session section.
+      summarySnapshot.session = {...summarySnapshot.session,running:true,messages:[...summarySnapshot.session.messages,{role:'user',content:'second'}]};
+      summaryHandle.render();
+    })()`);
+    await popover.locator('.summary-empty').waitFor();
+    assert.equal(await rows.count(), 0);
+    assert.equal(await popover.isVisible(), true);
+    await page.evaluate(`(() => {
+      summarySnapshot.session = {...summarySnapshot.session,tools:[{id:'new',name:'scan_vuln_query',arguments:{limit:10}}]};
+      summaryHandle.render();
+    })()`);
+    await rows.filter({ hasText: 'vuln_query' }).waitFor();
+    assert.equal(await rows.count(), 1);
+    assert.equal(await rows.first().getAttribute('data-status'), 'running');
+    await page.evaluate(`(() => {
+      const call = summarySnapshot.session.tools[0];
+      summarySnapshot.session = {...summarySnapshot.session,running:false,tools:[],messages:[...summarySnapshot.session.messages,
+        {role:'assistant',content:'',toolCalls:[call]},
+        {role:'tool',toolCallId:'new',content:'ok',isError:false}
+      ]};
+      summaryHandle.render();
+    })()`);
+    await page.waitForFunction(
+      `document.querySelector('.summary-call')?.dataset.status === 'succeeded'`,
+    );
+    assert.equal(await rows.count(), 1);
+    assert.doesNotMatch(await popover.innerText(), /target_resolve/);
   },
 );

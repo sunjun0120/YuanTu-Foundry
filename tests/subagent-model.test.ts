@@ -10,6 +10,7 @@ import {
   subagentWorkDuration,
   subagentWorkMs,
 } from '../apps/desktop/ui/conversation/subagent-model.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 /**
  * The numbers the sub-agent catalog and detail cards share. One pair of formatters keeps "12.3K tok" and "2m 05s"
@@ -51,7 +52,10 @@ test('work time chooses seconds, minutes, hours or days', () => {
 });
 
 test('the status label falls back to the raw status when no key exists', () => {
-  assert.equal(subagentStatusLabel(view({ status: 'completed' }), 'zh-CN'), '已完成');
+  assert.equal(
+    subagentStatusLabel(view({ status: 'completed' }), 'zh-CN'),
+    translate('subagent.status.completed', 'zh-CN'),
+  );
   assert.equal(subagentStatusLabel(view({ status: 'future' as never }), 'zh-CN'), 'future');
   assert.equal(subagentDotState(view({ status: 'running' })), 'ongoing');
   assert.equal(subagentDotState(view({ status: 'completed' })), 'done');
@@ -80,7 +84,7 @@ test('findings pair every statement with its evidence and keep the unverified no
     'zh-CN',
   );
   assert.equal(reading.summary, 'done');
-  assert.equal(reading.heading, '结论与依据');
+  assert.equal(reading.heading, translate('subagent.findings', 'zh-CN'));
   assert.equal(reading.findings[0]?.evidence, '依据: read the file [a.md, b.md]');
   assert.equal(reading.findings[1]?.evidence, '依据: seen');
   assert.match(reading.unverified ?? '', /^未核实: the build$/);

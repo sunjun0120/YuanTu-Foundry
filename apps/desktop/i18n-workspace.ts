@@ -276,18 +276,8 @@ export const workspaceMessages: Record<string, [string, string]> = {
     'The key is stored with system encryption on this device.',
   ],
   /** Eyebrows were English-only brand lines; the Chinese interface now reads Chinese and English keeps them. */
-  'ui.welcomeEyebrow': ['聚焦你的项目', 'YOUR PROJECT, IN FOCUS'],
   'ui.settingsEyebrowGeneral': ['偏好设置 / 通用', 'PREFERENCES / GENERAL'],
   'ui.settingsEyebrowModels': ['偏好设置 / 模型', 'PREFERENCES / MODELS'],
-  'ui.welcomeStart': ['从一个任务开始。', 'Start with a task.'],
-  'ui.welcomeSubtitle': [
-    '读懂项目，梳理思路，让改动逐步落地。',
-    'Understand the project, plan the work, and make changes step by step.',
-  ],
-  'ui.exploreProject': ['认识这个项目', 'Explore this project'],
-  'ui.learnFolders': ['了解目录与关键文件 ↗', 'Learn the folders and key files ↗'],
-  'ui.findHowToRun': ['找到运行方式', 'Find how to run it'],
-  'ui.startWithGuide': ['从项目说明开始 ↗', 'Start with the project guide ↗'],
   'ui.ready': ['准备就绪', 'Ready'],
   /**
    * The run status line, one entry per state it can be in.

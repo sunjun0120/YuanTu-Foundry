@@ -11,6 +11,7 @@ import {
   visibleTurnFiles,
   visibleTurns,
 } from '../apps/desktop/ui/conversation/turn-changes-model.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 /**
  * The turn-changes card readings: a preview file the agent deleted again is not an edit it kept, a long list collapses
@@ -83,8 +84,8 @@ test('a long list collapses to three rows and names the toggle', () => {
   );
   assert.equal(reading.rows.length, 3);
   assert.equal(reading.hiddenRows, 2);
-  assert.equal(reading.title, '已编辑 5 个文件');
-  assert.equal(reading.toggleLabel, '全部 5 个文件');
+  assert.equal(reading.title, translate('ui.editedFiles', 'zh-CN', { count: 5 }));
+  assert.equal(reading.toggleLabel, translate('ui.allChangedFiles', 'zh-CN', { count: 5 }));
   const open = turnCardReading(
     turn({
       files: ['a', 'b', 'c', 'd'].map((path) => ({ ...file(path), entries: [] })) as never,
@@ -94,7 +95,7 @@ test('a long list collapses to three rows and names the toggle', () => {
   );
   assert.equal(open.rows.length, 4);
   assert.equal(open.hiddenRows, 0);
-  assert.equal(open.toggleLabel, 'Collapse file list');
+  assert.equal(open.toggleLabel, translate('ui.collapseChangedFiles', 'en-US'));
   const short = turnCardReading(
     turn({ files: [{ ...file('a'), entries: [] }] as never }),
     false,
@@ -155,24 +156,27 @@ test('a preview names the sub-agent and describes each journal row', () => {
     ]),
     'zh-CN',
   );
-  assert.equal(entries[0]?.attribution, '子代理：检查报告');
-  assert.equal(entries[0]?.notice, '可恢复修改前的文件内容');
-  assert.equal(entries[0]?.undo?.label, '撤销此修改');
-  assert.equal(entries[0]?.undo?.confirmLabel, '确认删除此新建文件');
+  assert.equal(
+    entries[0]?.attribution,
+    translate('subagent.attribution', 'zh-CN', { objective: '检查报告' }),
+  );
+  assert.equal(entries[0]?.notice, translate('ui.restoreContent', 'zh-CN'));
+  assert.equal(entries[0]?.undo?.label, translate('ui.undoChange', 'zh-CN'));
+  assert.equal(entries[0]?.undo?.confirmLabel, translate('ui.undoNewFile', 'zh-CN'));
   assert.equal(entries[1]?.undo, null, 'a repeated journal row offers only its first undo');
   assert.equal(entries[2]?.attribution, null);
-  assert.equal(entries[2]?.notice, '这条记录没有恢复快照，仅可查看差异。');
+  assert.equal(entries[2]?.notice, translate('ui.legacyChange', 'zh-CN'));
   assert.equal(entries[2]?.undo, null, 'a legacy receipt has no snapshot to restore');
-  assert.equal(entries[3]?.notice, '已撤销');
+  assert.equal(entries[3]?.notice, translate('ui.undone', 'zh-CN'));
   assert.equal(entries[3]?.undo, null, 'an undone row offers nothing further');
 });
 
 test('a preview reads in the interface language', () => {
   const record = stored({ id: 'run-1', change: change({ kind: 'create' }) });
   const entries = turnPreviewEntries(changedFile([{ record, change: record.change }]), 'en-US');
-  assert.equal(entries[0]?.notice, 'The previous file content can be restored');
-  assert.equal(entries[0]?.undo?.label, 'Undo this change');
-  assert.equal(entries[0]?.undo?.confirmLabel, 'Confirm deleting this new file');
+  assert.equal(entries[0]?.notice, translate('ui.restoreContent', 'en-US'));
+  assert.equal(entries[0]?.undo?.label, translate('ui.undoChange', 'en-US'));
+  assert.equal(entries[0]?.undo?.confirmLabel, translate('ui.undoNewFile', 'en-US'));
   const attribution = turnPreviewEntries(
     changedFile([
       {

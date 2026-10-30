@@ -7,6 +7,7 @@ import path from 'node:path';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { artifactPath, setWindowContentSize } from './desktop-smoke-support.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 
 test(
   'both side regions animate open and closed without losing the chat draft',
@@ -311,7 +312,7 @@ test(
       assert.ok(expansion.every((frame) => frame.left >= frame.sidebarRight - 1));
       assert.equal(
         await page.locator('#workspace-fullscreen').getAttribute('data-tooltip'),
-        '还原窗口',
+        translate('workspace.exitFullscreen', 'zh-CN'),
       );
       assert.equal(await page.locator('#workspace-panel').getAttribute('aria-modal'), null);
       if (process.env.YUANTU_QA_SCREENSHOT) {
@@ -332,7 +333,7 @@ test(
       assert.ok(Math.abs((await geometry()).width - docked.width) <= 1);
       assert.equal(
         await page.locator('#workspace-fullscreen').getAttribute('data-tooltip'),
-        '放大窗口',
+        translate('workspace.fullscreenTitle', 'zh-CN'),
       );
     }
 

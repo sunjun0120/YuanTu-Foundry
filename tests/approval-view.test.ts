@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { approvalSummary } from '../apps/desktop/approval-view.ts';
-import { setLocale } from '../apps/desktop/i18n.ts';
+import { setLocale, translate } from '../apps/desktop/i18n.ts';
 import type { Approval } from '../packages/protocol/index.ts';
 
 const command: Approval = {
@@ -15,7 +15,7 @@ test('a command approval reads in Chinese and leads with the command, not the JS
   t.after(() => setLocale('zh-CN'));
   setLocale('zh-CN');
   const summary = approvalSummary(command);
-  assert.equal(summary.title, '执行命令');
+  assert.equal(summary.title, translate('approval.title.command', 'zh-CN'));
   assert.match(summary.why, /run_command/);
   assert.equal(summary.subject, 'node --test');
   assert.equal(summary.directory, 'app');

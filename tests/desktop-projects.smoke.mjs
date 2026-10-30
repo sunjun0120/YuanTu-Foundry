@@ -8,6 +8,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { artifactPath } from './desktop-smoke-support.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 
 test(
   'a background workspace receives its answer while another workspace remains visible',
@@ -158,8 +159,10 @@ test(
     const dialog = page.getByRole('dialog');
     await dialog.getByRole('button', { name: '蓝色', exact: false }).click();
     await page.screenshot({ path: artifactPath('project-pending.png') });
-    await dialog.getByRole('button', { name: '提交', exact: true }).click();
-    await dialog.getByText('当前没有待处理请求').waitFor();
+    await dialog
+      .getByRole('button', { name: translate('ui.questionSubmit', 'zh-CN'), exact: true })
+      .click();
+    await dialog.getByText(translate('projects.noPending', 'zh-CN')).waitFor();
     assert.equal(
       (
         await page.evaluate(async () => (await window.yuantu.invoke({ type: 'snapshot' })).state)
@@ -172,7 +175,9 @@ test(
       aId,
     );
     assert.equal(returned.ok, true, returned.error);
-    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await dialog
+      .getByRole('button', { name: translate('permission.dialog.close', 'zh-CN'), exact: true })
+      .click();
     await page.getByText('A 已收到蓝色', { exact: true }).waitFor();
     const row = page.locator(`[data-project-id="${aId}"]`);
     await row.locator('.session-item').first().waitFor();

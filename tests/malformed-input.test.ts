@@ -20,6 +20,7 @@ import { runSpreadsheetOperation } from '../packages/office/spreadsheet.ts';
 import { createDocx } from '../packages/office/document.ts';
 import { createPptx } from '../packages/office/presentation.ts';
 import { tempRoot } from './temp-fixture.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 /** mulberry32: small, fast and deterministic, which is all a reproducible generator needs to be. */
 function random(seed: number): () => number {
@@ -78,7 +79,7 @@ test('htmlToText survives arbitrary markup soup and never shows a closed script'
     '<svg>',
     '</svg>',
     'text ',
-    '中文',
+    translate('general.languageZh', 'zh-CN'),
     '\u0000',
     '\r\n',
     '<a href="<script>">',
@@ -177,7 +178,15 @@ test('the Host link frames lines exactly, however the bytes arrive', () => {
   for (let seed = 1; seed <= SEEDS; seed++) {
     const next = random(seed);
     const lines = Array.from({ length: 1 + Math.floor(next() * 10) }, () =>
-      JSON.stringify({ text: pick(next, ['a', '中文', '😀😀', 'x'.repeat(200), ' spaced ']) }),
+      JSON.stringify({
+        text: pick(next, [
+          'a',
+          translate('general.languageZh', 'zh-CN'),
+          '😀😀',
+          'x'.repeat(200),
+          ' spaced ',
+        ]),
+      }),
     );
     const received: string[] = [];
     const errors: Error[] = [];

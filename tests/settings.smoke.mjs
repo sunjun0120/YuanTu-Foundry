@@ -10,6 +10,7 @@ import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { chooseSelectOption, readSelectOptions } from './desktop-smoke-support.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 
 test(
   'desktop saves blank model limits and completes chat with automatic capacity',
@@ -71,7 +72,7 @@ test(
     await page.locator('#settings-model').fill('auto-model');
     await page.locator('#settings-key').fill('synthetic-unused-secret');
     await page.locator('#settings-save').click();
-    await page.getByText('模型配置已保存并生效，可以开始聊天。', { exact: true }).waitFor();
+    await page.getByText(translate('settingsMain.saved', 'zh-CN'), { exact: true }).waitFor();
     const saved = await page.evaluate(() => window.yuantu.settings({ type: 'get' }));
     assert.equal(saved.settings.maxContextTokens, undefined);
     assert.equal(saved.settings.maxOutputTokens, undefined);
@@ -152,10 +153,10 @@ test(
       await page.locator('#open-settings').click();
       return options.at(-1);
     };
-    assert.equal(await modelActionLabel(), '模型设置');
+    assert.equal(await modelActionLabel(), translate('settings.modelEntry', 'zh-CN'));
     await chooseSelectOption(page, 'ui-language', 'English');
     assert.equal(await page.locator('#general-settings-title').textContent(), 'General');
-    assert.equal(await modelActionLabel(), 'Model settings');
+    assert.equal(await modelActionLabel(), translate('settings.modelEntry', 'en-US'));
     await chooseSelectOption(page, 'ui-language', 'Chinese');
     await page.locator('#model-settings').click();
     assert.deepEqual(await readSelectOptions(page, 'settings-protocol'), [
@@ -163,7 +164,10 @@ test(
       'Anthropic Messages',
       'OpenAI Responses',
     ]);
-    assert.equal(await page.locator('#settings-protocol').inputValue(), 'OpenAI Chat Completions');
+    assert.equal(
+      await page.locator('#settings-protocol').inputValue(),
+      translate('settings.protocolOpenai', 'en-US'),
+    );
     assert.equal(await page.locator('#settings-url').inputValue(), 'https://api.openai.com');
     assert.equal(
       await page
@@ -374,7 +378,9 @@ test(
       const page = await app.firstWindow();
       await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(10000);
-      await page.getByRole('button', { name: '设置', exact: true }).waitFor();
+      await page
+        .getByRole('button', { name: translate('ui.settings', 'zh-CN'), exact: true })
+        .waitFor();
       await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
       return page;
     };
@@ -385,20 +391,26 @@ test(
     await page.locator('.settings-model-row').first().locator('[data-action="expand"]').click();
     assert.equal(
       await page.locator('#settings-context-tokens').getAttribute('placeholder'),
-      '自动（可手动指定）',
+      translate('settings.automaticBudget', 'zh-CN'),
     );
     assert.equal(
       await page.locator('#settings-output-tokens').getAttribute('placeholder'),
-      '自动（可手动指定）',
+      translate('settings.automaticBudget', 'zh-CN'),
     );
     await page.locator('#settings-context-tokens').fill('128000');
     await page.locator('#settings-output-tokens').fill('8192');
     await chooseSelectOption(page, 'settings-protocol', 'Anthropic Messages');
-    await page.getByLabel('接口地址').fill(url);
-    await page.getByLabel('模型 ID', { exact: true }).fill('configured-model');
-    await page.getByLabel('API 密钥', { exact: true }).fill('settings-ui-secret');
+    await page.getByLabel(translate('settings.url', 'zh-CN')).fill(url);
+    await page
+      .getByLabel(translate('settings.modelId', 'zh-CN'), { exact: true })
+      .fill('configured-model');
+    await page
+      .getByLabel(translate('settings.apiKey', 'zh-CN'), { exact: true })
+      .fill('settings-ui-secret');
     await page.locator('#settings-test').click();
-    await page.getByText('连接成功，模型已返回响应。测试不会保存配置。', { exact: true }).waitFor();
+    await page
+      .getByText(translate('settingsMain.testSucceeded', 'zh-CN'), { exact: true })
+      .waitFor();
     assert.equal(requests, 1);
     const before = await page.evaluate(() => window.yuantu.settings({ type: 'get' }));
     assert.equal(before.settings.hasKey, false);
@@ -406,8 +418,11 @@ test(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.sessionId,
     );
     await page.locator('#settings-save').click();
-    await page.getByText('模型配置已保存并生效，可以开始聊天。', { exact: true }).waitFor();
-    assert.equal(await page.getByLabel('API 密钥', { exact: true }).inputValue(), '');
+    await page.getByText(translate('settingsMain.saved', 'zh-CN'), { exact: true }).waitFor();
+    assert.equal(
+      await page.getByLabel(translate('settings.apiKey', 'zh-CN'), { exact: true }).inputValue(),
+      '',
+    );
     const publicSettings = await page.evaluate(() => window.yuantu.settings({ type: 'get' }));
     assert.equal(publicSettings.settings.source, 'saved');
     assert.equal(publicSettings.settings.groupName, 'Primary endpoint');
@@ -421,13 +436,17 @@ test(
     );
     if (process.env.YUANTU_QA_SCREENSHOT) await page.screenshot({ path: artifactPath('qa.png') });
     await page.locator('#settings-back').click();
-    await page.getByRole('textbox', { name: '任务描述' }).fill('配置后开始聊天');
+    await page
+      .getByRole('textbox', { name: translate('ui.taskDescription', 'zh-CN') })
+      .fill('配置后开始聊天');
     await page.locator('#send').click();
     await page.getByText('配置生效后的回复', { exact: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
-    await page.getByLabel('模型 ID', { exact: true }).fill('changed-model');
+    await page
+      .getByLabel(translate('settings.modelId', 'zh-CN'), { exact: true })
+      .fill('changed-model');
     const pidBeforeSave = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.hostPid,
     );
@@ -460,8 +479,14 @@ test(
     await page.getByText('配置生效后的回复', { exact: true }).waitFor();
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
-    assert.equal(await page.getByLabel('模型 ID', { exact: true }).inputValue(), 'changed-model');
-    assert.equal(await page.getByLabel('API 密钥', { exact: true }).inputValue(), '');
+    assert.equal(
+      await page.getByLabel(translate('settings.modelId', 'zh-CN'), { exact: true }).inputValue(),
+      'changed-model',
+    );
+    assert.equal(
+      await page.getByLabel(translate('settings.apiKey', 'zh-CN'), { exact: true }).inputValue(),
+      '',
+    );
   },
 );
 
@@ -554,7 +579,10 @@ test(
     page = await launch();
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
-    assert.equal(await page.locator('#settings-protocol').inputValue(), 'OpenAI Responses');
+    assert.equal(
+      await page.locator('#settings-protocol').inputValue(),
+      translate('settings.protocolResponses', 'en-US'),
+    );
     const reply = await page.evaluate(() => window.yuantu.settings({ type: 'get' }));
     assert.equal(reply.settings.protocol, 'openai-responses');
     assert.equal(reply.settings.hasKey, true);
@@ -736,7 +764,7 @@ test(
     await toggle.click();
     if (process.env.YUANTU_QA_DIR) {
       await page.locator('#general-settings').click();
-      await chooseSelectOption(page, 'ui-appearance', '深色');
+      await chooseSelectOption(page, 'ui-appearance', translate('general.appearanceDark', 'zh-CN'));
       await page.locator('#model-settings').click();
       await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
       await page.screenshot({ path: artifactPath('catalog.png') });
@@ -1022,7 +1050,11 @@ test(
       await page
         .locator('#permission-menu [data-preset] .permission-copy > span')
         .evaluateAll((nodes) => nodes.map((node) => node.textContent.trim())),
-      ['请求批准', '帮我批准', '完全访问权限'],
+      [
+        translate('permission.label.guarded', 'zh-CN'),
+        translate('permission.label.auto', 'zh-CN'),
+        translate('permission.label.unconfined', 'zh-CN'),
+      ],
     );
     await page.keyboard.press('Escape');
     /**

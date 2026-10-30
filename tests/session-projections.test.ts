@@ -1,6 +1,6 @@
 import { runEndingsProjection, type RunEndingsState } from '../packages/storage/run-endings.ts';
 import { runEndingText } from '../apps/desktop/renderer-messages.ts';
-import { setLocale } from '../apps/desktop/i18n.ts';
+import { setLocale, translate } from '../apps/desktop/i18n.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -837,8 +837,8 @@ test('unanswered run endings preserve recorded causes through a store reopen', a
   );
   setLocale('zh-CN');
   assert.match(runEndingText(expected[0]!), /应用关闭/);
-  assert.equal(runEndingText(expected[1]!), '已停止，未产生回答。');
-  assert.equal(runEndingText(expected[2]!), '运行已中断或停止，未产生回答。');
+  assert.equal(runEndingText(expected[1]!), translate('ui.unanswered.user', 'zh-CN'));
+  assert.equal(runEndingText(expected[2]!), translate('ui.unanswered.cancelled', 'zh-CN'));
   assert.match(runEndingText(expected[3]!), /异常退出/);
   setLocale('en-US');
   assert.match(runEndingText(expected[2]!), /interrupted or stopped/);

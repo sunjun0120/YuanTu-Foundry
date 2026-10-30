@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { t } from '../apps/desktop/i18n.ts';
+import { t, translate } from '../apps/desktop/i18n.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../packages/carrier/contract.ts';
 import type { SessionInfo } from '../packages/protocol/index.ts';
 import {
@@ -171,9 +171,12 @@ test('the search box owns its open state and sends the query it is given', async
   fill();
   controller.openSearch();
   assert.equal(controller.store.getSnapshot().searchOpen, true);
-  controller.setQuery('计划');
-  await controller.submitQuery('计划');
-  assert.deepEqual(commands.at(-1), { type: 'searchSessions', query: '计划' });
+  controller.setQuery(translate('plan.title', 'zh-CN'));
+  await controller.submitQuery(translate('plan.title', 'zh-CN'));
+  assert.deepEqual(commands.at(-1), {
+    type: 'searchSessions',
+    query: translate('plan.title', 'zh-CN'),
+  });
   controller.closeSearch();
   assert.equal(controller.store.getSnapshot().searchOpen, false);
 });

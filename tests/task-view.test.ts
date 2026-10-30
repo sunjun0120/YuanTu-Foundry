@@ -15,6 +15,7 @@ import {
   taskStatusReading,
   triggerSummaryReading,
 } from '../apps/desktop/ui/panels/task-view.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 /**
  * The task panel's words: a status, a schedule sentence, the evidence a verification left and the step journal.
@@ -38,27 +39,39 @@ function task(overrides: Partial<Task> = {}): Task {
 }
 
 test('statuses are translated and an unknown status is shown as it arrived', () => {
-  assert.equal(taskStatusReading('pending', 'zh-CN'), '待确认草稿');
-  assert.equal(taskStatusReading('in_progress', 'en-US'), 'In progress');
-  assert.equal(taskStatusReading('needs_review', 'zh-CN'), '待验收');
+  assert.equal(taskStatusReading('pending', 'zh-CN'), translate('task.status.pending', 'zh-CN'));
+  assert.equal(
+    taskStatusReading('in_progress', 'en-US'),
+    translate('task.status.inProgress', 'en-US'),
+  );
+  assert.equal(
+    taskStatusReading('needs_review', 'zh-CN'),
+    translate('task.status.needsReview', 'zh-CN'),
+  );
   assert.equal(taskStatusReading('future-status', 'zh-CN'), 'future-status');
   assert.equal(clockReading(65), '01:05');
   assert.equal(clockReading(7), '00:07');
 });
 
 test('event triggers are named', () => {
-  assert.equal(taskEventReading('run.finished', 'zh-CN'), '任一任务执行结束');
-  assert.equal(taskEventReading('task.completed', 'en-US'), 'A task passes verification');
+  assert.equal(
+    taskEventReading('run.finished', 'zh-CN'),
+    translate('task.event.runFinished', 'zh-CN'),
+  );
+  assert.equal(
+    taskEventReading('task.completed', 'en-US'),
+    translate('task.event.taskCompleted', 'en-US'),
+  );
 });
 
 test('the trigger sentence keeps the cadence, pause and misfire in that order', () => {
-  assert.equal(triggerSummaryReading(task(), 'zh-CN'), '无自动触发');
+  assert.equal(triggerSummaryReading(task(), 'zh-CN'), translate('task.trigger.none', 'zh-CN'));
   assert.equal(
     triggerSummaryReading(
       task({ trigger: { kind: 'interval', everyMinutes: 15, enabled: true } as never }),
       'zh-CN',
     ),
-    '每 15 分钟',
+    translate('task.trigger.every', 'zh-CN', { minutes: 15 }),
   );
   assert.equal(
     triggerSummaryReading(
@@ -72,7 +85,7 @@ test('the trigger sentence keeps the cadence, pause and misfire in that order', 
       task({ trigger: { kind: 'daily', atMinutes: 545, enabled: true } as never }),
       'zh-CN',
     ),
-    '每天 09:05 (本机时区)',
+    translate('task.trigger.daily', 'zh-CN', { time: '09:05 (本机时区)' }),
   );
   assert.equal(
     triggerSummaryReading(
@@ -87,7 +100,7 @@ test('the trigger sentence keeps the cadence, pause and misfire in that order', 
       }),
       'zh-CN',
     ),
-    '每天 09:05 (UTC) · 漏跑跳过',
+    translate('task.trigger.daily', 'zh-CN', { time: '09:05 (UTC) · 漏跑跳过' }),
   );
   assert.equal(
     triggerSummaryReading(
@@ -130,7 +143,7 @@ test('the trigger sentence keeps the cadence, pause and misfire in that order', 
       task({ trigger: { kind: 'after', afterMinutes: 30, enabled: true } as never }),
       'zh-CN',
     ),
-    '保存后 30 分钟，仅一次',
+    translate('task.trigger.after', 'zh-CN', { minutes: 30 }),
   );
   assert.equal(
     triggerSummaryReading(
@@ -238,7 +251,7 @@ test('an approval reads its state and only a pending one can be answered', () =>
     }),
     'zh-CN',
   );
-  assert.equal(pending.label, '等待操作审批');
+  assert.equal(pending.label, translate('task.approval.pending', 'zh-CN'));
   assert.equal(pending.detail, 'command · run_command');
   assert.equal(pending.canRespond, true);
   const rejected = taskApprovalView(
@@ -253,7 +266,7 @@ test('an approval reads its state and only a pending one can be answered', () =>
     }),
     'zh-CN',
   );
-  assert.equal(rejected.label, '已拒绝，自动触发已暂停');
+  assert.equal(rejected.label, translate('task.approval.rejected', 'zh-CN'));
   assert.equal(rejected.canRespond, false);
   assert.equal(taskApprovalView(task(), 'zh-CN').visible, false);
 });

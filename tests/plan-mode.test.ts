@@ -22,6 +22,7 @@ import type {
 } from '../packages/protocol/index.ts';
 import { storeFixture } from './temp-fixture.ts';
 import { reply, toolCall } from './provider-fixture.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 async function setup(t: test.TestContext, handler: Parameters<typeof httpFixture>[1]) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-plan-'));
@@ -365,7 +366,7 @@ test('a session whose plan is still planning continues planning, not writing', a
 
   const result = (await client.request('run.start', {
     sessionId: session.id,
-    prompt: '继续',
+    prompt: translate('ui.continueRun', 'zh-CN'),
   })) as { status: string };
   assert.equal(result.status, 'completed', JSON.stringify(result));
   assert.ok(offered.includes('read_file'), `read-only tools stay available: ${offered.join(',')}`);

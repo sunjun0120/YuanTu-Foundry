@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setLocale } from '../apps/desktop/i18n.ts';
+import { setLocale, translate } from '../apps/desktop/i18n.ts';
 import type { SessionSnapshot, StatisticsDelta } from '../packages/client/session-controller.ts';
 import type { SessionStatistics } from '../packages/protocol/statistics.ts';
 import {
@@ -110,7 +110,10 @@ test('durations are written the way the panels render them', () => {
 
 test('the counts line carries turns, steps and the throughput reading', () => {
   const counts = stats({ turns: 3, steps: 7 });
-  assert.equal(countsReading(counts, 'zh-CN', null), '本会话累计 3 轮 7 步');
+  assert.equal(
+    countsReading(counts, 'zh-CN', null),
+    translate('statistics.counts', 'zh-CN', { turns: 3, steps: 7 }),
+  );
   assert.equal(
     countsReading(counts, 'en-US', '42 tok/s'),
     'This session: 3 turns 7 steps · 42 tok/s',
@@ -196,7 +199,7 @@ test('steps without a timed figure keep the counts but not an empty dialog', () 
   assert.equal(view.session, null);
   assert.equal(view.sessionVisible, true, 'the counts stay as a plain reading');
   assert.equal(view.sessionOpenable, false, 'but there is no dialog to open');
-  assert.equal(view.counts, '本会话累计 1 轮 1 步');
+  assert.equal(view.counts, translate('statistics.counts', 'zh-CN', { turns: 1, steps: 1 }));
 });
 
 test('a statistics delta patches only the session it names', () => {

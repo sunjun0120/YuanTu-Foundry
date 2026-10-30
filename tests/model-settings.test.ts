@@ -66,7 +66,7 @@ test('the model field floors at 72 and caps at 360, compacting only below the fl
 test('the environment reading is labelled per language and only for environment sources', () => {
   assert.equal(
     environmentModelLabel({ source: 'environment', model: 'env-model' }, false),
-    'env-model（环境变量）',
+    translate('settings.environmentModel', 'zh-CN', { model: 'env-model' }),
   );
   assert.equal(
     environmentModelLabel({ source: 'environment', model: 'env-model' }, true),
@@ -183,7 +183,9 @@ test('picker options never include the settings action and keep the environment 
     view({ connections: [], source: 'environment', model: 'env-model' }),
     { noModel: 'no model', environment: false },
   );
-  assert.deepEqual(environment, [{ value: '', label: 'env-model（环境变量）' }]);
+  assert.deepEqual(environment, [
+    { value: '', label: translate('settings.environmentModel', 'zh-CN', { model: 'env-model' }) },
+  ]);
   const empty = pickerOptions(view({ connections: [], source: 'empty', model: '' }), {
     noModel: 'no model',
     environment: false,
@@ -211,7 +213,7 @@ test('a protocol change suggests the matching default URL', () => {
  * save keeps the draft so the operator can fix it, and discovery only fills the limits the catalogue actually
  * answered. None of that needs a window.
  */
-import { setLocale, t } from '../apps/desktop/i18n.ts';
+import { setLocale, t, translate } from '../apps/desktop/i18n.ts';
 import {
   createModelSettingsController,
   type ModelSettingsController,

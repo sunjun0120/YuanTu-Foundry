@@ -28,6 +28,7 @@ import { createTools } from '../packages/catalog/index.ts';
 import type { Provider, Questioner } from '../packages/protocol/index.ts';
 import { storeFixture } from './temp-fixture.ts';
 import { reply, toolCall, scriptedProvider } from './provider-fixture.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 async function fixture(
   t: test.TestContext,
@@ -289,7 +290,7 @@ test('a goal announced at the start of a run does not make the next run’s prom
   };
   const { store, sessionId, agent } = await fixture(t, provider);
   await agent.run({ sessionId, prompt: '开始 loader 的工作' });
-  await agent.run({ sessionId, prompt: '继续' });
+  await agent.run({ sessionId, prompt: translate('ui.continueRun', 'zh-CN') });
 
   assert.equal(store.goal(sessionId)?.roundsStarted, 2, 'the second run was admitted to the goal');
   assert.equal(new Set(systems).size, 1, `one prompt for two runs: ${JSON.stringify(systems)}`);

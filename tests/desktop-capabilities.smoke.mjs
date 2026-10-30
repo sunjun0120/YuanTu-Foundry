@@ -10,6 +10,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { choosePermissionPreset, chooseSelectOption, waitFor } from './desktop-smoke-support.mjs';
+import { translate } from '../apps/desktop/i18n.ts';
 process.env.YUANTU_SESSION_TITLES = 'false';
 
 // ---- merged from capabilities.smoke.mjs ----
@@ -100,7 +101,9 @@ test(
     await page.locator('#prompt').fill('/skill:review 看图并修改');
     await page.locator('#send').click();
     // Hold the write at its real approval boundary before steering the live run.
-    await page.getByRole('button', { name: '允许一次', exact: true }).waitFor();
+    await page
+      .getByRole('button', { name: translate('approval.allow', 'zh-CN'), exact: true })
+      .waitFor();
     assert.match(await page.locator('#approvals').innerText(), /write_file/);
     assert.match(await page.locator('#approvals').innerText(), /no\.txt/);
     /**
@@ -121,7 +124,8 @@ test(
     );
     continueSteer();
     await page.waitForFunction(
-      () => document.querySelector('#run-status').textContent === '本轮已结束',
+      (text) => document.querySelector('#run-status').textContent === text,
+      translate('ui.runStatus.completed', 'zh-CN'),
     );
     assert.match(await page.locator('#messages').textContent(), /不要写入，只解释/);
     assert.match(await page.locator('#messages').textContent(), /最后列出检查清单/);
@@ -133,7 +137,10 @@ test(
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
     await chooseSelectOption(page, 'settings-protocol', 'OpenAI Chat Completions');
-    assert.equal(await page.locator('#settings-protocol').inputValue(), 'OpenAI Chat Completions');
+    assert.equal(
+      await page.locator('#settings-protocol').inputValue(),
+      translate('settings.protocolOpenai', 'en-US'),
+    );
   },
 );
 
@@ -205,11 +212,16 @@ test(
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('Use the external echo tool');
     await page.locator('#send').click();
-    await page.getByRole('heading', { name: '访问外部服务' }).waitFor();
+    await page
+      .getByRole('heading', { name: translate('approval.title.external', 'zh-CN') })
+      .waitFor();
     await assert.rejects(readFile(path.join(root, 'mcp-pid.txt')), { code: 'ENOENT' });
-    await page.getByRole('button', { name: '允许一次', exact: true }).click();
+    await page
+      .getByRole('button', { name: translate('approval.allow', 'zh-CN'), exact: true })
+      .click();
     await page.waitForFunction(
-      () => document.querySelector('#run-status').textContent === '本轮已结束',
+      (text) => document.querySelector('#run-status').textContent === text,
+      translate('ui.runStatus.completed', 'zh-CN'),
     );
     assert.match(await page.locator('#messages').textContent(), /MCP_UI_OK/);
     const pid = Number(await readFile(path.join(root, 'mcp-pid.txt'), 'utf8'));
@@ -374,7 +386,7 @@ test(
     assert.equal(await page.locator('#todos .todo-completed').count(), 0);
     assert.equal(
       await page.locator('#todos-summary').innerText(),
-      '0 已完成 · 1 进行中 · 2 待处理',
+      translate('ui.todosSummary', 'zh-CN', { completed: 0, inProgress: 1, pending: 2 }),
     );
     // The panel answers "what is the plan now"; it does not report what the last write changed about it.
     assert.equal(await page.locator('#todos-change').count(), 0);
@@ -387,7 +399,8 @@ test(
     assert.equal(await page.locator('#todos-panel').isVisible(), true);
     await releaseRun();
     await page.waitForFunction(
-      () => document.querySelector('#run-status').textContent === '本轮已结束',
+      (text) => document.querySelector('#run-status').textContent === text,
+      translate('ui.runStatus.completed', 'zh-CN'),
     );
     assert.equal(await page.locator('#todos-panel').isVisible(), true);
     // The second turn updates the same visible list.
@@ -407,7 +420,7 @@ test(
     );
     assert.equal(
       await page.locator('#todos-summary').innerText(),
-      '2 已完成 · 1 进行中 · 0 待处理',
+      translate('ui.todosSummary', 'zh-CN', { completed: 2, inProgress: 1, pending: 0 }),
     );
     /**
      * What the second write changed about the first is not drawn: the list below *is* the answer, and it is the
@@ -422,7 +435,8 @@ test(
     assert.equal(await page.locator('#todos .todo-completed .todo-content').count(), 2);
     await releaseRun();
     await page.waitForFunction(
-      () => document.querySelector('#run-status').textContent === '本轮已结束',
+      (text) => document.querySelector('#run-status').textContent === text,
+      translate('ui.runStatus.completed', 'zh-CN'),
     );
     assert.equal(await page.locator('#todos-panel').isVisible(), true);
     // A turn that writes no list leaves the latest saved list available.
@@ -431,7 +445,8 @@ test(
     await releaseRun();
     await page.getByText('No new plan', { exact: true }).waitFor();
     await page.waitForFunction(
-      () => document.querySelector('#run-status').textContent === '本轮已结束',
+      (text) => document.querySelector('#run-status').textContent === text,
+      translate('ui.runStatus.completed', 'zh-CN'),
     );
     assert.equal(
       await page.locator('#todos-panel').isVisible(),
@@ -442,12 +457,12 @@ test(
     await page.locator('#prompt').fill('Plan it again');
     await page.locator('#send').click();
     await page.waitForFunction(
-      () =>
-        document.querySelector('#todos-summary')?.textContent === '1 已完成 · 0 进行中 · 1 待处理',
+      (text) => document.querySelector('#todos-summary')?.textContent === text,
+      translate('ui.todosSummary', 'zh-CN', { completed: 1, inProgress: 0, pending: 1 }),
     );
     assert.equal(
       await page.locator('#todos-summary').innerText(),
-      '1 已完成 · 0 进行中 · 1 待处理',
+      translate('ui.todosSummary', 'zh-CN', { completed: 1, inProgress: 0, pending: 1 }),
     );
     assert.deepEqual(await page.locator('#todos .todo-content').allInnerTexts(), [
       'Read the loader',
@@ -456,7 +471,8 @@ test(
     // The last saved version stays visible when the run finishes.
     await releaseRun();
     await page.waitForFunction(
-      () => document.querySelector('#run-status').textContent === '本轮已结束',
+      (text) => document.querySelector('#run-status').textContent === text,
+      translate('ui.runStatus.completed', 'zh-CN'),
     );
     assert.equal(await page.locator('#todos-panel').isVisible(), true);
   },

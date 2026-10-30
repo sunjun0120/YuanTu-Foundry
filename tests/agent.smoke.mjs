@@ -23,6 +23,7 @@ process.env.YUANTU_SESSION_TITLES = 'false';
 process.env.YUANTU_SANDBOX = 'native';
 import * as XLSX from 'xlsx';
 import { docxFixture, pdfFixture } from './attachment-fixtures.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 
 // ---- merged from subagents.smoke.mjs ----
 
@@ -180,7 +181,7 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
 
   // The write-capable child asks for permission, and the prompt says whose request it is.
   const approvals = page.locator('#approvals');
-  await page.getByRole('button', { name: '允许一次' }).waitFor();
+  await page.getByRole('button', { name: translate('approval.allow', 'zh-CN') }).waitFor();
   assert.match(await approvals.locator('.subagent-badge').textContent(), /写入说明文件/);
   await page.locator('#open-subagents').click();
   await page.locator('#subagent-catalog .subagent-row').nth(1).click();
@@ -190,7 +191,7 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   assert.equal(await page.locator('#subagent-transcript-messages details[open]').count(), 0);
   await page.locator('#chat-title').click();
   await page.locator('#subagent-transcript').waitFor({ state: 'hidden' });
-  await page.getByRole('button', { name: '允许一次' }).click();
+  await page.getByRole('button', { name: translate('approval.allow', 'zh-CN') }).click();
   await idle();
 
   // One card per task, in request order, with the role the parent sent and the child's findings.
@@ -202,7 +203,10 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   assert.match(titles[0], /^子代理 1\/2 · 只读调查$/);
   assert.match(titles[1], /^子代理 2\/2 · 可写入$/);
   assert.match(await cards.nth(0).locator('.subagent-objective').textContent(), /调查加载器结构/);
-  assert.equal(await cards.nth(0).locator('.subagent-status').textContent(), '已完成');
+  assert.equal(
+    await cards.nth(0).locator('.subagent-status').textContent(),
+    translate('subagent.status.completed', 'zh-CN'),
+  );
   // A report is shown as findings with their evidence, not as prose.
   assert.match(
     await cards.nth(0).locator('.subagent-findings li').textContent(),
@@ -284,10 +288,9 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   await catalogRows.nth(0).click();
   await page.locator('#subagent-transcript').waitFor();
   assert.match(await page.locator('#subagent-transcript-title').textContent(), /调查加载器结构/);
-  await page.waitForFunction(() =>
-    document
-      .querySelector('#subagent-transcript-note')
-      ?.textContent.includes('只读：这是该子代理自己会话里的完整记录。'),
+  await page.waitForFunction(
+    (text) => document.querySelector('#subagent-transcript-note')?.textContent.includes(text),
+    translate('subagent.transcriptNote', 'zh-CN'),
   );
   assert.match(
     await page.locator('#subagent-transcript-note').textContent(),
@@ -336,7 +339,10 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   );
   assert.equal(await cards.nth(1).locator('h3').textContent(), 'Sub-agent 2/2 · write-capable');
   assert.equal(await cards.nth(0).locator('.subagent-status').textContent(), 'Completed');
-  assert.equal(await cards.nth(0).locator('.subagent-view').textContent(), 'View transcript');
+  assert.equal(
+    await cards.nth(0).locator('.subagent-view').textContent(),
+    translate('subagent.viewTranscript', 'en-US'),
+  );
   assert.equal(await page.locator('#subagents-label').textContent(), '2 subagents');
   assert.equal(
     await catalogRows.nth(0).locator('.subagent-row-meta').textContent(),
@@ -456,10 +462,10 @@ test(
     // The panel's rows are DSH's, in DSH's order, and the cache-write row a session never wrote is absent
     // rather than present as a zero.
     assert.deepEqual(await page.locator('#statistics-tokens-panel dt').allTextContents(), [
-      '缓存命中',
-      '未缓存输入',
-      '缓存读取',
-      '输出',
+      translate('statistics.cacheHit', 'zh-CN'),
+      translate('statistics.uncachedInput', 'zh-CN'),
+      translate('statistics.cachedInput', 'zh-CN'),
+      translate('statistics.output', 'zh-CN'),
     ]);
     assert.deepEqual(await page.locator('#statistics-tokens-panel dd').allTextContents(), [
       '80%',
@@ -469,7 +475,7 @@ test(
     ]);
     assert.deepEqual(
       await page.locator('#statistics-tokens-panel header strong').allTextContents(),
-      ['Token 用量', '110 tok'],
+      [translate('statistics.tokensTitle', 'zh-CN'), '110 tok'],
     );
     assert.equal(
       (await page.locator('#statistics-tokens').innerText()).trim(),
@@ -488,14 +494,14 @@ test(
     // that called no tool has no tool row to show, and this fixture's decode span was not timed, so there is no
     // throughput row either — a figure nobody measured is absent, not printed as 未知.
     assert.deepEqual(await page.locator('#statistics-session-panel dt').allTextContents(), [
-      '模型用时',
-      '首 token 平均（TTFT）',
+      translate('statistics.modelTime', 'zh-CN'),
+      translate('statistics.ttft', 'zh-CN'),
     ]);
     const sessionRows = await page.locator('#statistics-session-panel dd').allTextContents();
     assert.equal(sessionRows.length, 2);
     assert.equal(
       (await page.locator('#statistics-session').innerText()).trim(),
-      '本会话累计 1 轮 1 步',
+      translate('statistics.counts', 'zh-CN', { turns: 1, steps: 1 }),
     );
     await page.screenshot({ path: artifactPath('statistics/session-dark.png') });
     await page.locator('#prompt').click({ position: { x: 8, y: 8 } });
@@ -526,8 +532,9 @@ test(
     await page.locator('#send').click();
     // A run cut off mid-stream still closed its step, so the counts move and the usage does not: the provider
     // never finished the request, which means it never billed for it.
-    await page.waitForFunction(() =>
-      document.querySelector('#statistics-session').textContent.startsWith('本会话累计 2 轮 2 步'),
+    await page.waitForFunction(
+      (text) => document.querySelector('#statistics-session').textContent.startsWith(text),
+      translate('statistics.counts', 'zh-CN', { turns: 2, steps: 2 }),
     );
     assert.match(
       await page.locator('#statistics-tokens').innerText(),
@@ -600,7 +607,9 @@ test(
     };
     let page = await launch();
     assert.equal(
-      await page.getByRole('button', { name: '添加图片或文件', exact: true }).isVisible(),
+      await page
+        .getByRole('button', { name: translate('ui.addAttachment', 'zh-CN'), exact: true })
+        .isVisible(),
       true,
     );
     await page.locator('#permission-trigger').click();
@@ -618,7 +627,9 @@ test(
     await page.emulateMedia({ colorScheme: 'light' });
     await page.keyboard.press('Escape');
     const picker = page.waitForEvent('filechooser');
-    await page.getByRole('button', { name: '添加图片或文件', exact: true }).click();
+    await page
+      .getByRole('button', { name: translate('ui.addAttachment', 'zh-CN'), exact: true })
+      .click();
     await (
       await picker
     ).setFiles({
@@ -668,7 +679,8 @@ test(
     await page.locator('#send').click();
     await page.getByText('附件内容已收到。', { exact: true }).waitFor();
     await page.waitForFunction(
-      () => document.querySelector('#run-status').textContent === '本轮已结束',
+      (text) => document.querySelector('#run-status').textContent === text,
+      translate('ui.runStatus.completed', 'zh-CN'),
     );
     assert.equal(requests.length, 1);
     const content = requests[0].messages.at(-1).content;
@@ -715,7 +727,8 @@ test(
     await page.locator('#send').click();
     await page.getByText('附件内容已收到。', { exact: true }).waitFor();
     await page.waitForFunction(
-      () => document.querySelector('#run-status').textContent === '本轮已结束',
+      (text) => document.querySelector('#run-status').textContent === text,
+      translate('ui.runStatus.completed', 'zh-CN'),
     );
     assert.match(JSON.stringify(requests.at(-1)), /text works without vision 113/);
   },
@@ -804,13 +817,13 @@ test(
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('Inspect');
     await page.locator('#send').click();
-    await page.locator('#run-status').getByText('正在推理…').waitFor();
+    await page.locator('#run-status').getByText(translate('ui.modelReasoning', 'zh-CN')).waitFor();
     await page.locator('#messages > .process-group > summary').waitFor();
     assert.match(
       await page.locator('#messages > .process-group > summary').innerText(),
       /private thought never shown/,
     );
-    await page.locator('#run-status').getByText('正在生成工具调用…').waitFor();
+    await page.locator('#run-status').getByText(translate('ui.modelToolCall', 'zh-CN')).waitFor();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(requestBudget, 100, 'the provider request retains the configured output budget');
     // The banner is localized; the raw token breakdown stays in the session error for the evidence trail.
@@ -1062,7 +1075,10 @@ test(
     // The host backend leaves the network unrestricted, so auto mode requires this approval.
     await page.locator('#approvals .approval').waitFor();
     assert.match(await page.locator('#approvals .approval-subject').innerText(), /node wait\.cjs/);
-    await page.locator('#approvals').getByRole('button', { name: '允许一次', exact: true }).click();
+    await page
+      .locator('#approvals')
+      .getByRole('button', { name: translate('approval.allow', 'zh-CN'), exact: true })
+      .click();
     await writeFile(path.join(root, 'release-command'), 'ready');
     try {
       await page.waitForFunction(() =>
