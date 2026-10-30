@@ -125,13 +125,17 @@ function QuestionCard({
                 >
                   <span className="question-option-text">
                     <span className="question-option-head">
-                      <span className="question-option-label">{option.label}</span>
+                      <span className="question-option-label" title={option.label}>
+                        {option.label}
+                      </span>
                       {option.recommended ? (
                         <span className="question-recommended">{t('ui.questionRecommended')}</span>
                       ) : null}
                     </span>
                     {option.description === undefined ? null : (
-                      <span className="question-option-description">{option.description}</span>
+                      <span className="question-option-description" title={option.description}>
+                        {option.description}
+                      </span>
                     )}
                   </span>
                   <svg className="question-option-arrow" viewBox="0 0 16 16" aria-hidden="true">

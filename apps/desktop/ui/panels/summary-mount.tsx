@@ -27,7 +27,9 @@ export function mountSummary(deps: { getState(): CarrierSnapshot | null }): Summ
     render() {
       const current = store.getSnapshot();
       const snapshot = deps.getState();
-      if (current.snapshot !== snapshot) store.set({ ...current, snapshot });
+      // A bridge may retain its outer snapshot object while replacing sections. Publish a fresh reading on
+      // every render so an open popover follows the new turn and live tool results in that case as well.
+      store.set({ ...current, snapshot: snapshot ? { ...snapshot } : null });
     },
     close() {
       setOpen(false);

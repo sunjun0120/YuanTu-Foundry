@@ -121,7 +121,12 @@ export function summaryView(snapshot: CarrierSnapshot | null): SummaryView {
   const calls = turnMcpCalls(session.messages, session.running);
   // A call in flight may not be in the stored messages yet; the run's own list of executing tools has it.
   if (session.running) {
-    const known = new Set(calls.map((call) => call.id));
+    // A stale live entry must not bring an earlier turn's call back into the current turn.
+    const known = new Set(
+      session.messages.flatMap((message) =>
+        message.role === 'assistant' ? message.toolCalls.map((call) => call.id) : [],
+      ),
+    );
     for (const call of session.tools) {
       const target = known.has(call.id) ? null : mcpTarget(call);
       if (target)
