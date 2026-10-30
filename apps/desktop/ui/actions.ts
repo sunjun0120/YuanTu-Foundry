@@ -7,9 +7,8 @@
  * while a second command is still in flight.
  *
  * Two details are preserved on purpose. `searchSessions` clears the previous error and answers without the busy
- * dance: a search is a query, and the reply is not session state. After every other command the prompt is focused
- * again *except* after `loadOlder`, because that one is a scroll gesture and stealing focus back to the composer
- * moves the reader away from the history they just asked for.
+ * dance: a search is a query, and the reply is not session state. Other commands restore the prompt focus only in
+ * a conversation. The welcome page stays unfocused, and `loadOlder` preserves the reader's place in history.
  */
 import type { CarrierCommand, CarrierSnapshot } from '../../../packages/carrier/contract.ts';
 import type { DesktopBridge, DesktopReply } from '../contract.ts';
@@ -90,7 +89,12 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
     } finally {
       deps.pending.end(pendingId);
       deps.requestRender();
-      if (command.type !== 'loadOlder' && deps.getState()?.workspace === previousWorkspace)
+      const current = deps.getState();
+      if (
+        command.type !== 'loadOlder' &&
+        current?.workspace === previousWorkspace &&
+        (current?.session.messages.length || current?.session.running)
+      )
         deps.focusPrompt();
     }
   }

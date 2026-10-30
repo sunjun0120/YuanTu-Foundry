@@ -24,12 +24,27 @@ import {
 } from './permission-model.ts';
 
 const SHIELD = 'm12 3 8 4v6c0 4-4 7-8 9-4-2-8-5-8-9V7l8-4Z';
+// Lucide's hand, zap and badge-alert, the glyphs the Foundry design gives these rungs.
+const HAND = [
+  'M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2',
+  'M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2',
+  'M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8',
+  'M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15',
+];
+const ZAP = [
+  'M15.914 4a1.5 1.5 0 0 0-2.474-1.561l-9 9A1.5 1.5 0 0 0 5.5 14h4.002a.5.5 0 0 1 .471.666L8.086 20a1.5 1.5 0 0 0 2.475 1.56l9-9A1.5 1.5 0 0 0 18.5 10h-3.997a.5.5 0 0 1-.472-.667z',
+];
+const BADGE_ALERT = [
+  'M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z',
+  'M12 8v4',
+  'M12 16h.01',
+];
 const ICONS: Record<PermissionReading, string[]> = {
   observe: [`${SHIELD}`, 'm9.2 12.1 1.9 1.9 3.7-3.7'],
-  guarded: [`${SHIELD}`, 'm15.1 9.6 1.3 1.3-4.4 4.4-1.9.6.6-1.9z'],
-  auto: ['m13 2-9 12h7l-1 8 10-12h-7l1-8Z'],
-  unconfined: [`${SHIELD}`, 'M12 10.2v3.6', 'M12 16.4h.01'],
-  custom: [`${SHIELD}`, 'M12 10.2v3.6', 'M12 16.4h.01'],
+  guarded: HAND,
+  auto: ZAP,
+  unconfined: BADGE_ALERT,
+  custom: BADGE_ALERT,
 };
 
 function PresetIcon({ reading }: { reading: PermissionReading }): ReactNode {

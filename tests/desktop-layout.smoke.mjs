@@ -384,14 +384,14 @@ test(
     await page.locator('#settings-back').click();
     await fits();
 
-    // New-task entry keeps the typing focus without suppressing its entrance light.
+    // New-task entry leaves the input unfocused while its entrance light plays.
     await page.locator('#new-session').click();
     await page.waitForFunction(
       () =>
         document.querySelector('#chat-page.chat-page-home') &&
-        document.activeElement?.id === 'prompt' &&
         !document.querySelector('#prompt').disabled,
     );
+    assert.notEqual(await page.evaluate(() => document.activeElement?.id), 'prompt');
     const entrance = await page.locator('#composer').evaluate((form) => {
       const light = getComputedStyle(form, '::after');
       return { animation: light.animationName, visibility: light.visibility };

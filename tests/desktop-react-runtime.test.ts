@@ -198,7 +198,7 @@ function actionFixture(reply: (command: CarrierCommand) => Promise<DesktopReply>
   let error: DesktopActionError | null = null;
   const state: Sections = {
     workspace: '/w',
-    session: { sessionId: 'a', running: false, loading: false },
+    session: { sessionId: 'a', running: false, loading: false, messages: [] },
   };
   const pending = createPendingOperations();
   const actions = createDesktopActions({
@@ -230,7 +230,7 @@ function actionFixture(reply: (command: CarrierCommand) => Promise<DesktopReply>
 
 test('a running session refuses ordinary commands but not opening another one', async () => {
   const fixture = actionFixture(async () => ready);
-  fixture.state.session = { sessionId: 'a', running: true, loading: false };
+  fixture.state.session = { sessionId: 'a', running: true, loading: false, messages: [] };
   assert.equal(await fixture.actions.select({ type: 'send', prompt: 'x' }), null);
   assert.equal(fixture.sent.length, 0);
   const loaded = await fixture.actions.select({ type: 'load', id: 'b' });
@@ -238,14 +238,28 @@ test('a running session refuses ordinary commands but not opening another one', 
   assert.equal(fixture.sent.length, 1);
 });
 
-test('loadOlder does not steal focus back to the composer, other commands do', async () => {
+test('history and search preserve focus, conversation commands restore it', async () => {
   const fixture = actionFixture(async () => ready);
+  fixture.state.session = {
+    sessionId: 'a',
+    running: false,
+    loading: false,
+    messages: [{ role: 'user', content: 'Continue this conversation' }],
+  };
   await fixture.actions.select({ type: 'loadOlder' });
   assert.equal(fixture.calls.focused, 0);
   await fixture.actions.select({ type: 'searchSessions', query: 'x' });
   assert.equal(fixture.calls.focused, 0, 'a search is not a command with a result to return to');
   await fixture.actions.select({ type: 'rename', id: 'a', title: 't' });
   assert.equal(fixture.calls.focused, 1);
+});
+
+test('creating or loading an empty session does not focus the welcome composer', async () => {
+  for (const command of [{ type: 'create' }, { type: 'load', id: 'a' }] as const) {
+    const fixture = actionFixture(async () => ready);
+    await fixture.actions.select(command);
+    assert.equal(fixture.calls.focused, 0, command.type);
+  }
 });
 
 test('a failed reply is shown as the error and never becomes state', async () => {
