@@ -53,7 +53,16 @@ export function toolFailureNote(message: {
   if (content.startsWith('Git tools need the repository root'))
     return t('ui.toolGitOutsideWorkspace');
   // Two preparation stages that stop a command before it starts. The raw text below either one carries the path,
-  // the failed stage and the helper's own error; this line says which stage it was.
+  // the failed stage and the helper's own error; this line says which stage it was. A helper demoted to low
+  // integrity fails either stage, and its cause matters more than the stage.
+  if (
+    (content.startsWith(
+      'Sandboxed commands are blocked at Windows sandbox account initialization',
+    ) ||
+      content.startsWith('Windows sandbox workspace authorization is incomplete')) &&
+    content.includes('helper-integrity-low')
+  )
+    return t('ui.toolSandboxHelperIntegrity');
   if (
     content.startsWith('Sandboxed commands are blocked at Windows sandbox account initialization')
   )

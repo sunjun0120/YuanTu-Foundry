@@ -10,8 +10,12 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'projects.newSession': ['在 {name} 中新建会话', 'New session in {name}'],
   'projects.noPending': ['当前没有待处理请求', 'No pending requests'],
   'ui.toolSandboxStateLocked': [
-    '无法取得沙箱授权日志锁，命令没有启动。请等待其他 Agent Host 或沙箱维护操作结束后重试；如果仍失败，检查状态目录权限。下面保留了详细错误。',
-    'The sandbox grant journal lock could not be acquired, so the command did not start. Wait for other Agent Hosts or sandbox maintenance to finish and retry; if it persists, check the state directory permissions. Details are preserved below.',
+    '无法取得沙箱授权日志锁，命令没有启动。可能是其他 Agent Host 或沙箱维护操作正在使用它，可稍后重试；如果仍失败，检查状态目录权限。下面保留了详细错误。',
+    'The sandbox grant journal lock could not be acquired, so the command did not start. Another Agent Host or sandbox maintenance may be holding it, so retry later; if it persists, check the state directory permissions. Details are preserved below.',
+  ],
+  'ui.toolSandboxHelperIntegrity': [
+    '沙箱 helper 以低完整性运行（它的可执行文件带有低完整性标签，通常继承自所在目录），无法写入沙箱状态，命令没有启动。自动把标签改回中完整性没有成功；请按下面错误里的 icacls 命令处理，或把 helper 移出该目录。',
+    'The sandbox helper runs at low integrity (its executable carries a Low label, usually inherited from its folder) and cannot write the sandbox state, so the command did not start. Relabelling it Medium automatically did not succeed; run the icacls command in the error below, or move the helper out of that folder.',
   ],
   'ui.toolSandboxCapabilityState': [
     '无法保存或读取沙箱工作区身份，命令没有启动。请检查沙箱状态目录的权限。下面保留了详细错误。',

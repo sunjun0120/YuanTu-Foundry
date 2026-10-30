@@ -113,6 +113,73 @@ test('the helper status is accepted only in exactly its own shape', () => {
     assert.throws(() => parseAccountStatus(broken), broken);
 });
 
+const lowIntegrity = () =>
+  Object.assign(new Error('Command failed: yuantu-sandbox.exe'), {
+    stderr: 'helper-integrity-low: the sandbox helper is running at integrity S-1-16-4096 …',
+    code: 1,
+  });
+
+test('a helper refusing low integrity is relabelled once and asked again', async (t) => {
+  const state = await tempRoot(t, 'yuantu-account-integrity-');
+  const calls: string[][] = [];
+  const relabels: string[] = [];
+  let labelled = false;
+  configureAccountBackend({
+    helper: 'C:\\fake\\yuantu-sandbox.exe',
+    state,
+    relabel: async (helper) => {
+      relabels.push(helper);
+      labelled = true;
+    },
+    run: async (_helper, args) => {
+      calls.push(args);
+      if (!labelled) throw lowIntegrity();
+      return args[0] === 'account-status' ? status(true) : '{}';
+    },
+  });
+  assert.equal((await refreshAccountReadiness())?.ready, true);
+  assert.deepEqual(relabels, ['C:\\fake\\yuantu-sandbox.exe']);
+  assert.deepEqual(calls, [['account-status'], ['account-status']]);
+  // Later calls find the label already fixed and do not relabel again.
+  await ensureReadRefresh({ PATH: 'C:\\one' });
+  assert.equal(relabels.length, 1);
+});
+
+test(
+  'a helper that stays at low integrity is reported with its own refusal, not as a reinstall',
+  { skip: windowsOnly },
+  async (t) => {
+    const state = await tempRoot(t, 'yuantu-account-integrity-fail-');
+    let relabels = 0;
+    configureAccountBackend({
+      helper: process.execPath,
+      state,
+      relabel: async () => {
+        relabels++;
+        throw new Error('icacls: access denied');
+      },
+      run: async () => {
+        throw lowIntegrity();
+      },
+    });
+    const root = await tempRoot(t, 'yuantu-account-integrity-ws-');
+    await assert.rejects(
+      windowsAccountSandboxProvider.prepare({
+        root,
+        cwd: root,
+        command: 'echo x',
+        config: { mode: 'windows-account', image: '' },
+      }),
+      (error: Error) => {
+        assert.match(error.message, /helper-integrity-low/);
+        assert.doesNotMatch(error.message, /Reinstall/);
+        return true;
+      },
+    );
+    assert.equal(relabels, 1);
+  },
+);
+
 test('read refresh retries failures and does not reuse a completed refresh', async (t) => {
   const state = await tempRoot(t, 'yuantu-account-refresh-');
   const calls: string[][] = [];

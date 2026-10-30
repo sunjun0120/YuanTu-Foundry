@@ -295,6 +295,15 @@ test('a refusal the kernel writes in English gets one sentence in the interface 
       'Windows sandbox workspace authorization is incomplete for D:\\work; the command has not started. lock-grant-record: Cannot acquire sandbox grant journal lock: Access denied (os error 5)',
       /其他 Agent Host.*权限/,
     ],
+    // A helper demoted to low integrity fails at either stage; the note names that cause, not the stage.
+    [
+      'Windows sandbox workspace authorization is incomplete for D:\\work; the command has not started. helper-integrity-low: the sandbox helper is running at integrity S-1-16-4096 …',
+      /低完整性.*icacls/,
+    ],
+    [
+      'Sandboxed commands are blocked at Windows sandbox account initialization: the helper (C:\\x\\yuantu-sandbox.exe) did not answer its status check (helper-integrity-low: …).',
+      /低完整性.*icacls/,
+    ],
     [
       'Windows sandbox capability state could not be accessed for D:\\work; the command has not started. EPERM',
       /状态目录.*权限/,

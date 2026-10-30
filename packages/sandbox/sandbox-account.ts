@@ -60,17 +60,61 @@ const runHelper: HelperRunner = async (helper, args, options) => {
   return stdout;
 };
 
+/** Gives the helper's own image an explicit Medium label; replaced in tests. */
+export type HelperRelabeler = (helper: string) => Promise<void>;
+
+const relabelHelper: HelperRelabeler = async (helper) => {
+  const icacls = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'icacls.exe');
+  await promisify(execFile)(icacls, [helper, '/setintegritylevel', 'M'], {
+    windowsHide: true,
+    timeout: 30_000,
+  });
+};
+
 interface Configuration {
   helper: string;
   run: HelperRunner;
+  relabel: HelperRelabeler;
   launch?: BrokerLauncher;
   state: string;
 }
 let configuration: Configuration = {
   helper: path.join(assetRoot, 'yuantu-sandbox.exe'),
   run: runHelper,
+  relabel: relabelHelper,
   state: path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state', 'windows-account'),
 };
+
+/** The helper's refusal to run below medium integrity (see `integrity_check` in its `main.rs`). */
+const LOW_INTEGRITY = 'helper-integrity-low';
+let relabeled: Promise<void> | undefined;
+
+/**
+ * Runs the helper; if it refuses because its image is labelled Low, labels the image Medium once and asks again.
+ *
+ * A development build sits in the workspace, and a workspace another sandbox labelled Low hands that label to the
+ * helper, which then cannot write the sandbox state. Only the helper's own file is relabelled, never the folder.
+ * When that fails, the helper's refusal is what the caller sees: it names the image and the manual fix.
+ */
+async function helper(
+  args: string[],
+  options?: { timeout?: number; signal?: AbortSignal },
+): Promise<string> {
+  try {
+    return await configuration.run(configuration.helper, args, options);
+  } catch (failure) {
+    if (!failureDetail(failure, Infinity).includes(LOW_INTEGRITY)) throw failure;
+    relabeled ??= configuration.relabel(configuration.helper);
+    try {
+      await relabeled;
+    } catch (cause) {
+      relabeled = undefined;
+      console.error('sandbox account: the helper could not be relabelled Medium', cause);
+      throw failure;
+    }
+    return configuration.run(configuration.helper, args, options);
+  }
+}
 
 /**
  * Replaces the helper, how it is run, and where state lives. For tests and the native acceptance suite only:
@@ -78,6 +122,7 @@ let configuration: Configuration = {
  */
 export function configureAccountBackend(change: Partial<Configuration>): void {
   configuration = { ...configuration, ...change };
+  relabeled = undefined;
   grants.clear();
   readRefreshes.clear();
   capabilities.clear();
@@ -163,8 +208,7 @@ export async function refreshAccountBackend(): Promise<void> {
 export async function refreshAccountReadiness(): Promise<AccountStatus | undefined> {
   if (process.platform !== 'win32') return undefined;
   statusFailure = undefined;
-  status = configuration
-    .run(configuration.helper, ['account-status'])
+  status = helper(['account-status'])
     .then(parseAccountStatus)
     .catch((failure: unknown) => {
       statusFailure = failure;
@@ -191,12 +235,17 @@ async function readiness(): Promise<string | null> {
     return 'The Windows sandbox account backend only runs on Windows';
   const current = status ? await status.catch(() => undefined) : await refreshAccountReadiness();
   const helper = configuration.helper;
+  // A helper refusing low integrity is fixed by the label its refusal names, not by reinstalling.
+  const lowIntegrity =
+    statusFailure !== undefined && failureDetail(statusFailure, Infinity).includes(LOW_INTEGRITY);
   if (!current)
     return existsSync(helper)
       ? `Sandboxed commands are blocked at Windows sandbox account initialization: the helper (${helper}) ` +
           `did not answer its status check${
-            statusFailure === undefined ? '' : ` (${failureDetail(statusFailure)})`
-          }. Reinstall YuanTu to run sandboxed commands.`
+            statusFailure === undefined
+              ? ''
+              : ` (${failureDetail(statusFailure, lowIntegrity ? 1000 : 500)})`
+          }.${lowIntegrity ? '' : ' Reinstall YuanTu to run sandboxed commands.'}`
       : `Sandboxed commands are blocked at Windows sandbox account initialization: the helper is missing from ` +
           `this installation (${helper}); reinstall YuanTu to run sandboxed commands.`;
   if (current.ready) return null;
@@ -380,11 +429,10 @@ async function waitForGrant(
     const created: GrantFlight = { abort, waiters: 0, settled: false, done: Promise.resolve() };
     created.done = Promise.resolve()
       .then(() =>
-        configuration.run(
-          configuration.helper,
-          ['grant', '--root', root, '--capability', capability],
-          { timeout: 0, signal: abort.signal },
-        ),
+        helper(['grant', '--root', root, '--capability', capability], {
+          timeout: 0,
+          signal: abort.signal,
+        }),
       )
       .then(() => undefined)
       .catch((failure: unknown) => {
@@ -489,7 +537,7 @@ async function runReadRefresh(env: NodeJS.ProcessEnv, root?: string): Promise<Re
     flag: 'wx',
   });
   try {
-    const output = await configuration.run(configuration.helper, ['read-refresh', '--env', file]);
+    const output = await helper(['read-refresh', '--env', file]);
     let error: unknown;
     try {
       error = (JSON.parse(output) as ReadRefreshResult | null)?.error;
