@@ -61,6 +61,8 @@ export class AnalysisTasks implements TaskStarter {
   /** Per record, the poll already in flight, so two `job_output` calls do not ask the backend twice. */
   private readonly polling = new Map<string, Promise<void>>();
   private readonly cancelling = new Map<string, Promise<void>>();
+  /** A backend cancellation stays true in memory even when its journal write needs another attempt. */
+  private readonly unpersistedCancellations = new WeakSet<TaskRecord>();
   private readonly deps: AnalysisTasksDeps;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   constructor(deps: AnalysisTasksDeps) {
@@ -244,25 +246,31 @@ export class AnalysisTasks implements TaskStarter {
       },
       kill: async ({ id, scope, signal }) => {
         const record = this.find(id, scope);
-        if (!SETTLED.has(record.status)) {
+        let pending = this.cancelling.get(record.id);
+        if (pending || !SETTLED.has(record.status) || this.unpersistedCancellations.has(record)) {
           signal?.throwIfAborted();
-          let pending = this.cancelling.get(record.id);
           if (!pending) {
             // The request is shared, so it runs on its own timeout; each caller's signal only ends its own wait,
             // as with a shared poll. The first caller's signal used to cancel it for every caller.
             pending = (async () => {
-              const reply = await this.call(
-                this.deps.manifest.taskTools.cancel,
-                record,
-                AbortSignal.timeout(KILL_TIMEOUT_MS),
-              );
-              if (reply.isError) throw new Error('Analysis cancellation failed');
               if (!SETTLED.has(record.status)) {
-                record.status = 'cancelled';
-                record.finishedAt = new Date().toISOString();
-                this.append(record, 'cancelled\n');
+                const reply = await this.call(
+                  this.deps.manifest.taskTools.cancel,
+                  record,
+                  AbortSignal.timeout(KILL_TIMEOUT_MS),
+                );
+                if (reply.isError) throw new Error('Analysis cancellation failed');
+                if (!SETTLED.has(record.status)) {
+                  record.status = 'cancelled';
+                  record.finishedAt = new Date().toISOString();
+                  this.append(record, 'cancelled\n');
+                  this.unpersistedCancellations.add(record);
+                }
+              }
+              if (this.unpersistedCancellations.has(record)) {
                 this.save();
                 await this.flush();
+                this.unpersistedCancellations.delete(record);
               }
             })();
             this.cancelling.set(record.id, pending);

@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import type { AnalysisClient } from '../packages/builtin-services/client.ts';
 import { resolveBuiltinService } from '../packages/builtin-services/manifest.ts';
 import { AnalysisTasks, MAX_RECORD_OUTPUT } from '../packages/builtin-services/tasks.ts';
@@ -325,4 +326,42 @@ test('flush reports persistence failure instead of pretending the task was saved
   });
   tasks.start({ scope: 's', taskId: 'persist', tool: 'scan', label: 'scan' });
   await assert.rejects(tasks.flush());
+});
+
+test('cancellation retries a failed save without cancelling the backend again', async (t) => {
+  const root = await tempRoot(t);
+  const directory = path.join(root, 'state');
+  const backup = path.join(root, 'saved-state');
+  const file = path.join(directory, 'tasks.json');
+  await mkdir(directory);
+  const { client, calls } = backend([]);
+  const tasks = new AnalysisTasks({ file, manifest, client });
+  const { id } = tasks.start({ scope: 's', taskId: 'cancel-save', tool: 'scan', label: 'scan' });
+  await tasks.flush();
+  await rename(directory, backup);
+  await writeFile(directory, 'temporarily blocks saving');
+
+  const producer = tasks.jobProducer();
+  await assert.rejects(producer.kill({ id, scope: 's' }));
+  await assert.rejects(
+    producer.kill({ id, scope: 's' }),
+    'a retry must still fail while the cancellation cannot be saved',
+  );
+  const cancelled = producer.list('s')[0]!;
+  assert.equal(cancelled.status, 'cancelled', 'the backend cancellation remains known in memory');
+  await unlink(directory);
+  await rename(backup, directory);
+
+  const retried = await producer.kill({ id, scope: 's' });
+  assert.equal(retried.status, 'cancelled');
+  assert.equal(retried.finishedAt, cancelled.finishedAt);
+  assert.equal(retried.output, cancelled.output);
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    ['task_cancel'],
+  );
+  const reopened = new AnalysisTasks({ file, manifest, client }).jobProducer().list('s')[0]!;
+  assert.equal(reopened.status, 'cancelled');
+  assert.equal(reopened.finishedAt, retried.finishedAt);
+  assert.equal(reopened.output, retried.output);
 });
