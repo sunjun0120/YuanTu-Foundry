@@ -138,7 +138,17 @@ test(
     delete env.NODE_OPTIONS;
     let app;
     t.after(async () => {
-      await app?.close();
+      // A close that never returns would keep the runner alive after the test has already failed, which hides
+      // the failure: end the desktop's whole process tree instead.
+      const pid = app?.process().pid;
+      let timer;
+      const closed = await Promise.race([
+        app?.close().then(() => true),
+        new Promise((resolve) => (timer = setTimeout(() => resolve(false), 30_000))),
+      ]);
+      clearTimeout(timer);
+      if (closed === false && pid !== undefined)
+        await promisify(execFile)('taskkill', ['/PID', String(pid), '/T', '/F']).catch(() => {});
       await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     });
     const launch = () =>

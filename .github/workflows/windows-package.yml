@@ -83,7 +83,10 @@ jobs:
         run: |
           $installer = Get-ChildItem dist/release/*-setup.exe | Select-Object -First 1
           ./scripts/verify-windows-install.ps1 -Installer $installer.FullName -InstallDirectory "$pwd/.scratch/中文 安装验证"
+      # The packaged suites run once and hold an Electron app each: a stuck one must fail the step in minutes, and
+      # `--test-force-exit` reports a failed test even when something it started is still keeping the runner up.
       - name: Installed desktop and bundled runtime
+        timeout-minutes: 15
         id: installed-desktop
         shell: pwsh
         run: |
@@ -91,7 +94,7 @@ jobs:
           $env:PACKAGED_TEST_PROFILE = "$pwd/.scratch/安装保留 profile"
           $env:PACKAGED_TEST_WORKSPACE = "$pwd/.scratch/安装保留 workspace"
           $env:PACKAGED_TEST_INSTALLER = (Get-ChildItem dist/release/*-setup.exe | Select-Object -First 1).FullName
-          node --test tests/installed-desktop.smoke.mjs
+          node --test --test-force-exit tests/installed-desktop.smoke.mjs
       - name: Uninstall installed application
         if: always()
         shell: pwsh
@@ -114,16 +117,18 @@ jobs:
           npx electron-builder --config electron-builder.config.cjs --config.directories.output=.scratch/p1/upgrade-release --config.extraMetadata.version=$nextVersion --win --x64
           node scripts/write-release-manifest.mjs .scratch/p1/upgrade-release
       - name: Native desktop upgrade and retained credentials
+        timeout-minutes: 15
         shell: pwsh
         run: |
           $env:UPGRADE_TEST_INSTALLER = (Get-ChildItem .scratch/p1/upgrade-release/*-setup.exe | Select-Object -First 1).FullName
-          node --test tests/desktop-upgrade.smoke.mjs
+          node --test --test-force-exit tests/desktop-upgrade.smoke.mjs
       - name: Old desktop and compatible database recovery
+        timeout-minutes: 15
         shell: pwsh
         run: |
           $env:UPGRADE_TEST_JOURNAL = (Get-ChildItem '.scratch/p1/upgrade-*/用户 profile/upgrades/*/upgrade.json' | Select-Object -First 1).FullName
           if (-not $env:UPGRADE_TEST_JOURNAL) { throw 'Upgrade recovery record was not created' }
-          node --test tests/desktop-rollback.smoke.mjs
+          node --test --test-force-exit tests/desktop-rollback.smoke.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: YuanTu-Agent-Windows-x64

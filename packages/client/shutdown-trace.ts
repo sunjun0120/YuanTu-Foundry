@@ -22,10 +22,47 @@ export function traceUnconfirmedShutdown(hostPid: number | undefined, state: str
       hostPid,
       state,
       processes: around(hostPid),
+      ...(process.platform === 'win32' && hostPid !== undefined ? { host: inside(hostPid) } : {}),
     };
     appendFileSync(path.join(artifacts, 'client-shutdown.ndjson'), JSON.stringify(line) + '\n');
   } catch {
     // A diagnostic must never be the reason a shutdown fails.
+  }
+}
+
+/**
+ * A Windows Host that is still alive: each thread's state, wait reason and CPU time, and the native addons it
+ * loaded. A Host past its JavaScript `exit` is stuck in native teardown; these say whether a thread is spinning or
+ * blocked, and which addons are in the process. (A thread's start address reads as zero from another process.)
+ */
+function inside(hostPid: number): unknown {
+  const script = `
+$p = Get-Process -Id ${hostPid} -ErrorAction SilentlyContinue
+if ($p) {
+  $mods = @($p.Modules)
+  [pscustomobject]@{
+    threads = @($p.Threads | ForEach-Object {
+      $t = $_
+      $wait = if ("$($t.ThreadState)" -eq 'Wait') { "$($t.WaitReason)" } else { $null }
+      [pscustomobject]@{ id = $t.Id; state = "$($t.ThreadState)"; wait = $wait; cpuMs = [int]$t.TotalProcessorTime.TotalMilliseconds }
+    })
+    addons = @($mods | Where-Object { $_.FileName -like '*.node' } | ForEach-Object { $_.FileName })
+  } | ConvertTo-Json -Compress -Depth 4
+}`;
+  const listing = spawnSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      Buffer.from(script, 'utf16le').toString('base64'),
+    ],
+    { encoding: 'utf8', windowsHide: true, timeout: 15_000 },
+  );
+  try {
+    return JSON.parse(listing.stdout || 'null');
+  } catch {
+    return listing.stdout || listing.stderr;
   }
 }
 
