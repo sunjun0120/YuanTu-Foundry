@@ -7,7 +7,7 @@
 ; accounts sees one UAC prompt here; one that never set them up sees nothing.
 !macro customUnInstall
   ${ifNot} ${isUpdated}
-    StrCpy $R0 "$INSTDIR\resources\app\dist\packages\tools\windows-sandbox\yuantu-sandbox.exe"
+    StrCpy $R0 "$INSTDIR\resources\app\dist\packages\sandbox\windows-sandbox\yuantu-sandbox.exe"
     ${if} ${FileExists} "$R0"
       ; Any one of the three is enough to be worth removing: a half-finished setup leaves some of them behind.
       StrCpy $R1 "0"
