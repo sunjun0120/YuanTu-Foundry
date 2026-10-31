@@ -45,11 +45,8 @@ export function createRunPromptSections(options: RunPromptOptions): PromptSectio
           : options.agent.executionEnvironment,
     }),
     /**
-     * The deployment's persona and the agent's own, in one slot.
-     *
-     * `persona` is registered second and names the first as replaced, so the agent's paragraph wins and the
-     * deployment's is dropped for this run. Both are registered even when only one is set, because "which
-     * persona was in effect" is what the trace has to answer.
+     * The deployment's and the agent's persona share one slot: `persona` replaces the deployment's.
+     * Both are registered so the trace shows which was in effect.
      */
     definePromptSection({
       name: 'persona:deployment',
@@ -139,14 +136,8 @@ export function createRunPromptSections(options: RunPromptOptions): PromptSectio
           : undefined,
     }),
     /**
-     * Work this session delegated and never heard back from.
-     *
-     * A sub-agent that settled after the turn that started it has nowhere else to reach its parent: the
-     * tool result that would have carried its report belongs to a call the parent no longer makes, and the
-     * coordinator that held it died with that run. The parent's own log is what is left, so this is read
-     * from the log at the start of the run — which is exactly the moment a parent picking up "I delegated
-     * this earlier" needs it. It repeats until the outcome is collected, because a notice that fires once
-     * and is missed leaves the work unread, which is the state this exists to prevent.
+     * Delegated work that settled without being collected, read from the parent's log at run start
+     * and repeated until collected.
      */
     definePromptSection({
       name: 'settlements',
@@ -158,12 +149,8 @@ export function createRunPromptSections(options: RunPromptOptions): PromptSectio
       },
     }),
     /**
-     * A background command that finished and whose output nobody has read.
-     *
-     * The same gap as the sub-agent notice above and read the same way — from the session's log, at the start
-     * of the run, repeating until the result is read — but it is its own section because it asks for a
-     * different tool: a child's report is `collect_subagents`, a command's output is `job_output`. One
-     * paragraph naming both would make the model choose between them by guessing.
+     * Finished background commands whose output nobody has read. Separate from the sub-agent notice
+     * because it points at a different tool (`job_output`).
      */
     definePromptSection({
       name: 'command-settlements',
@@ -175,11 +162,8 @@ export function createRunPromptSections(options: RunPromptOptions): PromptSectio
 }
 
 /**
- * What a run says about the plan phase, as a value rather than a literal inside the prompt.
- *
- * It changes once, when the user approves a plan mid-run with `exit_plan_mode` (see `approvedPlanNotice`). A
- * prompt that still said "you have read-only tools" after the approval would be the run telling the model something
- * untrue about its own capabilities, and the model would then refuse work it is in fact able to do.
+ * What a run says about the plan phase. Changes once, when `exit_plan_mode` approves a plan mid-run
+ * (see `approvedPlanNotice`).
  */
 export function planPhaseNotice(planPhase: boolean, canAsk: boolean): string {
   if (!planPhase) return '';

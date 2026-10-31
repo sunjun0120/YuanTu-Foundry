@@ -18,20 +18,13 @@ export function runCancelReason(signal: AbortSignal): CancelReason | undefined {
 }
 
 /**
- * How a run that threw is described: the status, the message, the code and the step's end reason.
- *
- * The round loop has one `catch`, and everything it decides is read from the thrown value and the abort signal.
- * Kept here so the step's end reason and the run's status are classified by the same rules side by side — the two
- * are answers to related questions, and a reader comparing them should not have to find them in a loop.
+ * How a run that threw is described: status, message, code and the step's end reason, classified
+ * side by side.
  */
 
 /**
- * A round a pre-step hook refused.
- *
- * Its own class because the refusal is not a failure of anything: a policy said no to this round, and a reader
- * asking why the step ended should see that instead of the anonymous `failed` an unclassified error produces.
- * The message and the run's status are deliberately unchanged — the task did not happen, so the run still
- * fails — which is why this names the *step's* end and not the run's outcome.
+ * A round a pre-step hook refused. Names the step's end; the run still fails because the task did
+ * not happen.
  */
 export class StepBlockedError extends Error {
   constructor(blocked: string) {
@@ -40,24 +33,14 @@ export class StepBlockedError extends Error {
   }
 }
 /**
- * Whether a failure ended a run because it ran out of room or because something broke.
- *
- * The distinction is what tells a user to start a smaller task instead of looking for a bug, so it is
- * answered from one place: the code the failure carries. Every failure this runtime raises itself now carries
- * one (`LimitError`, `ContextLimitError`, the provider adapters), `failureCodeOf` names the two that do not —
- * a `TimeoutError` abort and an endpoint that only describes an overflow in prose — and anything else is a
- * defect without a name, which is exactly what `failed` means.
+ * Whether a failure means the run ran out of room or broke, from the failure's code
+ * (`failureCodeOf` also names timeouts and prose-only overflows). Anything uncoded is `failed`.
  */
 function failureStatus(value: unknown): 'limited' | 'failed' | undefined {
   return statusForFailure(failureCodeOf(value));
 }
 /**
- * Why the step that was open when the run threw ended.
- *
- * Read from the same places the run's own status is built from (see `settleThrownRun`), so the two never
- * disagree: a step that ended because a limit was reached is not a failure, and one that ended because a person
- * was asked to look at something is neither. The abort comes first because that is what the signal says,
- * whatever error arrived carrying it.
+ * Why the open step ended, using the same sources as the run's status. An abort takes precedence.
  */
 export function stepEndReason(cause: unknown, aborted: boolean): StepEndReason {
   if (aborted) return 'cancelled';
@@ -72,24 +55,16 @@ export interface ThrownRunOutcome {
   error: string;
   /** Why the run ended, when the reason has a name. Absent is a real answer: some failures are prose only. */
   code: FailureCode | undefined;
-  /**
-   * The failure itself, when the thing that threw was one this runtime named.
-   *
-   * Kept as the object rather than as two more fields because what it carries is optional in both: `code` above
-   * is read from it either way, and a failure that named neither a status nor a request id is the common case
-   * rather than an error.
-   */
+  /** The failure itself, when this runtime named it; carries the optional status and request id. */
   endpointFailure: RunFailure | undefined;
 }
 
 const PERSIST_FAILED = 'Failed to persist partial model output';
 
 /**
- * Settle a run whose round loop threw: keep its partial answer, classify the failure and close pending calls.
- *
- * The two writes here can fail themselves, and each failure is reported over the original one, because each
- * leaves the session in a state the original message would misdescribe: an answer nobody kept, or tool calls whose
- * outcome is unknown.
+ * Settle a run whose loop threw: keep its partial answer, classify the failure and close pending
+ * calls. A failure in either write is reported over the original, since it changes the session's
+ * state.
  */
 export function settleThrownRun(options: {
   store: SessionStore;
@@ -124,12 +99,8 @@ export function settleThrownRun(options: {
           ? cause.message
           : String(cause);
   /**
-   * What kind of failure it was, in the form a client can branch on.
-   *
-   * A `tool-cleanup` failure is named here because that error class carries no code: the run failed
-   * *after* its work, and a reader should be able to see that without matching on a message. A cancelled
-   * run has no code at all — its status already says `cancelled`, and inventing a code for it would make
-   * a deliberate stop look like a failure with a name.
+   * The failure code. `tool-cleanup` is named here because that error has no code; a cancelled run
+   * has none.
    */
   const code = persistFailed
     ? undefined
@@ -138,14 +109,7 @@ export function settleThrownRun(options: {
       : aborted
         ? undefined
         : failureCodeOf(cause);
-  /**
-   * What the endpoint said about the request, when it was the endpoint that failed.
-   *
-   * Not codes: nothing branches on them and the run's own status already says `failed`. They are the two
-   * facts a person needs to take the failure back to whoever runs the endpoint — the status, and the id
-   * the endpoint filed the call under — and they are read from the same thrown value the code is, so a
-   * failure that never carried them reports none rather than an empty one.
-   */
+  /** The endpoint's HTTP status and request id, when the endpoint failed. */
   const endpointFailure = cause instanceof RunFailure ? cause : undefined;
   try {
     store.resolvePending(

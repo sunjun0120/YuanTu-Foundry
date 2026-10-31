@@ -21,12 +21,8 @@ import { WINDOW_EXHAUSTED, hopelessForWindow } from '../context/forecast.ts';
 import type { RunEmit } from './emit.ts';
 
 /**
- * A run's own limit was reached, with the code that says which one.
- *
- * The class already meant "limited" rather than "failed"; what the code adds is *which* limit, so a run
- * result can say "the output limit" instead of leaving a reader to parse the error text. It is a limit on
- * *work* rather than on spend: output produced, not rounds taken — a run has no round cap to reach, and the
- * rounds nobody asked for are counted by the goal that asked for them (see `packages/core/goal-driver.ts`).
+ * A run's own limit was reached, with a code naming which one. A limit on work (output produced),
+ * not on rounds: runs have no round cap (see `packages/core/goal-driver.ts`).
  */
 class LimitError extends RunFailure {
   constructor(code: 'output-limit', message: string) {
@@ -93,11 +89,9 @@ export interface RunRequestOptions {
   onVisibleText(delta: string): void;
   onAnswerText(text: string): void;
   /**
-   * Mark a plain answer as one the caller expects to replace with another answer from the same turn.
-   *
-   * Only the successful no-tool-call path takes the mark: a tool-call turn is not an answer, and a partial or
-   * interrupted turn is shown as what it is. A callback can resolve pending command observations after a final
-   * provider response and before persistence, so unchanged diagnostic work never leaves a provisional answer.
+   * Mark a plain answer as one the caller expects to replace in the same turn. Only the successful
+   * no-tool-call path takes it. A callback form can resolve pending command observations before
+   * persistence.
    */
   provisionalAnswer?: boolean | (() => Promise<boolean>);
   commitStepTiming(response: ModelResponse): void;
@@ -109,14 +103,10 @@ export interface RunRequestOptions {
 }
 
 /**
- * Whether the streamed answer should be checkpointed now.
- *
- * A checkpoint rewrites the whole text so far (it is what a crashed run's partial answer is recovered from), so
- * writing it on a fixed clock made the bytes written grow with the square of the answer: a 200 KB answer
- * streamed over a minute was written thirty times at an average of 100 KB. The rule is now geometric — after two
- * seconds, write once the text has grown by an eighth of what is already saved (and at least 4 KB) — so the total
- * written is a small multiple of the answer, not its square. Two bounds keep the recovery promise: the first
- * fragment is saved at once, and nothing waits longer than 30 seconds or 256 K characters unsaved.
+ * Whether the streamed answer should be checkpointed now. Geometric rather than clock-based, so
+ * total bytes written stay a small multiple of the answer: after two seconds, write once the text
+ * grew by an eighth of what is saved (at least 4 KB). The first fragment saves at once; nothing
+ * waits over 30 s or 256 K chars.
  */
 export function shouldCheckpointStream(
   chars: number,
@@ -179,42 +169,29 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
   emit('message.started', { messageId });
   let streamedText = '';
   /**
-   * This round's reasoning, on its own accumulator.
-   *
-   * It is kept apart from `streamedText` everywhere — it is not the answer, so it never becomes
-   * `RunResult.text`, never goes back to a provider, and never enters the stream checkpoint (an
-   * interrupted turn preserves what the user can read; half a thought is not that). It is discarded
-   * whole when an attempt is thrown away, so what is stored is the reasoning of the attempt whose
-   * answer was stored.
+   * This round's reasoning, kept apart from `streamedText`: never the answer, never sent back to a
+   * provider, never checkpointed. Discarded with its attempt.
    */
   let streamedReasoning = '';
   let checkpointChars = 0;
   let checkpointAt = 0;
   /**
-   * Captured before the request so the provider's reported usage can be compared against the uncorrected
-   * estimate that admitted this exact request. A recovered round reassigns both, so the calibration
-   * always sees the request that was actually answered rather than the one that was refused.
+   * The uncorrected estimate that admitted this request, compared against reported usage.
+   * Reassigned on recovery so calibration sees the request actually answered.
    */
   let rawInputEstimate = 0;
   /** The sizes that estimate was assembled from, so the endpoint's answer can be read per part. */
   let roundBytes: { system: number; tools: number; messages: number } | undefined;
   let requestOutputLimit = 0;
   /**
-   * How many recoveries from a provider-confirmed context overflow this round has spent.
-   *
-   * The allowance comes from the compaction policy the round resolved — one attempt by default, because a
-   * conversation that still does not fit after the most aggressive compression available cannot be made to
-   * fit by repeating the same decision.
+   * Recoveries from a provider-confirmed overflow spent this round. The allowance comes from the
+   * compaction policy (one by default).
    */
   let overflowAttempts = 0;
   let lastCompactionProblem = context.compactionProblem;
   /**
-   * Take back the reasoning the user has already seen.
-   *
-   * Reasoning is streamed live (see `message.reasoning`), so an attempt that is thrown away has to take
-   * its thinking with it: otherwise a re-sent round would leave the folded block showing two attempts'
-   * reasoning as one, and the live view would disagree with the message that gets stored. The frame is a
-   * reset rather than a correction because a client cannot un-know deltas it has already rendered.
+   * Retract reasoning already streamed for a discarded attempt, with a reset frame, since clients
+   * cannot un-render deltas.
    */
   const resetReasoning = (): void => {
     if (!streamedReasoning) return;
@@ -222,17 +199,12 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     emit('message.reasoning', { messageId, text: '', reset: true });
   };
   /**
-   * Compress the conversation once more, and report whether the round should be sent again.
-   *
-   * `compacted: false` is the answer that decides it: it means there was no boundary left to compress,
-   * so the re-sent request would be byte-for-byte the one that just failed and the original failure
-   * stands. Every caller requires an empty `streamedText` first, so the retry can never duplicate output
-   * the user has already seen.
+   * Compress once more and report whether to re-send. `compacted: false` means nothing was left to
+   * compress, so the original failure stands. Callers require empty `streamedText` first.
    */
   const recoverFromOverflow = async (): Promise<boolean> => {
     if (overflowAttempts >= (context.maxOverflowRetries ?? 1)) {
-      // The retry was refused as well. Reporting it is the point: an operator reading this run's stream
-      // sees both the compression that was tried and the refusal that outlived it.
+      // The retry was refused too; report both the compression and the refusal.
       emit('context.overflow', {
         round,
         recovered: false,
@@ -246,10 +218,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     try {
       forced = await prepareContext({ ...contextInput, forceCompact: true });
     } catch (cause) {
-      // Compression cannot always even be attempted — a conversation with a single message has no
-      // boundary to compress at, and says so by refusing. That is not a second failure to report: it is
-      // the answer that the request has to stand as it is, so the provider's own failure is what the
-      // user sees.
+      // Compression could not be attempted (no boundary), so the provider's failure stands.
       forced = undefined;
       lastCompactionProblem = cause instanceof Error ? cause.message : String(cause);
     }
@@ -261,17 +230,12 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     }
     context = forced;
     lastCompactionProblem = undefined;
-    // The re-send carries a different envelope — the forced compression changed the summary the request
-    // opens with — so this round writes a second record rather than leaving the log claiming it sent the
-    // prompt that was refused.
+    // The re-send has a different envelope, so record it.
     recordEnvelope(forced);
     emit('context.overflow', { round, recovered: true, coveredMessages });
-    // The attempt that was refused is discarded whole. Its reasoning was already streamed, so the
-    // reset goes out too: otherwise the folded block would show two attempts' thinking as one, and
-    // the live view would disagree with the message that gets stored.
+    // Discard the refused attempt, including its streamed reasoning.
     resetReasoning();
-    // Durable, because it is a decision about the conversation that no checkpoint explains: the
-    // compression is recorded, "the provider refused this for size and we answered by compressing" is not.
+    // Durable: the provider refused for size and the round answered by compressing.
     store.recordEvent(sessionId, 'context.overflow', {
       round,
       recovered: true,
@@ -279,30 +243,14 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     });
     return true;
   };
+  // Send this round, answering an overflow once and transient failures within the round's retry
+  // allowance. Retries live here, not in the transport, so broken streams are covered, the count is
+  // logged and survives restarts, and Stop cancels the wait. Only when nothing visible was shown,
+  // and only for retryable failures.
   /**
-   * Send this round, answering a context overflow once and a transient failure as often as the retry
-   * allowance for this round permits.
-   *
-   * This is the step boundary the retries belong to, and moving them here from the transport is what makes
-   * them worth having. The transport could only ever see an HTTP status before the stream started, could
-   * not retry a stream that broke mid-flight, left nothing in the record, and forgot its count when the
-   * process did. Here the same decision covers a broken stream, the count is a row in the log that the
-   * next process reads back, and the wait is cancelled by the same Stop that cancels everything else.
-   *
-   * Two rules keep a retry from costing more than it buys:
-   *
-   * - **Nothing has been shown yet.** A retry re-sends the request, so any text the user already saw
-   *   would be shown twice. Displayed reasoning can be reset before a resend.
-   * - **The failure is transient by nature** (`retryable`), never a failure that describes the run's own
-   *   room or the request's content: re-sending those buys the same answer at full price.
-   */
-  /**
-   * Whether this failure is one an empty attempt produced, and so may be sent again on its own allowance.
-   *
-   * The definition is deliberately narrow, and it is the point of the feature: no response headers were received,
-   * or the response carried zero body bytes, *and* no stream event was parsed, *and* the code says the connection
-   * failed rather than the endpoint refusing the request. Anything that streamed even one reasoning chunk is not
-   * this: re-sending it would pay twice for the same thought.
+   * Whether an empty attempt produced this failure: no headers or zero body bytes, no parsed stream
+   * event, and a connection failure rather than a refusal. Such attempts get their own re-send
+   * allowance.
    */
   const zeroByteFailure = (cause: unknown): boolean => {
     const code = failureCodeOf(cause);
@@ -311,12 +259,9 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     return details?.responseBytes === 0 && details?.events === 0;
   };
   /**
-   * The separate allowance for an empty attempt.
-   *
-   * Counted from its own record rather than from `llm.retry`: an operator with a normal retry budget must not
-   * have it spent on a re-send that duplicated nothing, and an evaluation that sets `maxModelRetries=0` still
-   * gets its one zero-byte re-send. A zero-byte failure is *not* guaranteed to be free — the endpoint may have
-   * received the request and billed for it — which is why this records `re-sent`, not `free`.
+   * The separate allowance for an empty attempt, counted from its own record so normal retries are
+   * not spent (and `maxModelRetries=0` still gets one). The endpoint may still have billed it,
+   * hence `re-sent`.
    */
   const zeroByteRetry = async (cause: unknown): Promise<boolean> => {
     if (!zeroByteFailure(cause)) return false;
@@ -334,14 +279,9 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     return true;
   };
   /**
-   * Whether this truncated attempt is one that only deliberated, and may be sent once more asking for the action.
-   *
-   * A reasoning model can spend the whole output allowance thinking and stop before a word or a complete call:
-   * the 2026-10-29 sample lost a task to 16384 of 16384 tokens of reasoning and nothing else. That is not the
-   * task being too big for the allowance, which is what `output-limit` otherwise means — the same request with a
-   * note to act on the reasoning already done usually lands. Narrow on purpose: nothing visible was streamed (a
-   * re-send would show it twice), reasoning is most of what was billed, and one re-send per round, counted from
-   * its own record like the zero-byte allowance.
+   * Whether a truncated attempt only deliberated (reasoning consumed the output allowance, nothing
+   * visible), and may be re-sent once with a note to act. One per round, counted from its own
+   * record.
    */
   let resendNote: Message | undefined;
   const reasoningResend = (attempt: ModelResponse): boolean => {
@@ -371,12 +311,8 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     return true;
   };
   /**
-   * Whether this truncated attempt was cut off inside a tool call, and may be sent once more asking for smaller calls.
-   *
-   * The other way the 2026-10-29 sample lost a task to the allowance: the reasoning fit, the arguments of one large
-   * call did not, and half a JSON document is not a call. The task usually fits as several smaller calls, so the
-   * request goes again once with a note saying so. Same narrowing as the reasoning re-send — nothing visible was
-   * streamed, one re-send per round on its own record — and the same note-only-on-this-request shape.
+   * Whether a truncated attempt was cut off inside a tool call, and may be re-sent once asking for
+   * smaller calls. Same narrowing as the reasoning re-send.
    */
   const truncatedCallResend = (attempt: ModelResponse): boolean => {
     const chars = attempt.outputDiagnostics?.toolArgumentChars ?? 0;
@@ -410,8 +346,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
       attempts + 1,
       cause instanceof RunFailure ? cause.retryAfterMs : undefined,
     );
-    // The endpoint's own cooldown is never shortened; one longer than we are willing to hold a round
-    // open is not retried at all, because the alternative is ignoring what it asked for.
+    // Never shorten the endpoint's cooldown; too long a cooldown is not retried.
     if (waitMs > RETRY_MAX_WAIT_MS) return false;
     const retry = {
       runId,
@@ -421,22 +356,14 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
       code,
       waitMs,
     };
-    /**
-     * Recorded before the wait, so the record and the count are the same fact: an attempt that is already
-     * written down is one the next process will not make again, whether this one survives the wait or not.
-     */
+    /** Recorded before the wait, so the next process will not repeat this attempt. */
     store.recordEvent(sessionId, 'llm.retry', retry);
     emit('llm.retry', retry);
     const waitStarted = performance.now();
     try {
       await delay(waitMs, undefined, { signal: requestSignal });
     } catch (error) {
-      /**
-       * A cancelled wait reports *why* it was cancelled, not that a timer was cancelled.
-       * `timers/promises` rejects with its own `AbortError`, which would make a request-deadline abort
-       * during the backoff look like an anonymous failure; the signal's own reason is either the
-       * timeout that fired or the Stop that arrived, and both are things the run can name.
-       */
+      /** Report why the wait was cancelled (deadline or Stop), not the timer's own `AbortError`. */
       requestSignal.throwIfAborted();
       throw error;
     } finally {
@@ -449,44 +376,31 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
   };
   const sendRequest = async (): Promise<ModelResponse> => {
     for (;;) {
-      /**
-       * The numbers this attempt was decided on, reported so a client and an operator see the same
-       * prediction the run acted on — not a recomputation that may disagree with it. A round that
-       * recovered reports the prediction it was re-sent with.
-       */
+      /** Report the prediction this attempt was decided on, not a recomputation. */
       emit('context.forecast', {
         round,
         inputTokens: context.forecast.inputTokens,
         rawInputTokens: context.forecast.rawInputTokens,
         outputTokens: context.forecast.outputTokens,
         windowRoom: context.forecast.windowRoom,
-        // What the estimate is made of. "The request is too big" is not actionable on its own: a catalog
-        // of tool schemas can cost more than the conversation, and this is the number that says so.
+        // What the estimate is made of; tool schemas can outweigh the conversation.
         breakdown: context.forecast.breakdown,
         shortened: context.shortened,
         freedChars: context.freedChars,
-        // Reported beside the shortening pair rather than folded into it: the two are different bargains —
-        // a pointer to the full text, or the middle gone with nothing to read back — and an operator
-        // reading a round that made the conversation smaller needs to know which one it got.
+        // Reported separately from shortening: pruning leaves nothing to read back.
         pruned: context.pruned,
         prunedChars: context.prunedChars,
         compacted: context.compacted,
-        // Why proactive compression is off for this route, when it is: a window that cannot carry the
-        // request's output reservation plus the headroom is a configuration mistake, and a reader of the
-        // stream should see that rather than wonder why a small window never compressed.
+        // Why proactive compression is off for this route (window too small for the output
+        // reservation plus headroom).
         ...(context.policyProblem === undefined ? {} : { policyProblem: context.policyProblem }),
-        // Why the request cannot be sent, when it cannot: without it the stream shows numbers the reader
-        // has to compare by hand to learn the same one word.
+        // Why the request cannot be sent, when it cannot.
         ...(context.forecast.problem === undefined ? {} : { problem: context.forecast.problem }),
       });
       /**
-       * A request the estimate says does not fit is still sent — unless the estimate is far past the window.
-       *
-       * The run is the caller that knows what "does not fit" means, and the answer used to be "fail here",
-       * which made a heuristic the authority on somebody else's endpoint: an uncalibrated estimate can be
-       * wrong by the width of its own clamp. `hopelessForWindow` is where that stops being plausible, and
-       * everything under it is sent: the endpoint answers, or refuses for size and the round compresses and
-       * re-sends. The round is told why it is uncompressed through `compactionProblem` in the frame above.
+       * A request the estimate says does not fit is still sent unless far past the window
+       * (`hopelessForWindow`); the endpoint decides, and a size refusal triggers compression and a
+       * re-send.
        */
       if (context.forecast.problem && hopelessForWindow(context.forecast, roundContextTokens))
         throw new ContextLimitError(
@@ -499,16 +413,12 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
       requestOutputLimit = context.forecast.outputTokens;
       let attempt: ModelResponse;
       /**
-       * While the request is in flight the run is working, and the lease says so.
-       *
-       * The renewal is on a timer rather than only at the boundaries around this request because a model
-       * call can take minutes: without it a healthy run would look idle for the whole of it. It decides
-       * nothing — the timer cannot expire anything, and `LEASE_RENEW_INTERVAL_MS` is not a timeout.
+       * Renew the lease on a timer during the request, since a model call can take minutes. Decides
+       * nothing.
        */
       const renewing = setInterval(() => {
-        // A throw from a timer callback is not catchable by the request's own `try`: an unguarded
-        // `SQLITE_BUSY` here would be an uncaught exception that ends the Host mid-run. The renewal is
-        // advisory by design (see above), so a failed one is dropped instead of escalated.
+        // Timer callbacks are outside the request's `try`; a failed renewal (e.g. `SQLITE_BUSY`) is
+        // dropped.
         try {
           store.renewLease(sessionId, runId);
         } catch {
@@ -534,8 +444,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
           signal: requestSignal,
           maxOutputTokens: requestOutputLimit,
           onText: (delta) => {
-            // Only text about to become a message.delta is a visible first token. Internal
-            // summaries share the measured provider but never enter this callback.
+            // Only text about to become a `message.delta` counts as a visible first token.
             onVisibleText(delta);
             streamedText += delta;
             if (
@@ -589,8 +498,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
             { cause },
           );
         }
-        // A refused request is recoverable only while nothing has been shown: once text has streamed,
-        // compressing and re-sending would show the beginning of the turn to the user twice.
+        // A size refusal is recoverable only while nothing has been shown.
         if (!streamedText && isContextWindowExceeded(cause)) {
           if (await recoverFromOverflow()) continue;
           if (lastCompactionProblem)
@@ -610,23 +518,16 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
               },
             );
         }
-        // An attempt that produced nothing at all is re-sent on its own allowance first; only once that is
-        // exhausted does the ordinary retry policy get a say. Nothing was shown, so nothing can be duplicated.
+        // An empty attempt uses its own allowance first, then the ordinary retry policy.
         if (!streamedText && (await zeroByteRetry(cause))) continue;
         // A transient failure is re-sent under the same rule, and for the same reason.
         if (!streamedText && (await retryRequest(cause))) {
-          /**
-           * Only `streamedText` blocks a retry. Reasoning that was displayed belongs to the attempt being
-           * discarded, and the frame that takes it back already exists — the overflow recovery sends it —
-           * so a round whose endpoint failed after thinking aloud is retried rather than abandoned. The
-           * guard used to be `!streamedReasoning` as well, which turned "the endpoint streamed a thought
-           * and then broke" into a failed run that had produced no answer at all.
-           */
+          /** Only `streamedText` blocks a retry; displayed reasoning is reset. */
           resetReasoning();
           continue;
         }
-        // An interrupted stream may have shown useful text before the provider failed. Preserve
-        // exactly those visible deltas, but never persist or execute incomplete tool calls.
+        // Keep visible text from an interrupted stream, but never persist or run incomplete tool
+        // calls.
         if (streamedText) {
           onAnswerText((text = streamedText));
           const message: Message = {
@@ -651,14 +552,8 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
       ) {
         if (!recoveringArguments && (await recoverFromOverflow())) continue;
         /**
-         * Recovery is over, and the provider's own reason is the one that stands.
-         *
-         * It can be over in two ways, and they are different sentences: compaction ran and could not free
-         * enough room (`lastCompactionProblem`), or the recovery allowance was already spent. The second is the
-         * ordinary one — the attempt that *succeeded* clears the problem, so the next overflow in the same round
-         * arrives here with nothing to name. Falling through instead ended the round at the `length` branch
-         * below, which reports an **output** limit: the one diagnosis that says "compress nothing", about a
-         * request the provider refused for size.
+         * Recovery is over (compaction could not free enough, or the allowance is spent), so report
+         * the provider's overflow, not an output limit.
          */
         throw new ContextLimitError(
           lastCompactionProblem
@@ -670,31 +565,17 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
       if (!recoveringArguments && (reasoningResend(attempt) || truncatedCallResend(attempt)))
         continue;
       /**
-       * A turn that carried nothing at all goes through the same retry decision as a broken stream.
-       *
-       * Where this is judged is the whole point. It used to be judged after `sendRequest` had returned,
-       * which put it outside the retry path entirely: `empty-response` was in the retry table but no
-       * failure could reach it, so an endpoint that closed a turn with an empty body ended the run where a
-       * transport hiccup on the same request would have been re-sent for free.
-       *
-       * "Nothing at all" is the test, and it is deliberately wider than the envelope. Text, tool calls,
-       * streamed text and streamed reasoning all count as something: a thinking model that answered only
-       * in its reasoning channel has still answered, and re-sending it would spend the request again to
-       * throw away the thought the user is reading. What is left is a turn that produced no text, no call
-       * and no thought, which is a hiccup rather than an answer whatever the finish reason says — and
-       * because `carried` is false, nothing has been shown to the user, so a re-send cannot duplicate
-       * output. A turn the endpoint stopped on purpose is not judged here at all — `length` and
-       * `content-filter` are owned by the branches around this one, and re-sending a filtered request would
-       * spend a round to be refused again.
+       * A turn that carried nothing (no text, calls, streamed text or reasoning) goes through the
+       * same retry decision as a broken stream. Nothing was shown, so a re-send cannot duplicate
+       * output. `length` and `content-filter` are handled by the surrounding branches.
        */
       const carried =
         attempt.toolCalls.length > 0 ||
         attempt.text.trim() !== '' ||
         streamedText !== '' ||
         streamedReasoning !== '';
-      // A zero reservation is the forecast's "no room to reserve output" sentinel, not a cap the endpoint was
-      // asked to honour: that request is sent precisely so the endpoint can be the authority on whether it fits.
-      // Treating any output under it as over-cap would turn every such answer into `limited`.
+      // A zero reservation is the forecast's "no room" sentinel, not a cap, so output is not
+      // over-cap.
       const attemptOverCap =
         requestOutputLimit > 0 && attempt.usage.outputTokens > requestOutputLimit;
       if (
@@ -733,12 +614,8 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
   };
   const response = await sendRequest();
   /**
-   * What the endpoint billed, read as evidence about each part.
-   *
-   * One total, but the round knows how that total was assembled — the system prompt, the catalogue and the
-   * conversation, in bytes — so the residual is attributed to the parts by their share of it. That is what
-   * lets a route whose catalogue is overestimated and whose conversation is underestimated end up with two
-   * weights pointing in opposite directions instead of one average that is wrong for both.
+   * Attribute the billed total to system prompt, catalogue and conversation by their byte share, so
+   * each part gets its own weight.
    */
   calibration.observe(
     rawInputEstimate,
@@ -746,15 +623,8 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     rawInputEstimate > 0 ? roundBytes : undefined,
   );
   /**
-   * The measurement is durable, because it is about the endpoint rather than about this run.
-   *
-   * Written per observed round rather than once at the end: a run that is stopped, crashes or is cancelled
-   * keeps what it had already learned, which is the whole reason the reading half exists. Rounds that reported
-   * no usable usage are already filtered out by `observe` — the state simply does not move for them — so this
-   * records the value that was in force for the round, which is what a reader asking "what correction was
-   * this round sized against" needs. The anchor travels with it: the estimate this round was sized from and
-   * the usage that came back are the two numbers that make the correction checkable rather than merely
-   * present.
+   * Persist the measurement per observed round, so a stopped run keeps what it learned. The
+   * estimate and reported usage travel with it so the correction is checkable.
    */
   if (calibrationRouteKey !== undefined)
     store.recordEvent(sessionId, 'context.calibration', {
@@ -769,12 +639,8 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     });
   countUsage(response.usage);
   /**
-   * The part of a stopped turn that is still true: what the user already saw.
-   *
-   * Both ways a turn can be stopped after producing text — the output limit and the endpoint's own policy — have
-   * to persist that text before failing, or the answer appears and then vanishes when the UI rebuilds from
-   * history. Tool calls are dropped by both: a truncated call is half a JSON document, and a call from a turn
-   * the endpoint refused to finish was never allowed to run.
+   * Persist the text the user already saw before failing on an output limit or content filter. Tool
+   * calls are dropped.
    */
   const recordPartialTurn = (answer: ModelResponse): void => {
     onAnswerText((text = answer.text));
@@ -808,10 +674,8 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
         'stopped again, so nothing was re-sent',
     );
   }
-  // A compatible endpoint may ignore the requested cap and still report a normal stop. Its reported usage
-  // remains billable evidence, but the oversized response must not start tools or masquerade as completion.
-  // `requestOutputLimit === 0` is the forecast's "no reservation" sentinel: no positive cap was requested, so the
-  // endpoint's answer is the one the run asked for (the over-window estimate already carries `problem`).
+  // An endpoint may ignore the requested cap and report a normal stop: bill it, but run no tools
+  // and do not treat it as completion. `requestOutputLimit === 0` means no cap was requested.
   const outputCapExceeded =
     requestOutputLimit > 0 && response.usage.outputTokens > requestOutputLimit;
   if (response.finishReason === 'length' || outputCapExceeded) {
@@ -849,8 +713,8 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     if (!call.id || ids.has(call.id)) throw new Error('Invalid or duplicate tool call ID');
     ids.add(call.id);
   }
-  // A turn that carried nothing was already refused inside `sendRequest`, where the retry decision could
-  // see it; what is left here is the envelope contradicting itself, which no re-send can repair.
+  // Empty turns were handled in `sendRequest`; a `stop` with tool calls is a self-contradiction no
+  // re-send can fix.
   if (response.finishReason === 'stop' && response.toolCalls.length > 0)
     throw new Error('Provider stop reason conflicts with tool calls');
   onAnswerText((text = response.text));
@@ -874,8 +738,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
   });
   emit('message.finished', {
     messageId,
-    // `providerState` stays out of the event — it is the protocol's business, not the client's — while
-    // the reasoning is in it, because the folded block is exactly what the client has to render.
+    // `providerState` stays out of the event; the reasoning is in it for the client to render.
     message: {
       role: 'assistant',
       content: text,
@@ -885,9 +748,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     },
     usage: response.usage,
   });
-  // The step's spans close here, with the answer that ends it: the rounds that returned before this
-  // point — a refused request the round recovered from — assembled nothing and are already accounted
-  // for by the step's own start, so no attempt can be charged twice.
+  // Close the step's spans with the answer that ends it; recovered attempts assembled nothing.
   commitStepTiming(response);
 
   return response;

@@ -1,16 +1,10 @@
 import type { Message, Provider } from '../protocol/index.ts';
 
 /**
- * A provider for a connection that does not accept images, with every tool picture held back from it.
- *
- * A user's own picture is refused before the run starts (`Agent.run`), but a tool's is not: `read_image`,
- * `browser_screenshot` and the like return pictures as part of their result, and a text-only endpoint rejects the
- * next request that carries one — the run fails a step later, somewhere that is not the tool. Held back here, at
- * the request rather than in the transcript, so a picture taken under a vision model is shown again after the
- * session switches back to one, and one taken earlier is not sent after switching away.
- *
- * The text says what was held back, so the model knows it did not see the picture and reports a visual check as
- * not done rather than as passed.
+ * A provider for a connection that does not accept images, with tool images held back at request
+ * time (user images are refused before the run). Done per request, not in the transcript, so
+ * switching models works both ways. The text says what was held back, so a visual check is reported
+ * as not done.
  */
 export function textOnlyProvider(provider: Provider): Provider {
   return {

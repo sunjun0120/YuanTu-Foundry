@@ -11,11 +11,9 @@ export interface ActiveRun {
 }
 
 /**
- * The inputs a person sends to a session, whether or not a run is holding it.
- *
- * Two places can hold an inbox: the live queue of the run that owns the session, and the log once nothing does.
- * Every operation here answers from the right one — and writes to the log either way — so a client sees one list
- * across a run's start, its end and a process that died holding it.
+ * The inputs a person sends to a session, whether or not a run holds it. Answers from the live
+ * queue or the log as appropriate, and always writes to the log, so clients see one list across run
+ * boundaries and crashes.
  */
 export class RunInbox {
   private readonly store: SessionStore;
@@ -36,15 +34,9 @@ export class RunInbox {
   }
 
   /**
-   * Queue an input for a running session.
-   *
-   * `id` is passed through by the one caller that already named the message — a parent correcting a child — so
-   * that the child's receipt and the parent's record are about one id (see `RunQueue.add`).
-   *
-   * The acceptance is durable *before* the input can be folded into a turn, on the same argument the sub-agent
-   * inbox follows: the queue is memory, the fact that somebody queued this is not. `input.queued` is written
-   * first, so a process that dies holding it leaves "queued and never delivered" readable rather than leaving
-   * a conversation that merely ended (see `packages/storage/events.ts`).
+   * Queue an input for a running session. `id` is passed by a parent correcting a child so both
+   * records share it (see `RunQueue.add`). `input.queued` is written first, so a crash leaves
+   * "queued and never delivered" readable.
    */
   enqueue(sessionId: string, input: UserInput, mode: InputMode, id?: string): QueuedInput {
     const active = this.runs.get(sessionId);
@@ -69,12 +61,8 @@ export class RunInbox {
   }
 
   /**
-   * The session's inbox as a client reads it, live or after the fact.
-   *
-   * While a run holds the queue, the queue is the answer: it is what the person can still act on (steer it,
-   * clear it). Once nothing holds it, the *log* is the answer, and what it says is what nobody ever delivered —
-   * a follow-up the process died holding, or the tail of a run that ended with input still waiting. That second
-   * case is the one nothing used to be able to show, and it is the whole reason this seam exists.
+   * The session's inbox: the live queue while a run holds it, otherwise what the log says was never
+   * delivered.
    */
   inboxOf(sessionId: string): { running: boolean; items: QueuedInput[] } {
     const active = this.runs.get(sessionId);
@@ -83,12 +71,8 @@ export class RunInbox {
   }
 
   /**
-   * Drop the session's inbox and record that it will never be delivered.
-   *
-   * Deliberately allowed while no run holds the session: the entries this settles are mostly *leftovers* from
-   * a run that ended or died, and a clear that only worked during a run would leave them to reappear after every
-   * reload. The log is what is settled rather than the array, so the live queue and the leftovers are one list
-   * to this call — which is what a person pressing "clear" means.
+   * Drop the inbox and record it as never delivered. Allowed without a run, since most entries are
+   * leftovers; the log is settled, so live items and leftovers clear together.
    */
   clear(sessionId: string): void {
     const active = this.runs.get(sessionId);
@@ -98,10 +82,8 @@ export class RunInbox {
   }
 
   /**
-   * Record that inputs will never be delivered, and why.
-   *
-   * One record for the batch rather than one per input, because the reason is the same fact about all of them
-   * and the reader asks it once: `ids` names exactly the inputs it covers, so the fold settles all of them.
+   * Record that inputs will never be delivered, with one reason for the batch; `ids` names exactly
+   * what it covers.
    */
   discard(ids: readonly string[], sessionId: string, reason: string): void {
     if (!ids.length) return;

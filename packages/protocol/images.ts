@@ -6,11 +6,8 @@ import { validateWebp } from '../formats/image-webp.ts';
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_INPUT_BYTES = 16 * 1024 * 1024;
 /**
- * Whether a stored image is a content address rather than the bytes themselves.
- *
- * The two shapes coexist on purpose: rows written before schema v21 carry `data` inline, and they are read as
- * they are rather than migrated. Told apart by `hash` and the absence of `data`, so a reader that meets either
- * shape — the store, a test, a person with `sqlite3` — classifies it the same way.
+ * Whether a stored image is a content address rather than inline bytes. Rows before schema v21
+ * still carry `data` inline and are read as-is.
  */
 export function isImageReference(value: unknown): value is ImageReference {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -23,13 +20,9 @@ export function isImageReference(value: unknown): value is ImageReference {
   );
 }
 /**
- * What kind of image these bytes are, or `null` if they are not one.
- *
- * One implementation for both callers: a user's attachment arrives already labelled, and a file read from the
- * workspace arrives with nothing but a name — an extension is a claim about content, and a `.png` that is
- * really a JPEG is rejected by the endpoint on the *next* request, one step away from the file that caused it.
- * Sniffing both through the same function is what keeps the tool and the validator from disagreeing about what
- * an image is. Byte comparison rather than `Buffer`, so the renderer can use it too.
+ * What kind of image these bytes are, or `null`. Shared by attachments and workspace file reads,
+ * since an extension is only a claim. Uses byte comparison, not `Buffer`, so the renderer can use
+ * it too.
  */
 export function sniffImageType(bytes: Uint8Array): ImageAttachment['mimeType'] | null {
   const at = (index: number): number => bytes[index] ?? -1;
@@ -103,12 +96,8 @@ const sizedReplacer = (key: string, value: unknown): unknown =>
       ? value.map((i) => ({ mimeType: i.mimeType, name: i.name, data: '[image]'.repeat(512) }))
       : value;
 /**
- * Each message's serialised length, keyed by the message object.
- *
- * The context budget asks this of the whole conversation on every request and again for every candidate cut while
- * compacting, and a long session is megabytes of JSON each time. Messages are immutable by the same convention
- * `packages/core/context/budget.ts` already relies on for its byte sizes (the store's fold is handed out as-is, and every
- * transformation builds a new message), so identity is a sound key and a `WeakMap` lets the entries go with them.
+ * Each message's serialised length, keyed by object. Messages are immutable (as
+ * `packages/core/context/budget.ts` also assumes), so a `WeakMap` cache is sound.
  */
 const messageChars = new WeakMap<object, number>();
 function elementChars(value: unknown): number {
@@ -121,10 +110,8 @@ function elementChars(value: unknown): number {
   return chars;
 }
 /**
- * The length of `JSON.stringify(messages)` under the sizing rules above, without building the string.
- *
- * An array is summed from its elements: `[`, the elements joined by `,`, and `]` — the same characters the whole
- * serialisation would produce, since the replacer never sees an array index as `change` or `images`.
+ * The length of `JSON.stringify(messages)` under the sizing rules above, without building the
+ * string.
  */
 export function contextMessageSize(messages: unknown): number {
   if (!Array.isArray(messages)) return JSON.stringify(messages, sizedReplacer).length;

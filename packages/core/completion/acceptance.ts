@@ -33,12 +33,8 @@ const DEFAULT_OUTPUT_BYTES = 24_000;
 const MAX_OUTPUT_BYTES = 64_000;
 const MAX_TIMEOUT_MS = 300_000;
 /**
- * How many executable checks one task may carry.
- *
- * Exported because it is the same number on both sides of the task's life: the verifier refuses more than this,
- * so the validator that *stores* a task has to refuse them too. It used to be 64 here and 100 there, which let a
- * task be persisted that every single run then failed with "Acceptance checks exceed limit of 64" — a failure
- * that blames the work when the definition is what is wrong.
+ * How many executable checks one task may carry; shared with the task validator so a stored task
+ * can always be verified.
  */
 export const MAX_CHECKS = COMPLETION_LIMITS.acceptanceChecks;
 const DEFAULT_FILE_BYTES = 1_000_000;
@@ -102,11 +98,8 @@ export type AcceptanceSpec =
 
 export interface PathSnapshot {
   /**
-   * How the image orders a directory's entries: `1` by English collation, `2` by code unit.
-   *
-   * A baseline is stored and compared in a later run, and collation can change with the ICU a Node build ships, so a
-   * runtime upgrade alone could make an untouched path read as changed. New images use `2`; a stored `1` is compared
-   * against an image taken the same way, so baselines recorded before the change still mean what they meant.
+   * How the image orders directory entries: `1` English collation, `2` code unit (immune to ICU
+   * changes). Stored `1` images are compared against images taken the same way.
    */
   version: 1 | 2;
   state: 'absent' | 'present';
@@ -134,20 +127,12 @@ export interface AcceptanceCheckResult {
   passed: boolean;
   detail: string;
   durationMs: number;
-  /**
-   * Why the check failed, when this layer knew. Omitted on success, so a reader that sees the field at all is
-   * looking at a failure it may be able to classify without reading `detail`.
-   */
+  /** Why the check failed, when known. Omitted on success. */
   failureReason?: CheckFailureReason;
   command?: CommandExecutionResult;
 }
 
-/**
- * A successful command that exits with the wrong code, a missing deliverable, content that does not match.
- *
- * One name for the whole class because the repair policy treats them identically: the definition was executable,
- * the assertion is false, and the code is what has to change.
- */
+/** The assertion class: the definition ran, the assertion is false, the code must change. */
 function assertion(message: string): VerificationAssertionError {
   return new VerificationAssertionError(message);
 }
@@ -243,10 +228,7 @@ async function readBoundedFile(root: string, input: string, maxBytes: number): P
 }
 
 /**
- * A protected path that cannot be imaged is a definition this verifier cannot execute, not an environment fault.
- *
- * These used to surface as plain errors, which classify as `environment-error`: the run stopped for review saying
- * the environment failed, when the fix is to fence a smaller path. Naming them a definition says where to look.
+ * A protected path that cannot be imaged is an unexecutable definition, not an environment fault.
  */
 function snapshotEntry(state: SnapshotState, label: string, type: string, content?: Buffer): void {
   state.entries++;
@@ -276,8 +258,7 @@ async function hashPath(
   version: PathSnapshot['version'],
 ): Promise<void> {
   const stat = await lstat(target);
-  // A link is imaged as what it says, never followed: following it could read outside the workspace, and refusing
-  // it made a fenced directory that merely contains one impossible to protect.
+  // Image links as what they say, never followed.
   if (stat.isSymbolicLink()) {
     snapshotEntry(state, label, 'link', Buffer.from(await readlink(target), 'utf8'));
     return;
@@ -307,10 +288,8 @@ async function hashPath(
 }
 
 /**
- * Capture a bounded content snapshot before work that must not alter a path.
- *
- * `version` is for comparing against a stored image: it is taken the way that image was, so a baseline recorded by
- * an earlier build is still compared like for like.
+ * Capture a bounded content snapshot before work that must not alter a path. `version` matches a
+ * stored image's ordering.
  */
 export async function capturePathSnapshot(
   root: string,
@@ -358,14 +337,9 @@ function captureChunk(
 }
 
 /**
- * The sandbox a check runs in, or the abort that arrived while it was being prepared.
- *
- * Preparing the native Windows sandbox journals and grants workspace access, which takes seconds (more for the
- * first command of a process). Stop used to wait for all of it, then for the cleanup that undid it: a check
- * stopped before its command even started still took over ten seconds to end. The wait is abandoned, and the
- * preparation itself now carries the same signal — a first authorization still walking the workspace is
- * cancelled rather than left running — while a plan that finishes anyway is cleaned up as soon as it exists, by
- * the provider that owns it, so no grant is left behind by a cancelled check.
+ * The sandbox a check runs in, or the abort that arrived while preparing it. The wait is abandoned
+ * on Stop, the preparation carries the same signal, and a plan that finishes anyway is cleaned up
+ * by its provider.
  */
 async function preparedUnlessAborted(
   preparing: Promise<SandboxPlan>,
@@ -418,10 +392,8 @@ async function runCommand(
   signal?.throwIfAborted();
   const plan = await preparedUnlessAborted(
     /**
-     * The signal travels with the preparation, not only with the wait for it.
-     *
-     * A first workspace authorization has no deadline of its own (see `ensureGrant`): without this, Stop would
-     * return while the helper kept propagating a grant over the whole workspace in the background.
+     * The signal travels with the preparation, so Stop cancels a first workspace authorization
+     * (`ensureGrant` has no deadline).
      */
     withSandboxPreparation({ signal }, () => prepareSandbox(root, cwd.target, spec.command, args)),
     signal,
@@ -476,8 +448,7 @@ async function runCommand(
       signal?.removeEventListener('abort', abort);
     };
     child.once('error', (error) => {
-      // Node emits close after a spawn error. Keep ownership until that boundary
-      // and await cleanup instead of leaving a prepared native resource behind.
+      // Node emits `close` after a spawn error; keep ownership until then and await cleanup.
       spawnError = error;
     });
     child.once('close', (exitCode, closeSignal) => {
@@ -522,11 +493,8 @@ function failed(
 }
 
 /**
- * Turn a thrown verification failure into the reason a repair decision reads.
- *
- * The residual class is `environment-error` on purpose. An error nobody classified is an error nobody
- * understands, and "we do not know why this failed" must not be spent as a repair round: the plan's rule is that
- * only failures whose semantics the checker understood are handed back to the model.
+ * Turn a thrown verification failure into a repair reason. Unclassified errors become
+ * `environment-error`, which is not repaired.
  */
 function classifyFailure(error: unknown): CheckFailureReason {
   if (error instanceof VerificationDefinitionError) return 'invalid-definition';
@@ -546,21 +514,14 @@ async function verifyOne(
   signal?.throwIfAborted();
   try {
     if (spec.kind === 'command') {
-      // The approval must carry the argument shape run_command actually declares
-      // ({command, cwd?, timeout_ms?}). It previously added an `args` key the tool does not have,
-      // and PermissionPolicy matches the whole arguments object with isDeepStrictEqual, so an
-      // exact-argument rule written against run_command could never match — including one meant to
-      // DENY the very command this check runs.
+      // Match `run_command`'s declared argument shape (`{command, cwd?, timeout_ms?}`) exactly,
+      // since permission rules compare the whole object.
       const commandLine = [spec.command, ...(spec.args ?? [])]
         .map((part) => (/[\s"]/u.test(part) ? JSON.stringify(part) : part))
         .join(' ');
       /**
-       * What the person reads, quoted so it cannot be mistaken for a shell line.
-       *
-       * The check runs without a shell, so an argument like `a;b` is one argument, but rendered bare it reads as two
-       * commands, and an empty argument vanished entirely. `commandLine` keeps its old spelling on purpose: it is
-       * what an exact-match permission rule — a deny included — was written against, and changing it would silently
-       * stop such a rule from matching.
+       * Display form, quoted so arguments are unambiguous. `commandLine` keeps its spelling because
+       * exact-match permission rules are written against it.
        */
       const displayLine = [spec.command, ...(spec.args ?? [])]
         .map((part) =>
@@ -599,14 +560,7 @@ async function verifyOne(
           };
       }
       const command = (await runCommand(root, spec, signal, maxOutputBytes))!;
-      /**
-       * The launcher's inability to start the image is not a statement about the work.
-       *
-       * It used to arrive as an ordinary exit code 1 — the same shape as a failing test suite — so the repair loop
-       * spent its rounds asking the model to fix code that had never executed, and only the exit code text hinted
-       * otherwise. The launcher now marks it, and this is where the mark becomes the classification the decision
-       * maker already understands: `environment-error` stops the loop instead of repairing.
-       */
+      /** The launcher could not start the image: `environment-error`, not a failing check. */
       const launchFailure = sandboxLaunchFailure(command.stderr, command.exitCode);
       if (launchFailure)
         return {
@@ -619,12 +573,8 @@ async function verifyOne(
           command,
         };
       /**
-       * A command that started but could not fork is an environment failure, not a failing suite.
-       *
-       * `npm test`, `vitest` and `jest` all spawn a child per file; the Windows restricted-token backend
-       * refuses that with `spawn EPERM`. Treating it as an assertion failure sends the repair loop after code
-       * that never executed. The signature is deliberately narrow and only applies to the Windows backends
-       * that carry the restricted token; a host command that merely reports EPERM keeps its own meaning.
+       * A command that could not fork (`spawn EPERM` under the Windows restricted-token backends)
+       * is an environment failure. Narrow on purpose.
        */
       const childSpawnBlocked =
         command.backend === 'windows' &&
@@ -644,8 +594,7 @@ async function verifyOne(
         };
       const expected = spec.expectedExitCode ?? 0;
       const passed = !command.timedOut && command.exitCode === expected;
-      // A command that ran out of time, or that a signal ended, is not a statement about the work: the check
-      // never reached its own verdict. Both stop the repair loop, which is why they are one reason.
+      // A timeout or signal means the check never reached a verdict; both stop the repair loop.
       const failureReason: CheckFailureReason | undefined = passed
         ? undefined
         : command.timedOut || (command.exitCode === null && command.signal !== null)
@@ -718,12 +667,8 @@ async function verifyOne(
         ? snapshot.state === 'absent'
         : sameSnapshot(snapshot, spec.baseline);
     /**
-     * A forbidden path that changed is not repairable work.
-     *
-     * The check exists to fence off something the run promised not to touch. Once it has been touched, "the model
-     * should try harder" is the wrong response and a retry would run the same commands against an already-dirty
-     * tree; a person has to look. `absent` is the model's own output appearing where it must not, which the model
-     * *can* undo, so that one stays an assertion.
+     * A changed forbidden path needs a person, not a repair. `absent` stays an assertion because
+     * the model can undo its own output.
      */
     const failureReason: CheckFailureReason | undefined = passed
       ? undefined

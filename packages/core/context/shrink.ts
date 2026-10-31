@@ -2,33 +2,19 @@ import type { Message, SpilledOutput } from '../../protocol/index.ts';
 import { codePointLength } from './text.ts';
 
 /**
- * Shortening old tool results the model can still see.
+ * Shortening old tool results the model can still see. Bounded results are still replayed every
+ * request, so later requests see a view of the complete on-disk transcript.
  *
- * A tool result is bounded when it is produced (24,000 characters), but a bounded result is replayed in every
- * later request for the rest of the session: twenty 20,000-character results are 400,000 characters of context
- * that the model paid for once and now carries forever. The transcript on disk is already the complete record,
- * so what the model sees can be a view of it.
- *
- * Two properties matter more than how much is saved:
- *
- * - Nothing is deleted. Only the *content* of a tool message is replaced, so the call/result pairing a provider
- *   validates stays intact and `isError` still says what happened. Dropping messages would be cheaper and would
- *   break requests outright.
- * - The model is told, in the result itself, that it is looking at a shortened view and where the rest is. A
- *   model that believes it read the whole output will reason from a false premise, which is worse than a long
- *   result.
+ * - Nothing is deleted: only a tool message's content is replaced, so call/result pairing and
+ *   `isError` stay intact.
+ * - The result says it is shortened and where the rest is.
  */
 export interface ShrinkPolicy {
   /** How many of the newest tool results stay whole. */
   keepRecent: number;
   /**
-   * Tokens a shortened result keeps, split between its head and its tail.
-   *
-   * Tokens rather than characters, because characters are not the same amount of context in every script: 1,200
-   * characters is roughly 400 tokens of English and roughly 1,200 tokens of Chinese, so a character budget
-   * silently spends three times as much on one conversation as on another. The budget is what the policy is
-   * about, so it is stated in the unit the window is measured in; `measure` is what turns that into a character
-   * cut for the text in hand.
+   * Tokens a shortened result keeps, split between head and tail. Tokens rather than characters so
+   * the budget costs the same in every script; `measure` converts it to a character cut.
    */
   tokens: number;
 }
@@ -44,27 +30,16 @@ export interface ShrinkOutcome {
   freedChars: number;
 }
 /**
- * Whether a result is worth shortening at all.
- *
- * A result has to cost more than twice the budget, or shortening it would trade information for almost no room.
- * This is a derived floor rather than its own setting: a second knob whose value only ever had one sensible
- * relationship to the first would be a way to configure the runtime into losing detail for nothing.
+ * Worth shortening only if the result costs more than twice the budget; a derived floor, not a
+ * setting.
  */
 function worthShortening(content: string, tokens: number, measure: MeasureText): boolean {
-  // The marker first: it is a substring scan, and measuring an already-shortened result again pays a whole count
-  // to learn nothing.
+  // Check the marker first; it is cheaper than measuring.
   return !content.includes(SHRINK_MARK) && measure(content) > tokens * 2;
 }
 /**
- * How many *characters* hold the token budget for this text.
- *
- * The density is the text's own — `measure` prices it, and dividing by its character count gives tokens per
- * character for exactly the content being cut, which is what makes one budget mean one cost in English, in
- * Chinese and in a mixture of both. The count is code points rather than UTF-16 units (`prune.ts` makes the same
- * distinction for the same reason): a budget expressed in characters has to be turned into characters before
- * anything is sliced, or an emoji counts as two and the cut can land inside it. The result is clamped to the
- * text: a budget larger than the result must not make the head and the tail overlap, and a very small budget
- * must not produce a slice that removes nothing.
+ * Characters that hold the token budget for this text, from its own density. Code points, not
+ * UTF-16 units (as in `prune.ts`), clamped to the text.
  */
 function charactersFor(content: string, tokens: number, measure: MeasureText): number {
   const characters = codePointLength(content);
@@ -72,15 +47,8 @@ function charactersFor(content: string, tokens: number, measure: MeasureText): n
   return Math.max(1, Math.min(characters, Math.floor(tokens / perCharacter)));
 }
 /**
- * The head/tail split, cut on character boundaries.
- *
- * `[...content]` iterates characters, so a slice of it can never split a surrogate pair — the failure this
- * replaces left a lone half at the start of the tail, which every encoder downstream then has to guess about. A
- * multi-character grapheme cluster can still be split, which is the documented limit of a character budget
- * rather than a bug in it (the same boundary `prune.ts` states).
- *
- * Both ends are kept because both ends are load-bearing: a log's context is at the top, its conclusion at the
- * bottom, and a diff's hunk headers at the top with its last hunks at the bottom.
+ * The head/tail split on code point boundaries, so surrogate pairs are never split (grapheme
+ * clusters may be). Both ends matter: context at the top, conclusion at the bottom.
  */
 function shortenedContent(
   content: string,
@@ -104,17 +72,9 @@ export function shrinkNotice(spill: SpilledOutput, removed: number, total: numbe
   );
 }
 /**
- * Shorten the old tool results in one pass.
- *
- * The newest results are protected twice over, and for different reasons. `keepRecent` protects a count of
- * results, which is what a caller can reason about — and when the conversation has fewer results than that,
- * all of them are protected, because "the newest six stay whole" cannot mean "the newest six, or whatever
- * exists, minus the ones we felt like cutting". The structural rule protects *everything after the last
- * assistant turn that called tools*: that is the batch the tools just produced, which the model has not read
- * once yet, and shortening it would hide the work the run just paid for.
- *
- * Everything eligible is shortened in one pass rather than a few per round: shortening an old message changes
- * the prefix every later request is cached against, so one batch pays one cache miss instead of one per round.
+ * Shorten old tool results in one pass. Protected: the newest `keepRecent` results (all of them if
+ * fewer exist), and everything after the last tool-calling assistant turn, which the model has not
+ * read yet. One pass means one cache miss.
  */
 export function shortenMessages(
   messages: readonly Message[],
@@ -146,8 +106,7 @@ export function shortenMessages(
     } catch {
       spilled = null;
     }
-    // No file, no shortening: a pointer to nowhere is worse than a long result, because the model would go
-    // looking for text that does not exist and report having read it.
+    // No spill file, no shortening: a pointer to nowhere is worse than a long result.
     if (!spilled) continue;
     const content = shortenedContent(
       message.content,
@@ -162,11 +121,8 @@ export function shortenMessages(
   return { messages: outcome, shortened, freedChars };
 }
 /**
- * Where the newest `keep` tool results begin.
- *
- * A count of *results*, not of trailing messages: tool results are interleaved with the assistant turns that
- * called them, so a rule that only counted a contiguous trailing run would protect one batch and treat every
- * older batch as fair game — which is the opposite of what "the newest six stay whole" promises.
+ * Where the newest `keep` tool results begin, counting results (not trailing messages) across
+ * interleaved batches.
  */
 export function recentStart(messages: readonly Message[], keep: number): number {
   if (keep < 1) return messages.length;

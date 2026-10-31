@@ -7,28 +7,17 @@ import type { SubAgentTask } from './providers.ts';
 import type { AdmittedTask, SubAgentResult } from './delegation.ts';
 
 /**
- * The delegation contract: the task and report schemas, their normalisation, the role and task prompts, and how
- * a child's result is rendered for its parent.
- *
- * Split out of `./delegation.ts`, which keeps the coordinator that schedules children. Everything here is a pure
- * function of its arguments or a constant, so it can be read, tested and changed without the scheduler.
+ * The delegation contract: task and report schemas, their normalisation, role and task prompts, and
+ * how a child's result is rendered for its parent. Pure functions and constants, separate from the
+ * scheduler in `./delegation.ts`.
  */
 /**
- * How large a caller-supplied answer schema may be, serialised.
- *
- * It is not only a limit on the request: the whole schema is the child's tool definition, so every field
- * description in it is paid for on every round the child runs — a schema the caller is careless with is a bill
- * the child pays.
+ * Maximum serialised size of a caller-supplied answer schema. It becomes the child's tool
+ * definition, paid for every round.
  */
 export const MAX_TASK_SCHEMA_CHARS = 4_000;
 export class SubAgentLimitError extends Error {}
-/**
- * The task shape, shared by both delegation tools.
- *
- * Shared rather than copied because the two tools accept exactly the same tasks: a fork differs in where the
- * child starts, not in what may be asked of it, and two copies of a schema is how one of them would quietly
- * stop accepting a field the other still does.
- */
+/** The task shape, shared by both delegation tools so they accept the same tasks. */
 export function tasksSchema(
   maxFanout: number,
   providers: readonly string[],
@@ -65,11 +54,7 @@ export function tasksSchema(
           description:
             'Optional model id for this sub-agent. Call list_subagent_models first: a host that cannot serve the id refuses the task with UNSUPPORTED_CAPABILITY instead of silently using its default.',
         },
-        /**
-         * Offered only when this host actually has a choice, which is why it is built here rather than declared
-         * as a constant field: a `provider` property on a host with one provider is an invitation to name
-         * something that cannot exist, and the model would spend a round learning that.
-         */
+        /** Offered only when the host has more than one provider. */
         ...(providers.length > 1
           ? {
               provider: {
@@ -130,20 +115,14 @@ export function normalizeTasks(
       ...(provider ? { provider } : {}),
       ...(persona ? { persona } : {}),
       ...(task.schema === undefined ? {} : { schema: answerSchema(task.schema) }),
-      // `explore` is the default role, and it is read-only: under `auto` that means it shares the delegator's
-      // directory, because a copy of the tree it cannot change would cost disk and buy no protection.
+      // `explore` is read-only, so under `auto` it shares the delegator's directory.
       workspaceMode: resolveWorkspaceKind(mode, role),
     };
   });
 }
 /**
- * The caller's answer shape, checked here rather than when the child runs.
- *
- * The contract this replaces is validated in two places already (Ajv at the tool boundary, `normalizeReport`
- * after it); a caller-supplied schema only gets the first, so the refusals that have to happen *before* a child
- * exists are the ones checked by hand: it must compile, it must describe an object, and it must be small. Getting
- * this wrong later would mean a child session created, a model paid, and the failure surfacing as a tool error
- * inside the child — the exact shape of failure the capability checks were moved early to avoid.
+ * Validate the caller's answer schema before any child exists: it must compile, describe an object
+ * and be small.
  */
 function answerSchema(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -171,10 +150,7 @@ function answerSchema(value: unknown): Record<string, unknown> {
   return schema;
 }
 
-/**
- * What a child is told about itself. The role matters to the model: an `explore` child that does not
- * know it is read-only spends rounds discovering that its write tools do not exist.
- */
+/** What a child is told about itself, so an `explore` child knows it is read-only. */
 export function subAgentRolePrompt(role: SubAgentRole): string {
   const shared =
     'You are a sub-agent delegated by a parent agent. Your transcript is private to you: the parent sees only the final report you write, so state findings explicitly instead of referring to "the file above". ' +
@@ -184,10 +160,8 @@ export function subAgentRolePrompt(role: SubAgentRole): string {
     : `${shared} You may change the workspace and run commands, but every write, command and external operation still asks the user for permission, and a refusal is final. Your file changes are recorded against the parent session, so they stay visible and undoable there. Prefer the smallest change that satisfies the objective.`;
 }
 /**
- * The report schema, kept tight on purpose: the same object is stored in the run result, sent to the
- * parent as a tool result and shown in the desktop card, so its worst case is a real cost. The bounds
- * are enforced by Ajv when the tool is called, and re-applied by `normalizeReport` so nothing that
- * reaches the parent depends on the validator being configured as expected.
+ * The report schema, kept tight because it is stored, sent to the parent and rendered in the card.
+ * Ajv enforces the bounds and `normalizeReport` re-applies them.
  */
 export const REPORT_SCHEMA: Record<string, unknown> = {
   type: 'object',
@@ -270,31 +244,17 @@ export function normalizeReport(value: Record<string, unknown>): SubAgentSummary
   };
 }
 /**
- * What a read-only sub-agent may use.
- *
- * The read-only filter already removes every mutating tool, so the entries this allowlist excludes *beyond*
- * that are excluded for a different reason: they manage resources the child cannot create and that belong to
- * its parent or its siblings. The job tools are the clearest case — a child's own registry carries the
- * literal `subagent` scope, shared by every resident child, so `job_list` / `job_output` would show a
- * sibling's command output and `job_kill` would stop it. `browser_close` closes the browser the parent may
- * have opened, `lsp_stop`/`lsp_servers` manage the parent's language server, and `discover_validations` only
- * exists to feed a validator the child cannot run. A read-only child must not be able to disturb — or read
- * past — the run it was delegated by.
- *
- * This is enforced as an allowlist on the child's registry rather than as a hint in the prompt, so a tool
- * that is not listed is not executable at all ("Unknown tool"), not merely hidden — which is why even tools
- * the read-only filter keeps have to be named here to be reachable. The current tool and schema sizes are
- * computed by `scripts/docs-facts.mjs` (`npm run docs:generate`), which the docs gate keeps honest.
- */
-/**
- * Tools no sub-agent may call, whatever its role and whoever built its registry.
- *
- * A child sees the delegator's memories and may read them, but what is worth remembering is the delegator's call:
- * a child's view is one slice of the task, and a memory it saved would be announced to every later session as if
- * it were settled. So a child reports what it learned, and the parent decides what to keep.
+ * Tools no sub-agent may call. A child reports what it learned; the parent decides what to
+ * remember.
  */
 export const CHILD_DENIED_TOOLS = ['save_memory', 'forget_memory', 'restore_memory'] as const;
 
+/**
+ * What a read-only sub-agent may use, enforced as an allowlist on the child's registry (unlisted tools are
+ * not executable). Beyond the read-only filter it excludes tools that manage the parent's or siblings'
+ * resources: job tools (resident children share the `subagent` scope), `browser_close`, the LSP managers and
+ * `discover_validations`. Sizes are reported by `scripts/docs-facts.mjs`.
+ */
 export const EXPLORE_TOOLS = [
   'read_file',
   'read_image',
@@ -320,23 +280,14 @@ export const EXPLORE_TOOLS = [
   'read_memory',
   // Asking the user is not an effect, so a read-only child may still ask one thing it cannot decide alone.
   'ask_user_question',
-  // The checklist touches no workspace: it records what the child is doing in the child's own session, which
-  // is exactly what a long investigation needs to stay legible.
+  // The checklist touches no workspace; it records progress in the child's own session.
   'todo_write',
-  // A program is not an effect either: the tools it reaches are the ones listed above, and the catalog it is
-  // handed is this child's own, so a research child that would otherwise spend eight rounds reading eight files
-  // can spend one — with every read still going through the child's registry.
+  // Programs reach only the tools listed here, through the child's own catalog.
   'run_code',
   // Loading a schema grants nothing: `load_tools` asks this child's own registry, so it only loads names listed here.
   'load_tools',
 ] as const;
-/**
- * A bounded, redacted one-line preview of tool arguments for the progress feed.
- *
- * The feed exists so the user can see what a child is doing without opening its transcript, and a bare
- * tool name does not achieve that ("read_file" of what?). It is truncated rather than streamed, and
- * redacted because the arguments of an external call can carry credentials.
- */
+/** A bounded, redacted one-line preview of tool arguments for the progress feed. */
 export function toolArgumentPreview(args: Record<string, unknown>, limit = 160): string {
   let text: string;
   try {
@@ -356,16 +307,8 @@ export function subAgentPrompt(task: SubAgentTask): string {
   ].join('\n\n');
 }
 /**
- * One block per task, in request order, so the parent can cite or distrust each one separately.
- *
- * Every block is bounded to an equal share rather than letting the first report consume the whole tool
- * output limit: with four sub-agents, a single long report would otherwise truncate the other three
- * out of existence, and the parent would never learn they ran.
- */
-/**
- * The structured report as the parent reads it. A finding without its evidence would be exactly the
- * prose problem this format exists to fix, so both are always rendered together, and anything the
- * child could not verify is labelled instead of quietly promoted to a finding.
+ * The structured report as the parent reads it: each finding with its evidence, and unverified
+ * items labelled.
  */
 export function renderFindings(report?: SubAgentSummaryReport): string[] {
   if (!report) return [];
@@ -378,20 +321,13 @@ export function renderFindings(report?: SubAgentSummaryReport): string[] {
   if (report.blockers?.length) lines.push(`blockers: ${report.blockers.join('; ')}`);
   return lines;
 }
-/**
- * The object a caller-defined schema asked for, as the parent reads it.
- *
- * Printed as JSON because that is the shape the caller wrote down: pretty-printed (it is read by a model and by
- * a person looking at the transcript) and bounded by the same share as prose, since a schema cannot promise a
- * small answer and the parent's context is what pays for it.
- */
+/** A caller-defined answer, pretty-printed as JSON and bounded by the same share as prose. */
 function renderAnswer(data: unknown, share: number): string {
   let text: string;
   try {
     text = JSON.stringify(data, null, 2) ?? String(data);
   } catch {
-    // A value that cannot be serialised should never reach here (it crossed a tool-call boundary to get in),
-    // and if one ever does, saying so beats rendering nothing.
+    // Should never happen (the value crossed a tool-call boundary), but say so if it does.
     text = '[the sub-agent’s answer could not be serialised]';
   }
   return text.length > share
@@ -399,36 +335,25 @@ function renderAnswer(data: unknown, share: number): string {
     : `result:\n${text}`;
 }
 /**
- * How much of all the reports one `collect`/`delegate_task` call may put into the parent's context.
- *
- * Exported so the property can be asserted rather than described: the bound is what keeps a child's prose from
- * becoming the parent's budget, and a test in `tests/subagents.test.ts` pins it (a child that answers with sixty
- * thousand characters reaches the parent cut, and says so).
- */
-/**
- * How much of a child's failure reaches the parent's tool result.
- *
- * The same 600 the durable `subagent.finished` record keeps (`agent.ts`, where the field is written), because the
- * two are read by different audiences for the same reason and a bound in one of them is not a bound: the log keeps
- * a summary of a failure, and the parent — which is a model spending its own context — must not be handed the
- * whole of an endpoint's error body. It is stated here rather than reached for from there so the two numbers can
- * be seen to be one decision.
+ * How much of a child's failure reaches the parent's tool result: the same 600 the durable
+ * `subagent.finished` record keeps.
  */
 export const SUBAGENT_ERROR_CHARS = 600;
 /** What a cut failure ends with, kept inside the bound so a later reader cannot cut the notice off. */
 const ERROR_TRUNCATION_MARK = '…[truncated]';
 /**
- * A child's failure as every reader gets it: at most `SUBAGENT_ERROR_CHARS`, and saying so when it was cut.
- *
- * The marker is inside the bound rather than appended after it because the durable record applies the same 600
- * again on its way to the log: a notice outside the limit would be trimmed off there, and the log would be the one
- * reader told least about what it was missing.
+ * A child's failure, at most `SUBAGENT_ERROR_CHARS`, with the truncation marker inside the bound so
+ * the log's own cut does not remove it.
  */
 export function boundedError(text: string | undefined): string | undefined {
   if (!text) return undefined;
   if (text.length <= SUBAGENT_ERROR_CHARS) return text;
   return `${text.slice(0, SUBAGENT_ERROR_CHARS - ERROR_TRUNCATION_MARK.length)}${ERROR_TRUNCATION_MARK}`;
 }
+/**
+ * How much of all reports one `collect`/`delegate_task` call may put into the parent's context. Pinned by
+ * `tests/subagents.test.ts`.
+ */
 export const SUBAGENT_REPORT_CHARS = 24_000;
 /** What a block keeps for its answer however much of its share the header took. */
 const MIN_ANSWER_CHARS = 400;
@@ -440,6 +365,10 @@ function fitted(text: string, budget: number): string {
   if (text.length <= budget) return text;
   return `${text.slice(0, Math.max(0, budget - TRUNCATED_REPORT.length - 1))}\n${TRUNCATED_REPORT}`;
 }
+/**
+ * One block per task, in request order, each bounded to an equal share so one long report cannot crowd out
+ * the others.
+ */
 export function report(
   results: readonly SubAgentResult[],
   tasks: readonly { objective: string }[],
@@ -452,8 +381,7 @@ export function report(
       `objective: ${objective}`,
       `session: ${summary.sessionId || 'none'} · rounds: ${summary.rounds} · tools: ${summary.toolCalls} · tokens: ${summary.usage.inputTokens} in / ${summary.usage.outputTokens} out`,
     ];
-    // Only a forked child has this, and only a trimmed one needs the second half: a parent that is not told
-    // the prefix was cut would assume the child saw everything it saw.
+    // Only a trimmed fork needs the second half, so the parent knows the prefix was cut.
     if (seed)
       lines.push(
         `inherited context: ${seed.messages} message(s), ${seed.chars} characters` +
@@ -463,17 +391,11 @@ export function report(
       );
     if (summary.error) lines.push(`error: ${summary.error}`);
     /**
-     * The share bounds the whole block, not only the prose.
-     *
-     * A structured report is bounded by its schema, but that bound is per child and generous (a summary and ten
-     * findings with evidence and paths), so rendering it outside the share let a few children put several times
-     * `SUBAGENT_REPORT_CHARS` into the parent's context. The header, the findings and the prose come out of one
-     * allowance, in that order: the findings are the part the parent can cite. A small floor keeps a long
-     * objective from leaving nothing at all for the answer.
+     * The share bounds the whole block (header, findings, prose, in that order), with a small floor
+     * for the answer.
      */
     let budget = Math.max(MIN_ANSWER_CHARS, share - lines.join('\n').length);
-    // A task that declared its own schema is answered in that shape, rendered as the object it is: the caller
-    // defined the fields precisely so it would not have to read them out of prose.
+    // A task with its own schema is answered as that object.
     if (data !== undefined) lines.push(renderAnswer(data, budget));
     else {
       const findings = renderFindings(summary.report).join('\n');

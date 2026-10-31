@@ -181,15 +181,8 @@ export function nextDailyRun(atMinutes: number, after: Date): Date {
   const candidate = new Date(after);
   candidate.setHours(hours, minutes, 0, 0);
   /**
-   * A local time the clocks skip over is skipped, not rolled into.
-   *
-   * `setHours` cannot represent 02:30 on a spring-forward day, so it lands on 03:30 — a wall time the operator
-   * never chose, and a rule that fires at a time it does not name. The explicit-zone path has always skipped such
-   * a day (`calendar.ts`'s `wallClockInstant` answers nothing for it and `nextCalendarRun` moves on), so the same
-   * rule behaved two ways depending on whether a timezone was filled in — and `daily` is exactly the rule the
-   * desktop leaves the timezone off for. Asking whether the result really carries the requested wall time is what
-   * tells the two apart. The fold is left alone: a repeated hour exists, and `setHours` takes its first
-   * occurrence, which is the policy the zone-aware path documents for it too.
+   * Skip, rather than roll into, a local time the clocks skip (02:30 on a spring-forward day),
+   * matching the explicit-zone path in `calendar.ts`. A repeated hour takes its first occurrence.
    */
   for (let days = 0; days < 370; days++) {
     const named = candidate.getHours() === hours && candidate.getMinutes() === minutes;
@@ -202,15 +195,8 @@ export function nextDailyRun(atMinutes: number, after: Date): Date {
 }
 
 /**
- * Most recent local occurrence of `atMinutes` at or before `now`.
- *
- * The mirror of `nextDailyRun`, and it follows the same rule about a wall time the clocks skip: a spring-forward
- * day has no 02:30, so the latest occurrence of an 02:30 rule during that day is the *previous* day's. Asking
- * `setHours` for it anyway answers 03:30 — a wall time the operator never chose — and that answer is what
- * `latestScheduledAt` hands to the scheduler as the occurrence a catch-up run stands in for. Walking back until
- * the candidate really carries the requested wall time is what keeps the label honest, and it is what the
- * zone-aware path (`latestCalendarRun`) has always done, so one rule cannot mean two things depending on whether
- * a timezone was filled in.
+ * Most recent local occurrence of `atMinutes` at or before `now`. Like `nextDailyRun`, a skipped
+ * wall time falls back to the previous day, matching `latestCalendarRun`.
  */
 export function latestDailyRun(atMinutes: number, now: Date): Date {
   const hours = Math.floor(atMinutes / 60),

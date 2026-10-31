@@ -31,13 +31,9 @@ export interface ToolContext {
     durationMs?: number;
   }) => void;
   /**
-   * Sandbox preparation this call is waiting on, forwarded to the run's live channel.
-   *
-   * The first Windows workspace authorization can walk an existing tree for minutes, and the command has not
-   * started while it does; this is how the run learns the wait began and ended. The registry makes it ambient
-   * around the body together with the run's signal, so stopping the run cancels a helper that has no deadline
-   * of its own, while one call's deadline does not throw away progress the next call would have to redo. A
-   * report cannot control execution.
+   * Sandbox preparation this call is waiting on, forwarded to the run's live channel. The registry
+   * runs it under the run's signal, so stopping the run cancels the helper, while one call's
+   * deadline does not discard progress the next call would redo. Cannot control execution.
    */
   onPreparation?: (event: ToolPreparationProgress) => void;
   signal: AbortSignal;
@@ -57,50 +53,33 @@ export interface ToolContext {
   ask?: Questioner;
   /** The call this context belongs to, so an interactive seam can be correlated with its result. */
   callId?: string;
-  /**
-   * The session the call belongs to.
-   *
-   * A policy that reports about a call needs to say *whose* call it was, and a policy that gates an effect
-   * needs to know whether the run may produce one at all — which is what `readOnly` says. Both are supplied
-   * by the run, because the registry genuinely does not know them.
-   */
+  /** The session the call belongs to. Supplied by the run, which the registry cannot know. */
   sessionId?: string;
   /**
-   * The run is a planning phase or a read-only sub-agent: nothing outside this process may be affected.
-   *
-   * Stated on the context rather than inferred from the tool allowlist because an extension hook still runs
-   * for a call it might have to refuse, and "there is no way to tell" is not an acceptable answer for one.
+   * The run is a planning phase or a read-only sub-agent: nothing outside this process may be
+   * affected. Stated explicitly so extension hooks can refuse calls.
    */
   readOnly?: boolean;
   /**
-   * The control plane for this session's long-running work.
-   *
-   * Supplied per run because the answer is scoped to a session: the registry that runs a child's tools must
-   * answer for that child's own jobs, not its parent's.
+   * This session's long-running work. Per run, so a child's registry answers for the child's jobs,
+   * not the parent's.
    */
   jobs?: import('./jobs.ts').JobControl;
   /** The session-owned checklist, supplied by the run that knows which session it belongs to. */
   todos?: TodoList;
   /**
-   * The files this session has presented as deliverables.
-   *
-   * Optional for the same reason `todos` is: an embedder that never wired a session has nowhere to record a
-   * declaration, and the tool then says so instead of pretending the file was handed over.
+   * The files this session has presented as deliverables. Optional like `todos`; without it the
+   * tool says the declaration cannot be recorded.
    */
   deliverables?: DeliverableLog;
   /**
-   * The session's goal, supplied by the run that owns the session.
-   *
-   * Absent for a run that may not hold one — a sub-agent, a planning run — which is how "only a root run
-   * states the objective" is enforced by the absence of a seam rather than by a check inside the tool.
+   * The session's goal. Absent for sub-agents and planning runs, which is how "only a root run
+   * states the objective" is enforced.
    */
   goals?: GoalLog;
   /**
-   * Writes output too large to return as a tool result, and says where it went.
-   *
-   * The result stage truncates at `MAX_TOOL_OUTPUT` characters; without somewhere to put the rest, a long
-   * command output was simply gone and the model could only see that it had been cut. The host supplies
-   * this: only it knows the session and its workspace. A host that does not supply it keeps truncating.
+   * Writes output too large for the result (over `MAX_TOOL_OUTPUT`) and says where it went.
+   * Supplied by the host; without it output is truncated.
    */
   spill?: (input: { tool: string; content: string }) => SpilledOutput | null;
   /** Task effects are marked durable after approval, immediately before tool execution. */
@@ -111,46 +90,26 @@ export interface ToolContext {
     applied(id: string): void;
   };
   /**
-   * The tools this run may call, for a tool that runs a program the model wrote (`run_code`).
-   *
-   * Supplied by the run rather than reached by the tool, for the same reason `jobs` is: the answer belongs to
-   * *this* run's registry, and a tool that went looking for it would find the parent's — which is how a
-   * read-only child would acquire an ability it was never granted. `specs` is the trimmed catalog the model was
-   * told about (a read-only run has no mutations in it), and `invoke` runs one call through the same registry,
-   * context and policy as a call the model made directly, so every inner call is validated, permission-checked,
-   * approved and journalled exactly like an outer one.
-   *
-   * Absent for an embedder that never built a run: the tool that needs it then says so instead of guessing.
+   * The tools this run may call, for `run_code`. Supplied by the run so a read-only child cannot
+   * reach the parent's tools. `specs` is the trimmed catalog the model saw; `invoke` runs a call
+   * through the same registry, policy and approvals as a direct call. Absent when no run was built.
    */
   catalog?: ToolCatalog;
   /**
-   * The session's durable record of the background commands it started.
-   *
-   * Supplied by the run for the same reason `todos` and `goals` are: the record belongs to a session, and the
-   * tool that starts a command knows its id but not whose log it belongs in. A command outlives the call that
-   * started it, so this is also the only seam through which its *settlement* can be recorded — the exit happens
-   * long after the tool result was returned, possibly after the run that started it has ended.
-   *
-   * Absent for an embedder with no session: commands then behave exactly as they did before the seam existed —
-   * they run, and nothing outside the process that started them learns how they ended.
+   * The session's durable record of background commands. The only seam for recording a command's
+   * settlement, which may happen after its run ends. Without it commands run but their outcome
+   * stays in-process.
    */
   commandJournal?: import('./jobs.ts').CommandJournal;
 }
 /**
- * The context one tool body runs under, with its cancellation narrowed to **this call**.
- *
- * `signal` is required here where it is optional-by-construction on {@link ToolContext}: this is the shape a
- * tool's `execute` reads, and a body that cannot name the signal it must stop on cannot be cooperative. The run's
- * own cancellation still reaches it — the registry links the two — so `aborted`, `reason` and `throwIfAborted()`
- * behave exactly as they always did.
+ * The context one tool body runs under, with cancellation narrowed to this call. `signal` is
+ * required here; the registry links it to the run's cancellation.
  */
 export type ToolScope = ToolContext & { signal: AbortSignal };
 /**
- * The tools a run may call programmatically, and the one way to call them.
- *
- * Deliberately narrow: a program gets no second tool path, no privileged shortcut and no way to reach a tool
- * the model itself could not see. That is what keeps "the program can only do what the run already allowed"
- * a property of the design rather than a promise in a comment.
+ * The tools a run may call programmatically, and the one way to call them: no second path, nothing
+ * the model itself could not call.
  */
 export interface ToolCatalog {
   /** The tools this run may call, after read-only and permission trimming (never folded). */
@@ -158,20 +117,14 @@ export interface ToolCatalog {
   /** Runs one call as if the model had made it, and resolves to that call's result. */
   invoke(call: ToolCall, signal?: AbortSignal): Promise<ToolResult>;
   /**
-   * Whether this call may overlap another inner call, by the same fail-closed rule the model's own batch uses.
-   *
-   * A program can start several calls at once with `Promise.all`, and a program is *not* a second dispatcher: the
-   * classification that decides whether one call may run beside another — a permission-bearing tool may not, and
-   * neither may one that declares no classifier — belongs to the registry, not to whoever is calling it. Without
-   * this the inner path was the one way to have two approvals pending at once and two effect-journal entries
-   * interleaved, which is exactly what the model's own batching refuses to do.
+   * Whether this call may overlap another inner call, by the same fail-closed rule the model's own
+   * batches use, so a program cannot have two approvals pending or interleave effect-journal
+   * entries.
    */
   mode(call: ToolCall): 'parallel' | 'exclusive';
   /**
-   * How many calls the run itself would overlap, so a program cannot fan out wider than the run it runs inside.
-   *
-   * `1` for a strict run: the same number `YUANTU_MAX_PARALLEL_TOOLS` sets for the model's batches, which is what
-   * makes "a program cannot buy more concurrency than the run allows" true rather than intended.
+   * How many calls the run itself would overlap (`1` when strict, as `YUANTU_MAX_PARALLEL_TOOLS`
+   * sets), so a program cannot fan out wider than its run.
    */
   parallelLimit: number;
 }
@@ -189,45 +142,21 @@ export interface ToolResult {
   /** A command ran, even if it failed. The registry preserves this across extension result processing. */
   commandExecuted?: true;
   /**
-   * The value this result carries, and the view that draws it, when the tool declares a contract.
-   *
-   * Absence means one thing only: this result has no structured payload. Either the tool declares no contract,
-   * or the call produced no value — it was refused before dispatch, its body threw, or a steer retired it — and
-   * a failure is prose, not a shape. A client's only correct answer to absence is the text rendering it already
-   * had; it must never try to parse `content` into a shape, because "this tool has no card" and "this card could
-   * not be built" would then be the same state and neither would be visible. A tool that declares a contract
-   * and answers successfully *without* a payload is a defect, and the test suite fails on it rather than leaving
-   * a client to degrade quietly.
-   *
-   * `content` is unchanged by any of this: the model still reads the text form, the structured value is for the
-   * carrier that has to draw it, and the two are allowed to differ in form (one is prose, the other is data).
+   * The structured value and its view, when the tool declares a contract. Absent means no
+   * structured payload (no contract, or the call failed); clients fall back to text and must never
+   * parse `content`. A contract tool succeeding without a payload is a defect the tests catch.
+   * `content` remains the model's text form.
    */
   output?: ToolResultOutput;
   /**
-   * Pictures the tool produced, for the model to look at.
-   *
-   * A path in `content` says where an image is; it does not let the model see it, so every task whose answer
-   * is *in* the picture — a screenshot to check a layout, a chart, a diagram, a rendered page — was
-   * impossible: the model could only reason about a filename. These are attached to the tool result itself
-   * rather than returned as paths for the same reason a file's contents are: a second round trip to fetch
-   * them is a step the model can skip, and a step it can forget.
-   *
-   * Bounded exactly like a user's attachments (`validateImages`: at most 4, 5MB each, 10MB total, real
-   * image signatures), because the run's context and the session log both have to carry them.
+   * Images the tool produced for the model to see, attached to the result so no second fetch is
+   * needed. Bounded like user attachments (`validateImages`).
    */
   images?: ImageAttachment[];
   /**
-   * Whether the tool itself cut the text it is handing over, before the registry's own budget applied.
-   *
-   * Some tools bound their output where it is *produced*, and deliberately above the registry's inline budget:
-   * `run_command` keeps two megabytes because the result stage may write what it captured somewhere the model can
-   * read back. That captured text is therefore already short of the command's real output, and the difference is
-   * invisible in the prose — the registry used to spill it under a notice promising "the full N bytes", which is a
-   * claim about a tail that no longer exists. The flag is how a tool says "this is everything I captured, and it is
-   * not everything there was", so the notice can say the same thing.
-   *
-   * It is *not* the registry's own truncation: that one is visible in the text (`TRUNCATION_MARKER`) and needs no
-   * field, because the text a model reads has to carry it either way.
+   * The tool itself cut the text before the registry's budget applied (e.g. `run_command` caps its
+   * capture), so the spill notice must not claim the full output. The registry's own truncation is
+   * marked in the text (`TRUNCATION_MARKER`) instead.
    */
   truncated?: boolean;
 }
@@ -239,11 +168,8 @@ export interface PreparedTool {
   execute(context: ToolContext): Promise<ToolResult>;
 }
 /**
- * The subsystem a tool belongs to. Internal: it is never sent to a model, which reads names and descriptions.
- *
- * One label per tool, so that "which tools are git", "which are memory" is answered in one place rather than by a
- * list kept next to each feature that needs it. `other` is what an embedder's or an MCP server's tool is when it
- * declares nothing.
+ * The subsystem a tool belongs to; never sent to the model. `other` is the default for embedder and
+ * MCP tools.
  */
 export type ToolCategory =
   | 'files'
@@ -277,37 +203,26 @@ export interface Tool extends ToolSpec {
   /** Internal capability used to restrict investigation handoff to workspace file edits. */
   effect?: 'workspace-file' | 'workspace-read';
   /**
-   * The tool's subsystem, when it declares one. Product tools are classified in `tools/tool-categories.ts`;
-   * this field is how a tool from elsewhere (an embedder, an MCP bridge) says the same about itself.
+   * The tool's subsystem. Product tools are classified in `tools/tool-categories.ts`; others
+   * declare it here.
    */
   category?: ToolCategory;
   /**
-   * Whether the tool is a *query*: it changes nothing, and the same call answers the same until something else
-   * changes. Repeating one unchanged is a model asking a question it already has the answer to, which is what the
-   * repeated-query guard counts. Polling a running job is the counterexample: it changes nothing, but it is
-   * supposed to answer differently as the job moves, so it is not a query.
+   * Whether the tool is a query: it changes nothing and answers the same until something else
+   * changes. The repeated-query guard counts these. Job polling is not a query.
    */
   query?: boolean;
   /**
-   * Whether *this* call may run while its siblings from the same assistant message are still running.
+   * Whether this call may run alongside its siblings from the same assistant message. Synchronous
+   * and pure: sees only the parsed arguments and returns `true` only when sure. Missing, throwing
+   * or any non-`true` result means exclusive.
    *
-   * Sibling calls are independent as far as the model is concerned — it asked for all of them at once — but
-   * they are not independent as far as the workspace is concerned, so overlapping them is the tool's promise
-   * to make, not the loop's guess. The classifier is synchronous and pure: it sees this call's parsed
-   * arguments and nothing else, performs no I/O, and returns `true` only when it is sure. A missing
-   * classifier, a throw, invalid arguments or any other return value all mean exclusive, so a tool that
-   * forgets to decide is serial rather than accidentally concurrent.
-   *
-   * `true` promises that the whole call may overlap another call that also returned `true`: it must not
-   * mutate the session, the workspace, or any other state this run owns outside this call. It cannot express
-   * "safe only when the sibling differs" — a call whose safety depends on a sibling stays exclusive.
+   * `true` promises the call mutates no session, workspace or run-owned state outside itself.
    */
   isConcurrencySafe?(args: Record<string, unknown>): boolean;
   /**
-   * Whether this `command` call asks for the network its session's policy denies.
-   *
-   * Pure, like `isConcurrencySafe`. A `true` runs this one call with unrestricted network, and its approval carries
-   * `escalation` so launch options cannot grant it: a person or an explicit policy rule has to.
+   * Whether this `command` call asks for network its session denies. Pure. `true` runs it with
+   * network and marks the approval as an `escalation`, which launch options cannot grant.
    */
   requestsNetwork?(args: Record<string, unknown>): boolean;
   prepare?(args: Record<string, unknown>, context: ToolContext): Promise<PreparedTool>;

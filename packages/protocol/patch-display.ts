@@ -1,13 +1,6 @@
 /**
- * Undo the ASCII-safe quoting a patch writer applies to file names.
- *
- * A unified diff is meant to survive a mailbox, so `diff` writes a non-ASCII name as a quoted string of octal
- * byte escapes: `+++ "\346\224\266\345\205\245\346\212\245\345\221\212.docx"`. That is correct for a patch file
- * and useless in an approval card — the person deciding whether to allow the write was shown exactly that line
- * for a file called `收入报告.docx`, and the actual name appeared nowhere on the card.
- *
- * The patch itself is not rewritten: it is what the tools produce and what `apply_patch` consumes. This is the
- * display pass, applied where a patch is painted for a person.
+ * Undo the octal-escape quoting `diff` applies to non-ASCII file names, for display only (e.g.
+ * approval cards). The patch itself is never rewritten.
  */
 
 /** `--- ` / `+++ ` header lines only; a content line that starts with `--` is not a file name. */

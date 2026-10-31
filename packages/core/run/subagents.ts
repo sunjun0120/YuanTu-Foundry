@@ -17,22 +17,12 @@ import type {
 } from '../subagents/residency.ts';
 
 /**
- * The built-in delegation path: how a child session comes into being and how one turn of it is run.
+ * The built-in delegation path: creating a child session and running one turn of it.
  *
- * The in-process provider is the closure that used to be the only way to delegate, now one named provider among
- * however many an embedder registers — so this module owns the *lifecycle* of a child: resolve its model before
- * anything durable is created, seed a forked transcript, record the assignment in the parent's log before the
- * session can be observed, then run one turn either through a residency (a child that outlives its turn) or
- * directly.
- *
- * Two rules are load-bearing here:
- *
- * - **The model is resolved before the session exists.** A host that cannot serve a requested model must refuse
- *   the task *without* leaving an empty child session behind for a crash-recovery pass to find and report.
- * - **The assignment is recorded before `started()`.** If the run dies mid-delegation the card is still
- *   recoverable from the parent's log, and a reader of that log never has to reach into the child's own session
- *   to know the child existed. The persona and model travel with the record, because a resume in another process
- *   has nothing else to rebuild them from.
+ * - The model is resolved before the session exists, so an unservable model leaves no empty child
+ *   session.
+ * - The assignment (with persona and model) is recorded in the parent's log before `started()`, so
+ *   the card is recoverable and a resume elsewhere can rebuild the child.
  */
 
 /** One turn of a child session, as the delegation block builds it: the same shape `Agent` builds in place. */
@@ -45,13 +35,7 @@ export type ChildTurns = (input: {
   childSignal?: AbortSignal;
   reportSchema?: Record<string, unknown>;
   persona?: string;
-  /**
-   * The directory this child was given, when the run isolates its children.
-   *
-   * Carried into the turn builder rather than resolved there, because it is already a durable decision by the time
-   * a turn exists: the manager allocated the directory and the store recorded which session owns it. A child whose
-   * turns resolve their own root would be a second answer to a question that already has one.
-   */
+  /** The directory this child was given, already a durable decision by the time a turn exists. */
   binding?: WorkspaceBinding;
 }) => {
   turn: (
@@ -74,10 +58,8 @@ export interface InProcessProviderOptions {
   residency?: SubAgentResidency | undefined;
   childTurns: ChildTurns;
   /**
-   * The workspace service, when this host isolates its children.
-   *
-   * The provider is where a binding becomes a fact about a session: it creates the child session, attaches it to
-   * the directory the coordinator allocated, and records both in the parent's log before anybody can observe either.
+   * The workspace service, when children are isolated. The provider attaches the child session to
+   * its allocated directory and records both before anyone can observe them.
    */
   workspaceManager?: WorkspaceManager | undefined;
   /** Resolves the provider for a model a task asked for, or `undefined` when this host cannot serve it. */
@@ -91,11 +73,8 @@ export interface InProcessProviderOptions {
 }
 
 /**
- * The registry a run delegates through: the built-in in-process provider plus whatever the host registered.
- *
- * Built per run because a provider's capabilities are a promise about *this* host — `agentOptions` is advertised
- * only when a model can actually be resolved, so a host that cannot serve a requested model refuses the task
- * instead of quietly running it on the default one.
+ * The registry a run delegates through: the built-in provider plus the host's. Per run because
+ * `agentOptions` is advertised only when a child model can actually be resolved.
  */
 export function createSubAgentProviders(
   options: InProcessProviderOptions,
@@ -110,9 +89,8 @@ export function createSubAgentProviders(
         'toolFilter',
         'persona',
         /**
-         * Always true here, and for the same reason `contextFork` is: this provider creates the child session
-         * itself, so the directory the child works in is a decision this process makes rather than a promise about
-         * somebody else's runtime. A provider that runs children elsewhere must *not* advertise this.
+         * Always true: this provider creates the child session, so the directory is its own
+         * decision.
          */
         'workspaceIsolation',
         // Always true here: this provider creates the child session itself, so seeding it from the
@@ -129,19 +107,11 @@ export function createSubAgentProviders(
           throw new Error(
             `This host cannot run a sub-agent on model "${model}"; the task was not started`,
           );
+        // A forked child starts from this conversation, copied before `started()` and before the
+        // child's prompt. `forkSeed` decides what fits and starts at a user turn so no orphaned
+        // tool result leads.
         /**
-         * A forked child starts from this conversation.
-         *
-         * The copy happens before `started()`, so a consumer that reacts to the child's session the moment
-         * it is announced never sees an empty one — and before the child's own prompt is appended, which
-         * is what keeps the inherited history *behind* the task instead of after it. `forkSeed` decides
-         * what fits and starts the copy at a user turn, so a trimmed transcript cannot begin with a tool
-         * result whose call was dropped.
-         */
-        /**
-         * A fork inherits the parent's *conversation*, not the runtime's own announcements. The skills
-         * catalogue is machine-written context for the parent's workspace; copying it into a child would
-         * spend the child's fork budget on text it does not need and count a machine note as a human turn.
+         * A fork inherits the conversation, not runtime announcements like the skills catalogue.
          */
         const seed = childOptions.contextFork
           ? forkSeed(
@@ -156,18 +126,9 @@ export function createSubAgentProviders(
           : undefined;
         const childSession = store.create(workspace, parentSessionId);
         /**
-         * The child is attached to its directory before anything can address it.
-         *
-         * `store.create` is what makes the session exist, and `attach` is what makes its directory usable; both
-         * happen before `started()` and before the assignment is recorded, so a reader that reacts to the child the
-         * moment it is announced can never find a session whose writes have nowhere to go. The store re-checks the
-         * parent/child relationship inside that transaction, which is the ownership half of it: a binding cannot be
-         * attached to a session that is not this delegator's own child.
-         *
-         * A *shared* binding is passed through rather than attached, and the distinction is real: the synthesized
-         * binding of a session that predates isolation has no `preparing` row to finish and no directory this
-         * service created, so asking the store to attach it would be asking it to complete an allocation that never
-         * happened. The child simply executes in the delegator's directory, which is what the binding already says.
+         * Attach the child to its directory before it is announced or recorded; the store re-checks
+         * the parent/child relationship in the same transaction. A shared binding is passed
+         * through, not attached: there is no allocation to complete.
          */
         const childBinding =
           binding && isDurableBinding(binding)
@@ -187,13 +148,8 @@ export function createSubAgentProviders(
             : '');
         if (seed) for (const message of seed.messages) store.append(childSession.id, message);
         /**
-         * The persona this child speaks with: the one its delegation named, and nothing else.
-         *
-         * Computed once and used for the child's options, the slot it occupies *and* the durable record, so the
-         * three cannot disagree. **Not** inherited from the parent: a persona is who is speaking, and a child
-         * that inherited its parent's would shadow the deployment's persona while having been given none of its
-         * own — which reads as "the persona feature silently does nothing" and is what an empty replacer does,
-         * because declaring a replacement is what suppresses the section, not contributing to it.
+         * The child's persona: only what its delegation named, never inherited. Used for the
+         * options, the prompt slot and the durable record alike.
          */
         const childPersona = childOptions.persona;
         // Record the child in the parent's durable log *before* anyone can observe the session.
@@ -212,15 +168,8 @@ export function createSubAgentProviders(
         const tag: SubAgentTag = { id: task.id, role: task.role, objective: task.objective };
         const child = childTurns({
           /**
-           * The task carries the model, and not only the resolved provider.
-           *
-           * Those are two different statements. `childProvider` above is *where the request goes*; the task's
-           * model is the identity the turn runs under — `createChildTurns` turns it into the child's
-           * `modelInfo`, which stamps every user turn the child writes and is what a reader of its session
-           * sees. The provider-facing `task` this closure was handed has no model by design (a task describes
-           * the work; the model is a request option), so without this the model was dropped here and the
-           * `modelInfo` override in `run/child-turns.ts` could never fire: a child delegated to another model
-           * reached the right endpoint while its own transcript still named its parent's.
+           * Carry the model on the task too: the provider is where the request goes, the model is
+           * the identity (`modelInfo`) the child's transcript records.
            */
           task: { ...task, ...(model ? { model } : {}) },
           childSession,

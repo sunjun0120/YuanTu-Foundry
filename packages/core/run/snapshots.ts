@@ -24,26 +24,18 @@ import {
 } from '../context/runtime.ts';
 
 /**
- * Context that changes while the session runs, said in the conversation rather than in the prompt.
- *
- * The workspace outline changes whenever a file does, saved memory whenever it is written, an approved task's
- * steps whenever one is checkpointed — so as prompt sections they were the most reliable ways to lose the cacheable
- * prefix. What is announced is a *snapshot*: not "tell the model about an event" but "make the conversation hold the
- * current state", announced only when the conversation does not already hold it, which keeps a round's prefix
- * byte-identical to the round before it. `./runtime-context.ts` owns the shape and the reading.
- *
- * What is compared is the window the model can *see*, the transcript after the last compaction: a snapshot the
- * summary swallowed is one the model no longer has, so the next round announces it again.
+ * Context that changes during the session (workspace outline, memory, task steps), announced in the
+ * conversation rather than the prompt so the cached prefix survives. A snapshot is announced only
+ * when the visible window (after the last compaction) does not already hold it.
+ * `./runtime-context.ts` owns the shape.
  */
 export interface RunAnnouncementsOptions {
   store: SessionStore;
   sessionId: string;
   workspace: string;
   /**
-   * Whose memories the run is reminded of: the session's project, not the directory it works in.
-   *
-   * A child delegated into a worktree works in a copy that does not carry `.yuantu`, so reading memory from where
-   * it works would show it none of the project's. Absent means the workspace, for a caller with no project.
+   * Whose memories the run is reminded of: the session's project, since a worktree has no
+   * `.yuantu`. Absent means the workspace.
    */
   memoryRoot?: string;
   emit: RunEmit;
@@ -159,12 +151,8 @@ export function createRunAnnouncements(options: RunAnnouncementsOptions): RunAnn
       skillsCatalogue(discoverSkills(workspace, { analysisService: builtinServiceConfigured() })),
     );
     /**
-     * The outline is refreshed at the start of a run, and within one only when the model can no longer see it.
-     *
-     * Every edit that adds or removes a symbol changes the outline, so re-announcing it per round appended a whole
-     * new copy after most write rounds of a long coding run — stale copies the model kept paying to read. Within a
-     * run the model made those changes itself and has `repo_map` for a fresh view; a compaction that swallowed the
-     * last copy still gets one again. Skipping it also skips the workspace scan.
+     * Refresh the outline at run start, and within a run only when the model can no longer see it
+     * (the model made the changes itself and has `repo_map`). Also skips the workspace scan.
      */
     if (round > 0 && lastRuntimeSnapshot(messages, 'workspace-outline') !== undefined) return;
     const outline = await repoMapContext(workspace);

@@ -3,13 +3,9 @@ import type { ToolRegistry } from '../../tools/registry.ts';
 import { addLoadedTools, GOAL_UPDATE, loadedTools } from '../../tools/deferred-tools.ts';
 
 /**
- * Which deferred tools this run's next request carries (`../tools/deferred-tools.ts`), or `undefined` when the
- * registry does not defer at all.
- *
- * Read back from the session rather than kept in memory, so a resumed run or a restarted Host sends the catalog
- * the model last saw: the transcript's loads and direct calls, plus `update_goal` while the session has an
- * unfinished goal — progress, pause and resume all go through it, and a session with no such goal does not pay
- * for its schema.
+ * Which deferred tools this run's next request carries (`../tools/deferred-tools.ts`), or
+ * `undefined` when nothing is deferred. Read from the session so resumed runs send what the model
+ * last saw: the transcript's loads and direct calls, plus `update_goal` while a goal is unfinished.
  */
 export function loadedDeferredTools(
   store: Pick<SessionStore, 'messages' | 'goal'>,
@@ -24,12 +20,8 @@ export function loadedDeferredTools(
 }
 
 /**
- * `loadedDeferredTools` for one run, reading only what the transcript gained since the last call.
- *
- * A run asks at every round; reading back from the session each time walked every tool call the session had
- * ever made. The answer is the same — the transcript part is remembered with how far it has been read, and the
- * goal is read fresh — and a transcript that came back shorter than what was read (a session rewritten under the
- * run) is read again from the start rather than trusted.
+ * `loadedDeferredTools` for one run, reading only the transcript added since the last call. A
+ * transcript that shrank is re-read from the start.
  */
 export class LoadedDeferredTools {
   private scanned = 0;

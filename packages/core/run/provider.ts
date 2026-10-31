@@ -11,26 +11,14 @@ import { addUsage, emptyRequestTiming } from '../../protocol/statistics.ts';
 import type { RunEmit } from './emit.ts';
 
 /**
- * The provider wrapper every model call of a run goes through, and the accounting it produces.
+ * The provider wrapper every model call of a run goes through, so answer calls and compaction
+ * summaries are measured alike.
  *
- * Two purposes share one wrapper because the numbers have to be comparable: the run's own answer calls and the
- * summary calls a compaction makes are measured by the same clock and recorded as the same kind of fact, which is
- * what lets a reader ask "how much of this run's wall time was the provider?" and get an answer that includes the
- * summaries rather than one that quietly omits them.
- *
- * What is recorded, and why each piece exists:
- *
- * - **One `provider.request.finished` per attempt**, carrying the request id, its purpose, its duration and
- *   whether it failed. Retries mean more than one of these per step, and the id is what pairs an attempt with
- *   the request that produced it.
- * - **`statistics.requestTiming`**, folded in place: request counts, summary counts, provider time, failed time,
- *   `length` finishes. It is mutated rather than rebuilt because it is the same object the emitted frames carry
- *   and the run's final statistics are built from.
- * - **A throttled `statistics.updated` frame while progress arrives** (at most once a second per phase). A
- *   provider that reports progress per token would otherwise make the frame rate the client sees depend on the
- *   model's verbosity; the first frame of a new phase is always sent, so a phase change is never swallowed.
- * - **A closing `statistics.updated` with `activity: null`**, so a client that draws "the model is thinking"
- *   stops drawing it even when the request failed.
+ * - One `provider.request.finished` per attempt, with request id, purpose, duration and failure.
+ * - `statistics.requestTiming`, mutated in place because emitted frames share the object.
+ * - A throttled `statistics.updated` while progress arrives (at most once a second per phase; a new
+ *   phase's first frame always goes out).
+ * - A closing `statistics.updated` with `activity: null`, even on failure.
  */
 export interface ProviderMeasurementOptions {
   provider: Provider;

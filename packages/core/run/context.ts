@@ -9,21 +9,9 @@ import { prepareContext } from '../context/context.ts';
 import type { RunEmit } from './emit.ts';
 
 /**
- * What one round hands to `prepareContext`, assembled in one place.
- *
- * The literal used to be written inside the round loop, ~125 lines of it, and it is pure assembly: every field is
- * either a port of this run, a number this round resolved, or a callback that writes into one of two accumulators
- * the loop owns. Nothing in it decides anything — the decision is `prepareContext`'s — which is why it can live
- * here as a function of what the round knows, and why the loop keeps the accumulators rather than this file
- * keeping a copy of them.
- *
- * The ports are read at call time, not captured at construction: `store`, `sessionId`, `signal` and the `emit`
- * seam have to be the ones in force for the round being built, and the policy numbers are the caller's resolved
- * limits rather than a second set of defaults.
- *
- * Three seams are built here rather than passed in, because they are policy plus those ports and nothing else:
- * the shortening target a spilled result is written to, its prune-only counterpart, and the two callbacks that
- * report a summary's life cycle and charge the accumulators the caller owns.
+ * What one round hands to `prepareContext`, assembled in one place. Pure assembly of this run's
+ * ports, the round's resolved numbers and callbacks into the loop's accumulators; `prepareContext`
+ * decides. Also builds the shortening and pruning seams and the summary life-cycle callbacks.
  */
 export interface BuildContextInputOptions {
   store: SessionStore;
@@ -62,11 +50,8 @@ export interface BuildContextInputOptions {
   toolResultPruneHeadChars: number;
   toolResultPruneTailChars: number;
   /**
-   * The two accumulators the callbacks built below write into, owned by the run loop.
-   *
-   * `usage` is what `RunResult.usage` ends up being, so the summary request's own tokens must be added to it as
-   * they are spent rather than reconciled afterwards; `committedSummaryUsage` is the session's aggregate, and only
-   * a compression that actually finished may charge it.
+   * Accumulators owned by the run loop: `usage` (becomes `RunResult.usage`, charged as tokens are
+   * spent) and `committedSummaryUsage` (charged only by a completed compression).
    */
   usage: Usage;
   committedSummaryUsage: SessionStatistics;
@@ -118,28 +103,18 @@ export function buildContextInput(
     autoCompactTokens,
     summaryTimeoutMs,
     onSummaryRetry,
-    // The summary request replays the prefix of the prompt it is given, so it asks for the key of *that*
-    // prompt: without a key the provider places no cache breakpoint at all, and the replay would be
-    // byte-identical and unread.
+    // The summary request needs the key of its own prompt, or the provider places no cache
+    // breakpoint.
     cacheKeyFor,
     calibration,
-    // The run this compaction is for: it is what the session's write lease is checked against, before the
-    // summary request and again at the write.
+    // Checked against the session's write lease before the summary request and at the write.
     runId,
     /**
-     * A compression this round cannot produce is reported, not fatal.
-     *
-     * The estimate that decided to compress is a character heuristic, and the endpoint is the authority on
-     * whether a request fits: a run that died here never reached `recoverFromOverflow`, which is the path
-     * that answers a *provider-confirmed* refusal by compressing harder. So the round is sent as it stands
-     * with the reason attached, and the provider's own verdict — accepted, or refused for size — is what
-     * the user finally sees.
+     * An unperformable compression is reported, not fatal: the round is sent as is, and a provider
+     * size refusal is handled by `recoverFromOverflow`.
      */
     compactionFailure: 'send',
-    // The model this round aims at, so a compaction records which one produced the summary. Absent when the
-    // embedder declared none, which the record then does not claim to know. The provider is recorded beside
-    // it for the same reason: a summary is a model answer, and the model name alone does not say which
-    // adapter it came back over.
+    // Recorded with the summary, alongside the protocol. Absent when the embedder declared none.
     ...(model === null ? {} : { model }),
     ...(protocol === undefined ? {} : { protocol }),
     ...contextSeams({
@@ -157,14 +132,8 @@ export function buildContextInput(
       usage.inputTokens += response.usage.inputTokens;
       usage.outputTokens += response.usage.outputTokens;
       /**
-       * The cache fields belong here too, or the result lies by omission.
-       *
-       * `statistics` gets them through `addUsage`, but this object is what `RunResult.usage` carries — on
-       * the wire, in `--json`, into the persisted run row, and into a reader like the CLI's usage line.
-       * Hand-summing two fields silently dropped what the provider reported: a fixture whose
-       * `cache_read_input_tokens` moved the input total to 200 arrived at the result with
-       * `cachedInputTokens` undefined. "Unreported" stays unreported (`?? 0` on the accumulator, the field
-       * only exists once something reported it) — the same rule `statistics.ts` keeps with `cacheKnown`.
+       * Include cache fields in `RunResult.usage` too; unreported stays unreported, as in
+       * `statistics.ts`.
        */
       if (response.usage.cachedInputTokens !== undefined)
         usage.cachedInputTokens = (usage.cachedInputTokens ?? 0) + response.usage.cachedInputTokens;
@@ -175,16 +144,8 @@ export function buildContextInput(
     onCompaction: (state, coveredMessages, summaryUsage, reason) => {
       if (state === 'finished' && summaryUsage) addUsage(committedSummaryUsage, summaryUsage);
       /**
-       * A failed compression is announced as one, and never as a completed one.
-       *
-       * The two states were the whole vocabulary, so a compression that could not be performed had to be
-       * reported as either "started" forever or "compacted" — and the run only reaches here after deciding
-       * what to do about it, which is why the news is live rather than durable: the session log records
-       * compressions that happened, and this one did not. `context.compacted` must not be emitted for it
-       * either: a reader that treats it as "the conversation was replaced" would be told a surface exists
-       * that the store does not have. `summaryUsage` is deliberately not committed: tokens a failed
-       * attempt spent are real, but they bought no summary, and `committedSummaryUsage` is what the
-       * session's aggregates claim was *stored*.
+       * A failed compression is announced as failed, never as `context.compacted`. Live only, and
+       * its usage is not committed: it bought no summary.
        */
       if (state === 'failed') {
         emit('context.compaction.failed', {
@@ -215,11 +176,8 @@ export interface ContextSeamOptions {
 }
 
 /**
- * The shortening and pruning seams, for every caller of `prepareContext` that stands in for a run.
- *
- * A run and a manual `/compact` used to write these by hand, each its own copy, and the copies drifted: the manual
- * path never gained `prune`, so a compaction a person asked for replayed whole oversized results that the run's
- * own rounds would have cut. One factory is the only way the two can stay the same request.
+ * The shortening and pruning seams for every caller of `prepareContext` (runs and manual
+ * `/compact`), from one factory so both send the same request.
  */
 export function contextSeams(
   options: ContextSeamOptions,
@@ -239,8 +197,7 @@ export function contextSeams(
     toolResultPruneTailChars,
   } = options;
   return {
-    // Shortening needs somewhere to put the full text. Without a spill seam nothing is shortened: a
-    // shortened result whose "read it here" path does not exist is worse than a long result.
+    // Shortening needs a spill target for the full text; without one nothing is shortened.
     shrink: {
       policy: { keepRecent: toolResultKeepRecent, tokens: toolResultShrinkTokens },
       spill: ({ message, content }) =>
@@ -251,11 +208,8 @@ export function contextSeams(
           content,
         }),
       /**
-       * The round's own price for text, which is what turns the policy's token budget into a character cut.
-       *
-       * A tool message rather than the raw string: that is the shape the estimator prices everywhere else,
-       * images and protocol margin included, and building it here means "shortened to a 400-token budget"
-       * and "this request is 4,000 tokens over" are answers from the same arithmetic.
+       * Price text as a tool message with the round's estimator, so budgets and overruns use the
+       * same arithmetic.
        */
       measure: (text) =>
         estimateMessageTokens(
@@ -265,10 +219,8 @@ export function contextSeams(
     },
     shrinkPercent: contextShrinkPercent,
     /**
-     * Dropping the middle of an oversized result needs nothing from the host, so this seam is mounted
-     * unconditionally: no spill target to write to, no calibrated measure to convert a budget with, and no
-     * workspace to reach. It is what keeps a session bounded in the cases the shortening seam declines —
-     * a read-only workspace, a full disk, or a spill directory that is gone.
+     * Pruning needs nothing from the host, so it is always mounted and covers cases shortening
+     * declines.
      */
     prune: {
       policy: {

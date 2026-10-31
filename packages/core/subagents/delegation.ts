@@ -67,10 +67,8 @@ export {
 } from './providers.ts';
 
 /**
- * Why a child was stopped by its own controller: the call that started it, or the run ending around it.
- *
- * One function because a child reaped before it started and one stopped mid-turn are told about the same cause,
- * and two copies of the sentence is how one of them came to name the run for a call's deadline.
+ * Why a child was stopped by its own controller: the call that started it, or the run ending around
+ * it.
  */
 function cancellationReason(scheduled: ScheduledSubAgent, runAborted: boolean): string {
   // A cancelled run cancels the tool call inside it too; the run is the cause then, not the call.
@@ -80,12 +78,9 @@ function cancellationReason(scheduled: ScheduledSubAgent, runAborted: boolean): 
 }
 
 /**
- * Sub-agent delegation.
- *
- * The parent loop stays serial; what this module adds is a bounded fan-out to child runs that each own
- * a private session, so a long or noisy side investigation costs the parent one bounded report instead
- * of a transcript. Everything here is deliberately capped: an agent that can spawn agents without
- * limits can spend an unbounded amount of the user's money on its own judgement.
+ * Sub-agent delegation: a bounded fan-out to child runs, each with a private session, so a side
+ * investigation costs the parent one report instead of a transcript. Everything is capped because
+ * agents spawning agents spend the user's money.
  */
 export class SubAgentCoordinator {
   private deps: SubAgentCoordinatorDeps;
@@ -100,15 +95,8 @@ export class SubAgentCoordinator {
     this.limiter = new Semaphore(deps.options.maxConcurrency);
   }
   /**
-   * The parent's read-only promise was lifted, so its children's is too.
-   *
-   * Called when a planning run has its plan approved mid-run: the parent may now write, and a run that may
-   * write may also delegate work that writes. Without this the guard below would keep refusing a `general`
-   * child for a restriction that no longer exists — a refusal that is merely mysterious, since the parent can
-   * see its own write tools back.
-   *
-   * One direction only, and deliberately: there is no path that makes a run read-only again, because an
-   * approval is not a thing a run can undo.
+   * The parent's read-only promise was lifted (plan approved mid-run), so children may write too.
+   * One way only: approvals cannot be undone.
    */
   promoteToWritable(): void {
     if (!this.deps.readOnly) return;
@@ -118,9 +106,8 @@ export class SubAgentCoordinator {
     return this.records.map((record) => ({ ...record }));
   }
   /**
-   * The tool the parent model calls. Delegation itself needs no approval: a sub-agent cannot exceed
-   * the parent's authority, because every write, command or external call it makes goes through the
-   * same approver as the parent's own tools.
+   * The tool the parent model calls. Needs no approval: every effect a child makes goes through the
+   * parent's approver.
    */
   tool(): Tool {
     return {
@@ -151,11 +138,8 @@ export class SubAgentCoordinator {
     };
   }
   /**
-   * The same delegation, for a child that continues *this* conversation instead of starting from nothing.
-   *
-   * It is a separate tool rather than a flag on `delegate_task`, for the reason the capability is separate
-   * too: a fork inherits the parent's history, which is a different promise from "a fresh child with a good
-   * brief", and a model that has to choose between two names has to notice which one it is making.
+   * The same delegation for a child that continues this conversation. A separate tool because
+   * inheriting the parent's history is a different promise from a fresh, briefed child.
    */
   forkTool(): Tool {
     return {
@@ -183,10 +167,8 @@ export class SubAgentCoordinator {
     };
   }
   /**
-   * What a task may be run on, as this host can actually serve it.
-   *
-   * Registered only when the host supplied the list. An empty list is not an option: the caller then has
-   * nothing to choose between, and saying so is the tool's job rather than its caller's.
+   * The models a task may run on, as this host serves them. Registered only when the host supplied
+   * the list.
    */
   modelsTool(): Tool {
     return {
@@ -229,27 +211,15 @@ export class SubAgentCoordinator {
     try {
       const tasks = this.admit(args.tasks, this.deps.options.maxFanout, fork);
       /**
-       * The batch's directories are decided once, here, before a single child is scheduled.
-       *
-       * This is the ordering the plan is explicit about, and it has two halves. The baseline is frozen *after*
-       * provider and capability validation, so a task that will be refused leaves no snapshot behind; and it is
-       * frozen *before* the tasks are scheduled, so the ones still queued behind the concurrency cap see exactly
-       * the bytes the first one saw. A child that started later would otherwise read a directory the early
-       * children had already changed.
+       * Freeze the batch's baseline once: after validation (so a refused task leaves no snapshot)
+       * and before scheduling (so queued children see the same bytes as the first).
        */
       const batch = await this.deps.workspaceForBatch?.({ tasks, signal });
       const scheduled = tasks.map((task, index) => this.schedule(task, index, tasks.length, batch));
       /**
-       * The call's own cancellation reaches the children it admitted, and stops reaching them when the call is
-       * over.
-       *
-       * Those are two halves of one promise. A call that was cut off — an explicit deadline on this tool, a
-       * cancelled request — must not leave behind work nobody will ever collect: the children's turns would keep
-       * running (and keep spending) after the only caller that was waiting for their answer had gone, and the
-       * model would have been told the call failed while the workspace kept changing. The second half is why
-       * this listener is removed in the `finally`: a `wait: false` call *returns* on purpose, and tying it to
-       * the children it handed off would make handing work off impossible — while the run's own end still stops
-       * them, because that is the signal the children were built with.
+       * The call's cancellation reaches the children it admitted, and only for the call's lifetime.
+       * A cut-off call must not leave uncollected work running; the listener is removed in
+       * `finally` so `wait: false` can hand work off, while the run's own end still stops children.
        */
       const stop = () => {
         for (const task of scheduled) {
@@ -262,18 +232,14 @@ export class SubAgentCoordinator {
       else signal.addEventListener('abort', stop, { once: true });
       try {
         if (args.wait === false) {
-          // Deliberately not awaited: returning here is the point of `wait: false`. The promises are
-          // tracked, so `settle()` still joins them when the run ends.
+          // Not awaited, which is the point of `wait: false`; `settle()` still joins them at run
+          // end.
           for (const task of scheduled) void this.run(task);
           return { isError: false, content: startedNotice(scheduled) };
         }
         /**
-         * A blocking call stops waiting when the user corrects the course.
-         *
-         * Without this the parent is parked inside one tool call for as long as the fan-out takes (up to
-         * the per-child timeout), so a correction could not be read until every child had finished —
-         * which is the whole reason `wait: false` exists. The children are *not* cancelled: the call
-         * degrades to "started, collect later", so a correction costs a round, not the work.
+         * A blocking call stops waiting when the user sends a correction. Children keep running and
+         * the call degrades to "started, collect later".
          */
         const settled = Promise.all(scheduled.map((task) => this.run(task)));
         const steer = this.deps.steerPending ? whenTrue(this.deps.steerPending) : undefined;
@@ -286,9 +252,8 @@ export class SubAgentCoordinator {
           void settled;
           return { isError: false, content: startedNotice(scheduled, true) };
         }
-        // A blocking call hands its reports over in the result, so they are collected by definition — and that
-        // has to be written down for the same reason the tool path does: the parent must not be reminded about
-        // a report it already read in this very tool result.
+        // Reports returned in the result count as collected, so the parent is not reminded about
+        // them.
         for (const task of scheduled) task.collected = true;
         this.deps.collected?.(scheduled.map((task) => task.id));
         return report(
@@ -307,10 +272,7 @@ export class SubAgentCoordinator {
       return failure(error);
     }
   }
-  /**
-   * The read-only and per-run guards, in one place because both entry points need them and a second
-   * copy is how one of them would end up weaker than the other.
-   */
+  /** The read-only and per-run guards, shared by both entry points. */
   private admit(value: unknown, maxFanout: number, fork: boolean): AdmittedTask[] {
     const tasks = normalizeTasks(value, maxFanout, this.deps.workspaceMode ?? 'shared').map(
       (task) => ({
@@ -327,42 +289,31 @@ export class SubAgentCoordinator {
           ? `This run may start ${remaining} more sub-agent task(s); reduce the number of tasks`
           : `This run already used its ${this.deps.options.maxPerRun} sub-agent tasks`,
       );
-    // Capability validation happens here, before anything is scheduled: a provider that cannot honour a
-    // requested option must refuse the call, not accept it and quietly ignore that part. Nothing has
-    // been created yet, so a refusal leaves no child session behind either.
+    // Validate capabilities before scheduling: a provider that cannot honour an option must refuse,
+    // and nothing has been created yet.
     for (const task of tasks)
       this.deps.providers.resolve(this.providerFor(task), this.requestOptions(task));
     return tasks;
   }
   /**
-   * Which provider runs this task: the one it named, or the run's own.
-   *
-   * One function because both resolution sites need the same answer, and a task that was validated against the
-   * default while being scheduled onto a named provider would be exactly the "checked one thing, ran another"
-   * gap the capability registry exists to close.
+   * The provider for this task: the one it named, or the run's own. Shared so validation and
+   * scheduling agree.
    */
   private providerFor(task: AdmittedTask): string {
     return task.provider ?? this.deps.provider;
   }
   /**
-   * What one task asks the provider for. Only what the task genuinely needs is requested: a capability
-   * assertion is a promise about the run, so asking for one nobody uses would refuse providers for no
-   * reason.
+   * What one task asks the provider for. Only genuinely needed capabilities are requested, so
+   * providers are not refused for no reason.
    */
   private requestOptions(task: AdmittedTask): SubAgentRequestOptions {
     const provider = this.deps.providers.resolve(this.providerFor(task), {});
     return {
       ...(task.model ? { agentOptions: { model: task.model } } : {}),
       /**
-       * The structured answer, asked for when it has to be **enforced**.
-       *
-       * Two cases, and the difference is the whole reason this is conditional. A task that declared its own
-       * `schema` is asking the provider to hold the child to it — a promise, so it is requested, and a provider
-       * that cannot keep it must refuse. A task with no schema gets the fixed report contract instead, which the
-       * *coordinator* can compose from whatever the child said: that is not something a provider has to be able to
-       * do, and requiring it would refuse every provider that runs its child somewhere else (a separate process
-       * has no `submit_report` tool to enforce a shape with). Requesting a capability nobody needs is the failure
-       * the comment above warns about, and it was refusing exactly the provider this seam exists to allow.
+       * Request structured output only when the task declared its own `schema`. The fixed report
+       * contract is composed by the coordinator, so out-of-process providers without
+       * `submit_report` still qualify.
        */
       ...(task.schema !== undefined
         ? { outputSchema: task.schema }
@@ -371,25 +322,12 @@ export class SubAgentCoordinator {
           : {}),
       maxDepth: this.deps.options.maxDepth,
       ...(task.role === 'explore' ? { toolFilter: [...EXPLORE_TOOLS] } : {}),
-      /**
-       * Isolation is asked for only when it is genuinely needed.
-       *
-       * A `shared` task requests nothing: sharing is what every provider already does, so asking for it would make
-       * a provider that runs its child out-of-process unusable for the work it can perfectly well do. `worktree` is
-       * a promise about where the writes land, and a provider that cannot keep it must refuse the task instead of
-       * accepting it and running in the delegator's directory.
-       */
+      /** Request isolation only for `worktree`; `shared` is what every provider already does. */
       ...(task.workspaceMode === 'worktree' ? { workspace: 'worktree' as const } : {}),
       /**
-       * The role prompt is **not** sent here, and that is a correction rather than an omission.
-       *
-       * `persona` used to be set to `subAgentRolePrompt(task.role)`, which asked every provider to take the child's
-       * role and put it in the persona slot. A `persona` shadows the deployment's, so a provider that honoured it
-       * literally would have replaced the harness's own identity paragraph — the one that carries how to use
-       * tools, when to verify a deliverable and what is excluded from them — with "you are a sub-agent". The role
-       * belongs where it already goes: `AgentOptions.rolePrompt`, which is additive and applied by the child
-       * composition. This option now means what its name says, and is only present when a caller actually has a
-       * persona to install.
+       * Only a caller-supplied persona goes here. The role prompt goes to
+       * `AgentOptions.rolePrompt`, which is additive; a persona would replace the harness's
+       * identity paragraph.
        */
       ...(task.persona ? { persona: task.persona } : {}),
       // Only asked for when it is wanted, so a provider that cannot fork is still usable for everything else.
@@ -397,13 +335,9 @@ export class SubAgentCoordinator {
     };
   }
   /**
-   * Takes on one task: identity, provider and record, before anyone waits for it. `wait: false` depends on
-   * this being separate from running.
-   *
-   * Admission is a count and nothing else: the per-run total is checked in `admit`, and the semaphore is what
-   * bounds how many of the admitted ones may run at once. A task is therefore never scheduled into a state
-   * where it can be admitted but cannot be paid for — which is what the old shared token pool could produce,
-   * and what made a late delegation report "N tokens remained" instead of an honest limit.
+   * Takes on one task (identity, provider, record) before anyone waits for it; `wait: false`
+   * depends on this being separate from running. The per-run total is checked in `admit`; the
+   * semaphore bounds concurrency.
    */
   private schedule(
     task: AdmittedTask,
@@ -413,8 +347,7 @@ export class SubAgentCoordinator {
   ): ScheduledSubAgent {
     const id = randomUUID();
     const options = this.requestOptions(task);
-    // Resolve (and re-assert) the provider here rather than at dispatch time: the scheduled task must
-    // know which provider accepted it, and `wait: false` hands the task to `run` with nobody watching.
+    // Resolve the provider at schedule time: with `wait: false` nobody watches the dispatch.
     const provider = this.deps.providers.resolve(this.providerFor(task), options);
     const summary: SubAgentSummary = {
       id,
@@ -460,15 +393,9 @@ export class SubAgentCoordinator {
     return scheduled;
   }
   /**
-   * Runs one child to completion and hands back its answer, for a caller that is not a tool call.
-   *
-   * `delegate_task` admits and schedules, `collect_subagents` reads back; a workflow script wants both halves
-   * fused for a single task, one call at a time. Routing it through the same admission, the same semaphore and
-   * the same execution is what keeps the caps real: a loop inside a script goes through the same per-run total as
-   * a loop of tool calls, so the workflow tool cannot become the way around them.
-   *
-   * The child is marked delivered as soon as its answer is handed over — the caller is looking at it, and a
-   * settlement notice would be announcing something that has already been read.
+   * Runs one child to completion for a non-tool caller (workflow scripts), through the same
+   * admission, semaphore and execution so the caps still apply. Marked delivered once its answer is
+   * handed over.
    */
   async runOne(
     task: { objective: string; context?: string; model?: string; schema?: Record<string, unknown> },
@@ -476,13 +403,7 @@ export class SubAgentCoordinator {
   ): Promise<SubAgentAnswer> {
     const [admitted] = this.admit([task], 1, false);
     const scheduled = this.schedule(admitted!, 0, 1);
-    /**
-     * The caller's cancellation propagates into the child.
-     *
-     * `execute` already ties the child to the parent run and to this task's own controller; what it cannot know
-     * is the *call* that asked, which for a workflow is one tool invocation with its own deadline. Without this,
-     * a workflow whose time ran out would leave its children running.
-     */
+    /** Propagate the caller's cancellation (e.g. a workflow tool's deadline) into the child. */
     const stop = () => {
       scheduled.callerStopped = true;
       scheduled.controller.abort(signal.reason);
@@ -500,8 +421,7 @@ export class SubAgentCoordinator {
       status: scheduled.summary.status,
       sessionId: scheduled.summary.sessionId,
       rounds: scheduled.summary.rounds,
-      // The child's own answer when it has no prose of its own: a structured child is told to end by calling
-      // `submit_report`, so its *text* is often empty and what it submitted is the whole answer.
+      // A structured child often ends with no prose; its submitted report is the answer.
       answer:
         scheduled.text.trim() ||
         (scheduled.data !== undefined
@@ -516,8 +436,8 @@ export class SubAgentCoordinator {
     if (scheduled.done) return Promise.resolve();
     const promise = this.limiter
       .run(() => this.execute(scheduled))
-      // Provider failures are outcomes; failures after the provider returned belong to settlement.
-      // Keep them on the task so both synchronous callers and background collectors can observe them.
+      // Provider failures are outcomes; later failures belong to settlement, kept on the task for
+      // every caller.
       .catch((error: unknown) => {
         scheduled.summary.status =
           scheduled.summary.status === 'cancelled' ? 'cancelled' : 'failed';
@@ -530,15 +450,9 @@ export class SubAgentCoordinator {
             .join('; '),
         );
       })
-      // Every path out of `execute` goes through here, including the reaping that returns before the body runs
-      // and the provider rejecting synchronously: a timer that survived its child would abort a controller
-      // nobody is listening to and hold the process open for the rest of the window.
-      //
-      // `active` goes back to false with the timer, and that half is not bookkeeping. It is what `progress`
-      // reads to decide whether there is a live run to re-arm, and leaving it true meant a *resident* child's
-      // later turn — which the coordinator does not run, and therefore never arms a watchdog for — kept arming
-      // timers for a task that had already settled, with nothing left that would ever clear them. The process
-      // stayed alive for the whole stall window, which is exactly the leak this `finally` exists to prevent.
+      // Every exit from `execute` clears the watchdog timer and resets `active`, which `progress`
+      // reads. Otherwise a resident child's later turns would keep arming timers that hold the
+      // process open.
       .finally(() => {
         this.disarmStallWatchdog(scheduled);
         scheduled.active = false;
@@ -549,21 +463,16 @@ export class SubAgentCoordinator {
     return promise.finally(() => this.inFlight.delete(promise));
   }
   /**
-   * Starts (or restarts) this child's stall watchdog.
-   *
-   * The timer is deliberately *not* unref'd. It is the only thing standing between a wedged child and a parent
-   * run that can never end, and a process that exits while a run is open has already lost that run's outcome —
-   * so keeping the loop alive for the remaining window is the honest behaviour. Zero disables it, which is a
-   * choice the operator makes knowing the bound is gone (see `SubAgentOptions.timeoutMs`).
+   * Starts or restarts this child's stall watchdog. Not unref'd: it is what keeps a wedged child
+   * from holding the parent run open forever. Zero disables it (`SubAgentOptions.timeoutMs`).
    */
   private armStallWatchdog(scheduled: ScheduledSubAgent): void {
     this.disarmStallWatchdog(scheduled);
     scheduled.active = true;
     if (this.deps.options.timeoutMs <= 0) return;
     scheduled.stallTimer = setTimeout(() => {
-      // Only the stall controller. Aborting `scheduled.controller` here would be wrong twice over: that signal is
-      // the run-end reaping, and a stalled child reported as "the run ended without collecting it" would name the
-      // wrong cause. Composing into `signal` is what actually stops the child.
+      // Abort only the stall controller; `scheduled.controller` means run-end reaping and would
+      // misreport the cause.
       scheduled.stallController.abort(new Error(stallMessage(this.deps.options.timeoutMs)));
     }, this.deps.options.timeoutMs);
   }
@@ -573,17 +482,9 @@ export class SubAgentCoordinator {
     scheduled.stallTimer = undefined;
   }
   /**
-   * The child showed progress, so its watchdog starts over.
-   *
-   * Called from the parent's own emit, which is the only seam both of a child's frame paths pass through: the
-   * durable announcements (`subagent.started`, `subagent.finished`) and the high-volume ones (`subagent.delta`,
-   * `subagent.tool`, `subagent.progress`) reach the parent differently. The id is accepted in either spelling this
-   * project already uses for a child — the delegation's task id (`subagent.delta`, `subagent.tool`) or the
-   * child's session id (`subagent.progress`) — because a reader that had to know which frame carries which name
-   * would be one edit away from arming nothing.
-   *
-   * The caller decides which frames are progress, not this method: a frame that says nothing about *work* must
-   * not re-arm anything, and the frame that reports a running clock is the one that matters most there.
+   * The child showed progress, so its watchdog restarts. Called from the parent's `emit`, the one
+   * seam both frame paths pass through. Accepts the task id or the child session id. The caller
+   * decides which frames count as progress.
    */
   progress(
     id: string,
@@ -606,9 +507,8 @@ export class SubAgentCoordinator {
   private async execute(scheduled: ScheduledSubAgent): Promise<void> {
     const { summary } = scheduled;
     /**
-     * The run can end while this task is still queued behind the cap. Reaping it here rather than after
-     * a spawn keeps the promise that a cancelled task leaves nothing behind — not even an empty child
-     * session that would show up in `reconcileChildRuns` on the next start.
+     * Reap a task cancelled while queued, so it leaves nothing behind, not even an empty child
+     * session.
      */
     if (scheduled.controller.signal.aborted || this.deps.signal.aborted) {
       this.cancelScheduled(scheduled);
@@ -616,13 +516,9 @@ export class SubAgentCoordinator {
     }
     this.armStallWatchdog(scheduled);
     /**
-     * The child stops on any of four signals: the parent run, the caller's own cancellation (a correction that
-     * gave up waiting, a cancelled tool call), this coordinator reaping it because the run ended without
-     * collecting it, or the stall watchdog after the child went silent.
-     *
-     * The first two are cooperative and were always here. The watchdog is the one that has to exist: `settle()`
-     * runs in the parent run's `finally` and joins every child, so a child that never settles would leave the
-     * parent's run open — session locked, no later turn able to start — which is the failure this bounds.
+     * The child stops on the parent run's signal, the caller's cancellation, run-end reaping, or
+     * the stall watchdog. The watchdog is required because `settle()` joins every child in the
+     * parent's `finally`.
      */
     const signal = AbortSignal.any([
       this.deps.signal,
@@ -633,11 +529,8 @@ export class SubAgentCoordinator {
     let outcome: SubAgentOutcome;
     try {
       /**
-       * The directory is allocated immediately before the child starts, from the baseline this call froze.
-       *
-       * Allocating here rather than at schedule time is what keeps a batch that is cancelled before dispatch from
-       * creating directories nothing will use; allocating it from the *batch* rather than from a fresh freeze is
-       * what keeps a child that waited for a slot on the same bytes as the ones that did not.
+       * Allocate the directory just before the child starts, from the batch baseline, so a
+       * cancelled batch creates none and late children see the same bytes.
        */
       if (scheduled.batch && !scheduled.binding && scheduled.admitted) {
         scheduled.binding = await scheduled.batch.forTask(scheduled.admitted);
@@ -685,21 +578,14 @@ export class SubAgentCoordinator {
     summary.toolCalls = outcome.toolCalls;
     summary.usage = outcome.usage;
     if (outcome.report) summary.report = outcome.report;
-    // A custom-schema answer is kept on the scheduled task and not on the summary: the card, the durable
-    // `subagent.finished` payload and the settlement notice all have one shape each, and making that shape
-    // polymorphic would push a caller's object into every reader of a child's outcome.
+    // Custom-schema answers stay on the scheduled task so the summary, `subagent.finished` and
+    // notices keep one shape.
     if (outcome.data !== undefined) scheduled.data = outcome.data;
-    // Kept on the scheduled task rather than the summary: how much of the parent's transcript the child
-    // inherited is a fact about this call, not part of the card the desktop renders.
+    // Transcript inheritance is a fact about this call, not part of the card.
     if (outcome.seeded) scheduled.seed = outcome.seeded;
     /**
-     * Bounded where it is *set*, so every reader sees the same failure.
-     *
-     * There are four: the rendered report the parent model reads, the `RunResult` this run reports (`--json`, the
-     * wire, the settlement), the durable `subagent.finished` record, and the desktop's card. Three of them copied
-     * whatever this field held — the record cut it to 600 and the others did not — so a child whose endpoint failed
-     * with a long error body handed a model, a client and a log three different amounts of the same sentence. The
-     * bound belongs here, at the one place the value is decided.
+     * Bound the failure text once here, so the model, `RunResult`, the durable record and the card
+     * agree.
      */
     const failure = scheduled.stallController.signal.aborted
       ? stallMessage(this.deps.options.timeoutMs)
@@ -718,8 +604,7 @@ export class SubAgentCoordinator {
       ...summary,
       index: scheduled.index,
       total: scheduled.total,
-      // Bounded, because the event stream is a progress feed: the untruncated report is in the tool
-      // result and in the child session, which is where a reader should go for the whole thing.
+      // The progress feed is bounded; the full report is in the tool result and the child session.
       text: outcome.text.slice(0, 4000),
     });
   }
@@ -762,12 +647,8 @@ export class SubAgentCoordinator {
             : defaultWaitMs;
           const results = await this.collectWaiting(wanted, waitMs, context.signal);
           /**
-           * Undelivered messages are read from the log, not from this run.
-           *
-           * A message that never reached its child is exactly the kind of thing that outlives the run that
-           * accepted it: the process can stop, the run row close, and the parent come back to a session where
-           * the only trace is in the log. Narrowing follows the same rule as the reports — an explicit `ids`
-           * list selects the children it names, in either spelling.
+           * Undelivered messages are read from the log, since they can outlive the run that
+           * accepted them. `ids` narrows by either id spelling.
            */
           const inbox = (this.deps.inbox?.() ?? []).filter((entry) =>
             isSelected(wanted, entry.childId, entry.childSessionId),
@@ -796,12 +677,8 @@ export class SubAgentCoordinator {
     };
   }
   /**
-   * Collects now, or waits first when there is something to wait for.
-   *
-   * The wait ends on the first of: every awaited task settled, the window elapsed, the call was
-   * cancelled, or the user sent a correction. Cancellation matters because a Stop must never be
-   * swallowed by a poll; the correction case matters because it is what lets the window be long enough
-   * to actually cover a slow child without holding the user's next instruction hostage.
+   * Collects now, or waits first. The wait ends when awaited tasks settle, the window elapses, the
+   * call is cancelled, or the user sends a correction.
    */
   private async collectWaiting(
     wanted: Set<string> | undefined,
@@ -814,8 +691,7 @@ export class SubAgentCoordinator {
       .filter((task) => !task.done && isSelected(wanted, task.id, task.summary.sessionId))
       .map((task) => task.promise);
     if (!pending.length) return immediate;
-    // The poll is disposed in the `finally` because any of the other three branches can win, and a poll left
-    // running would keep reading `steerPending` for the rest of the process's life.
+    // Dispose the poll in `finally`, since any branch can win.
     const steer = this.deps.steerPending ? whenTrue(this.deps.steerPending) : undefined;
     try {
       await Promise.race([
@@ -830,19 +706,13 @@ export class SubAgentCoordinator {
     return this.collect(wanted);
   }
   /**
-   * Reports that are finished and not yet delivered, plus the ids still running. Delivering marks them,
-   * so a poll loop cannot grow the parent's context by re-reading the same report.
+   * Finished, undelivered reports plus the ids still running. Delivery marks them so polling does
+   * not repeat reports.
    */
   private collect(wanted?: Set<string>): { reports: SubAgentResult[]; running: string[] } {
     const reports: SubAgentResult[] = [];
     const running: string[] = [];
-    /**
-     * Every outcome handed over here is recorded as delivered, whoever it came from.
-     *
-     * Delivery has to be durable as well as in-memory: the in-memory flag only stops *this* run from handing
-     * the same report over twice, while the reminder the parent gets on its next request is computed from the
-     * log — a report delivered here but not written down would be announced again as if it had never arrived.
-     */
+    /** Record delivery durably: the parent's reminder is computed from the log. */
     const delivered: string[] = [];
     for (const task of this.scheduled) {
       if (!isSelected(wanted, task.id, task.summary.sessionId)) continue;
@@ -859,12 +729,8 @@ export class SubAgentCoordinator {
       }
     }
     /**
-     * Then the children of earlier runs.
-     *
-     * `collect_subagents` is the documented way to read background results, and after a run boundary the
-     * coordinator that held them is gone: without this the same call answers "no outstanding sub-agents" while
-     * a finished child's report sits unread in its own session. These come from the parent's log, so this is
-     * the one place where the tool's answer is durable rather than in-memory.
+     * Then the children of earlier runs, read from the parent's log, so `collect_subagents` still
+     * finds reports after a run boundary.
      */
     for (const notice of this.deps.settlements?.() ?? []) {
       if (!isSelected(wanted, notice.id, notice.childSessionId)) continue;
@@ -876,17 +742,15 @@ export class SubAgentCoordinator {
           role: notice.role,
           objective: notice.objective,
           status: notice.status === 'interrupted' ? 'failed' : notice.status,
-          // Zeroed, not guessed: the durable settlement kept the report and the usage, but a round count and a
-          // call count are facts about the child's run, and inventing them here would put numbers in the
-          // parent's context that no record supports. The child's own run row carries the real ones.
+          // Zero, not guessed; the child's own run row has the real counts.
           rounds: 0,
           toolCalls: 0,
           usage: { inputTokens: 0, outputTokens: 0 },
           ...(notice.report ? { report: notice.report } : {}),
           ...(notice.reason ? { error: notice.reason } : {}),
         },
-        // The text is empty on purpose: the durable record keeps the report, and the child's own transcript
-        // is where its prose lives (`job_output` reads exactly that).
+        // Empty on purpose: the report is in the durable record, the prose in the child's
+        // transcript (`job_output`).
         text: '',
       });
       delivered.push(notice.id, notice.childSessionId);
@@ -895,12 +759,8 @@ export class SubAgentCoordinator {
     return { reports, running };
   }
   /**
-   * Ends this run's ownership of its sub-agents.
-   *
-   * A background child must not outlive the run: the run row is already finalised, so its usage would be
-   * unattributed, and the tool registry it borrowed is about to be closed. Cancelling first and awaiting
-   * afterwards is what makes that guarantee real rather than likely — the child's own signal handling
-   * still decides how quickly it stops.
+   * Ends this run's ownership of its sub-agents. A background child must not outlive the run, so
+   * cancel first and then await.
    */
   async settle(): Promise<void> {
     for (const task of this.scheduled) if (!task.done) task.controller.abort();
@@ -911,8 +771,7 @@ export class SubAgentCoordinator {
     const { summary } = scheduled;
     scheduled.done = true;
     scheduled.text = '';
-    // Nothing to release: a child that never ran cost nothing, and the slot it would have used was never
-    // taken (a cancelled task is reaped before the semaphore admits it).
+    // Nothing to release: a reaped task never took a slot.
     summary.status = 'cancelled';
     summary.error = cancellationReason(scheduled, this.deps.signal.aborted);
     scheduled.settleTask();

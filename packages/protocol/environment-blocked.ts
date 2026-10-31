@@ -1,11 +1,7 @@
 /**
- * A failure that belongs to the machine, not to the call.
- *
- * A command refused because the Windows sandbox is still leased by a process that died, or a PDF preview refused
- * because the runtime build lacks its automation script, fails the same way for *every* call until a person
- * changes the environment. Reported as an ordinary error, the model reads it as "this attempt failed" and tries
- * again — and a command retry costs the person another approval for an outcome already known. The prefix below
- * is what lets the run loop recognise the class by its reason, whatever the arguments of the call were.
+ * A failure that belongs to the machine, not the call (e.g. a stale Windows sandbox lease, a
+ * missing Office script): every call fails the same until a person fixes the environment. The
+ * prefix lets the run loop recognise the class and stop retrying.
  */
 export const ENVIRONMENT_BLOCKED_PREFIX = 'Environment blocked';
 

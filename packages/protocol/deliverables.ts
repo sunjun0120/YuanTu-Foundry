@@ -1,19 +1,8 @@
 /**
- * A file the model declares as a finished deliverable.
+ * A file the model declares as a finished deliverable ("which files should you look at").
  *
- * `verify_file_delivery` answers "is this file what it claims to be", and `present` answers a different
- * question: "which of the files I produced are the ones you should look at". Without the second, the answer
- * to a long piece of work is a paragraph of prose naming paths, and the person reading it has to go find
- * them — on a desktop that already knows how to open a workspace file.
- *
- * Two properties shape the shape:
- *
- * 1. **The declaration is a fact about the workspace, recorded once.** Bytes and digest are taken at the
- *    moment of the declaration, because "the file I handed you" is a claim about a specific revision of a
- *    path; a panel that re-hashed the file on every render would show a different file than the one the
- *    model presented, and would silently bless an edit made after the presentation.
- * 2. **One path has one entry.** Presenting the same path twice replaces the earlier declaration in place,
- *    so the list stays the set of deliverables rather than a history of mentions.
+ * 1. Bytes and digest are taken at declaration, so later edits are not silently presented.
+ * 2. One path has one entry; presenting it again replaces the earlier declaration in place.
  */
 export interface PresentedFile {
   /** Workspace-relative, with `/` separators, exactly as the model named it. */
@@ -47,12 +36,7 @@ export function isPresentedFile(value: unknown): value is PresentedFile {
       (Number.isSafeInteger(file.afterIndex) && (file.afterIndex as number) >= 0))
   );
 }
-/**
- * Fold one declaration onto the list a session has so far.
- *
- * Replacement is by path and in place: a reader watching the list must not see an entry jump to the bottom
- * because the model mentioned it again, and the bytes it now reports belong to the same line either way.
- */
+/** Fold one declaration onto the session's list, replacing by path in place. */
 export function presentFiles(
   state: readonly PresentedFile[],
   files: readonly PresentedFile[],

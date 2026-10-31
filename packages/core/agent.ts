@@ -63,25 +63,19 @@ import { captureTaskBaselines, type TaskBaselines } from './completion/task-acce
 export type { AgentOptions } from './agent-options.ts';
 
 /**
- * Serial number for the ids of messages handed to sub-agents.
- *
- * The id has to be unique across the *log*, not just this process: the inbox fold removes an entry by id, so a
- * repeat after a restart would silently cancel a message that was never delivered. The timestamp covers the
- * restart, the counter covers two messages in the same millisecond.
+ * Serial number for ids of messages handed to sub-agents. Ids must be unique across the log (the
+ * inbox fold removes by id): the timestamp covers restarts, the counter covers the same
+ * millisecond.
  */
 let messageCounter = 0;
 /**
- * Rounds a failed threshold compaction waits before it is tried again.
- *
- * A summary that failed (refused, timed out, answered with a tool call) usually fails the same way on the next
- * round, and each attempt costs a model request and up to the summary deadline. A request that stops fitting is
- * still compressed immediately; only the early, threshold-driven attempt waits.
+ * Rounds a failed threshold compaction waits before retrying, since a failed summary usually fails
+ * again. A request that no longer fits is still compressed immediately.
  */
 const COMPACTION_RETRY_ROUNDS = 3;
 /**
- * Rounds the act phase after the investigation cutoff allows without a project change: rounds of reads, and rounds
- * whose edit was refused (old text not found, malformed patch). Counted apart because the 2026-10-29 sample
- * ended runs mid-repair — a refused edit, the read for its exact text, a second refused edit — on the read count.
+ * Rounds the post-cutoff act phase allows without a project change (reads, or refused edits).
+ * Counted separately so a run mid-repair is not cut off on the read count.
  */
 const ACT_NO_CHANGE_ROUNDS = 3;
 const ACT_FAILED_EDIT_ROUNDS = 4;
@@ -94,11 +88,9 @@ const editTargets = (call: ToolCall): string[] => {
   return paths.filter((value): value is string => typeof value === 'string');
 };
 /**
- * The rounds of a compaction wait the session's previous run left unspent, `0` when there is none.
- *
- * Read from the log rather than kept in memory, because the next run is often a new one — a goal continuation, a
- * follow-up — and that is exactly the run that would otherwise retry the summary that just failed. Clamped to the
- * wait's own length, so a malformed record can defer at most what one failure would have.
+ * Compaction-wait rounds the session's previous run left unspent, or `0`. Read from the log so a
+ * new run (goal continuation, follow-up) does not immediately retry a failed summary. Clamped to
+ * one wait.
  */
 export function inheritedCompactionWait(
   store: Pick<SessionStore, 'newestPayload'>,
@@ -130,11 +122,8 @@ export class Agent {
   private inbox: RunInbox;
   private subagents?: ResolvedSubAgentOptions;
   /**
-   * What the most recent assembly of a system prompt was made of.
-   *
-   * Kept because the alternative to reading it is bisecting `composeSystem` and running model rounds to see what
-   * changed. It is per agent rather than per session: an agent serves one composition, and a child is a different
-   * agent with its own answer — which is exactly the comparison a caller wants.
+   * What the most recent system prompt assembly was made of, per agent (a child is a separate
+   * agent).
    */
   private lastPrompt: readonly PromptTrace[] = [];
   constructor(options: AgentOptions) {
@@ -143,9 +132,8 @@ export class Agent {
     // Resolved once, at construction, so an invalid limit fails before a run opens a row.
     this.subagents = resolveSubAgentOptions(options.subagents);
     /**
-     * The kernel owns the sub-agent producer; the command manager registered its own when the registry was
-     * built. A child is given no residency (see the child construction below), so it manages its own commands
-     * and nothing else — the same "control reaches one level down" rule the rest of delegation follows.
+     * The kernel owns the sub-agent producer; the command manager registered its own. A child gets
+     * no residency, so it manages only its own commands.
      */
     if (options.subagentResidency)
       options.tools.jobs.register(
@@ -170,11 +158,8 @@ export class Agent {
     this.inbox.clear(sessionId);
   }
   /**
-   * What the system prompt of this agent's last assembled round was made of.
-   *
-   * Every section the composition registers, in assembly order, with whether it contributed text, had none to
-   * contribute, or was replaced by another section. Reported rather than inferred: a prompt is a thing a person
-   * has to be able to audit, and "which persona was in effect for this run" is not answerable from a string.
+   * The sections of this agent's last system prompt, in order, each marked as contributed, empty or
+   * replaced, so the prompt can be audited.
    */
   promptSections(): readonly PromptTrace[] {
     return this.lastPrompt;
@@ -183,8 +168,7 @@ export class Agent {
     const admittedAt = input.admittedAt ?? Date.now();
     const { store, provider, tools } = this.options;
     input = { ...input, ...validateUserInput(input) };
-    // One owner for the defaults (see `packages/protocol/settings.ts`): the kernel, the Host and the CLI help
-    // text all read the same numbers instead of each keeping its own copy of them.
+    // Defaults come from `packages/protocol/settings.ts`, shared with the Host and CLI help.
     const limits = resolveRunLimits(this.options);
     const {
       maxContextTokens,
@@ -211,20 +195,15 @@ export class Agent {
       throw new Error('当前连接未启用图片输入；请切换视觉模型或新建纯文本会话。');
     const signal = input.signal ?? new AbortController().signal;
     /**
-     * A read-only run hides every tool that declares a permission and refuses any approval that still
-     * arrives. Plan mode and a read-only sub-agent need the same guarantee, so they share one flag
-     * rather than two paths that could drift apart.
+     * A read-only run hides every permissioned tool and refuses any approval that arrives; plan
+     * mode and read-only sub-agents share this flag.
      *
-     * `let` rather than `const` for exactly one transition: a planning run whose plan the user approves
-     * mid-run with `exit_plan_mode`. That tool is registered only when a human can answer, and it flips this
-     * flag at the next step boundary — never during the round that asked, because that round was already sent
-     * a schema of the read-only tools and knows only what it was told. The approver reads this flag on every
-     * call, so lifting it here is what makes a write possible at all; each write still asks for its own
-     * approval.
+     * `let` for one transition: a plan approved mid-run via `exit_plan_mode` lifts it at the next
+     * step boundary, never during the round that asked. Each write still asks for approval.
      */
     let readOnly = input.planPhase === true || input.readOnly === true;
-    // Both are re-read at every round boundary (see the loop below): a preset or sandbox switched mid-run has to
-    // reach the prompt, the tool schema and the calls that follow, not just the next run.
+    // Re-read at every round boundary so a preset or sandbox switched mid-run reaches the prompt,
+    // schema and later calls.
     const policy = this.options.permissionPolicy?.();
     const executionPolicy = this.options.executionPolicy?.();
     input.prompt = await submitPrompt({
@@ -237,18 +216,15 @@ export class Agent {
     });
     const { task, previousAttempt } = loadRunTask(store, input);
     /**
-     * The project a session belongs to, and the directory it works in — two facts, deliberately separate.
-     *
-     * `project` is what `Session.workspace` has always meant: the logical project the session lives in, which
-     * ownership checks, session listing, search and the scheduler all read. `workspace` is where this run's files,
-     * instructions, skills, outline and spill actually go, which for a delegated child is its own worktree.
+     * `project` is the session's logical project (`Session.workspace`), used for ownership,
+     * listing, search and scheduling. `workspace` is where this run's files actually go; for a
+     * delegated child, its own worktree.
      */
     const project = store.get(input.sessionId).workspace;
     const workspace = this.options.workspaceRoots?.(input.sessionId).executionRoot ?? project;
     const journalSessionId = input.journalSessionId ?? input.sessionId;
     /**
-     * A sub-agent's file changes are journaled against the parent session, so the tag has to travel
-     * with the change: otherwise the session change list shows work that looks like the parent's own.
+     * A sub-agent's changes are journaled against the parent session, so tag them with the child.
      */
     const tagChange = (change: FileChange): FileChange =>
       this.options.subagentTag && !change.subagent
@@ -266,21 +242,11 @@ export class Agent {
         )
       : {};
     const runId = store.beginRun(input.sessionId);
+    // From here on the run row is open and the lease held; the outer guard closes both if building
+    // the run's seams throws, so the session is not left locked.
     /**
-     * Everything from here on runs with the run row open and the session's lease held.
-     *
-     * The round loop's own `try`/`finally` is what normally closes both, but it starts only once the run's
-     * seams exist, and building them can throw (a task deleted under the run, a store write that fails, a
-     * calibration record that does not parse). A throw in that window used to leave `active_run` naming a live
-     * process — the lease never expires on time, so the session refused every later run until the Host restarted.
-     * The outer guard closes whatever is still open; on the ordinary path the run is already finished and it
-     * does nothing.
-     */
-    /**
-     * Undo for the run-scoped tools whose closures name this run's goal standing or plan record.
-     *
-     * A registry can outlive a run (a goal's continuation rounds, an embedded host), and a planning tool left behind
-     * would offer the next run an `exit_plan_mode` bound to a plan that is no longer being made.
+     * Disposers for run-scoped tools bound to this run's goal or plan, so a registry that outlives
+     * the run does not offer stale tools.
      */
     const runScoped: (() => void)[] = [];
     try {
@@ -292,15 +258,9 @@ export class Agent {
           ? { sessionId: input.sessionId, taskId: task.id, attemptId: taskAttempt.id }
           : this.options.taskEffectScope;
       /**
-       * Session retrieval, installed for every run because every run has a store.
-       *
-       * These are the only tools that read *other* conversations, so they are worth being explicit about: the store
-       * has indexed message text since v10 and the session list has used it, but the model could not. They carry no
-       * permission — reading history is not an effect — which also means they survive a read-only or planning run,
-       * and that is the run that most needs to look something up.
-       *
-       * The run's own workspace and session id are what scope them: a search never leaves this workspace, and a
-       * read refuses a session from another one by name.
+       * Session retrieval tools, installed for every run. They read other conversations in this
+       * workspace only, carry no permission (reading history is not an effect), and so stay
+       * available in read-only and planning runs.
        */
       for (const tool of sessionQueryTools({
         store,
@@ -309,12 +269,9 @@ export class Agent {
       }))
         tools.replace(tool);
       /**
-       * Whether this run is the session's own front door, or one of the runs that serve something narrower.
-       *
-       * The goal tools are registered only here, and only for this: a planning run is deciding what to do rather
-       * than pursuing the session's objective, a read-only run may not act on one, and a delegated child must not
-       * be able to rewrite the objective it was delegated from. A child additionally never sees them by
-       * inheritance — they are in `RUN_SCOPED_TOOLS`.
+       * Whether this run serves the session's own objective. Only such runs get the goal tools:
+       * planning runs, read-only runs and delegated children must not rewrite the objective
+       * (children also never inherit them, via `RUN_SCOPED_TOOLS`).
        */
       const ownWork =
         (this.options.subagentDepth ?? 0) === 0 &&
@@ -329,10 +286,8 @@ export class Agent {
       /** Whether this run already reminded a schema-bound child that its answer has to be submitted. */
       let reportReminded = false;
       /**
-       * The two seams a person is on the other end of, declared before the planning tools can capture `askTool`.
-       *
-       * They are assigned below, once the emitter and the queue exist — both adapters write their own frames and
-       * read the queue's steering signal — and nothing reads them before then.
+       * The two human-facing seams, declared before the planning tools capture `askTool` and
+       * assigned once the emitter and queue exist.
        */
       let approveTool!: Approver;
       let askTool!: Questioner;
@@ -368,12 +323,8 @@ export class Agent {
       /** Every event type this run emitted, which is what the protocol invariant checks at the end. */
       const emittedTypes = new Set<string>();
       /**
-       * One emitter for the run: identity, timing, activity and the child-stall signal, in one place.
-       *
-       * The counters it shares with this loop are grouped here so the module that owns the emission rule can
-       * read and write *this run's* numbers without owning them: `toolCalls` is opened and closed by the emitter's
-       * tool frames while the loop settles whatever was still open when the run ended, `statistics` is folded by
-       * both, and the child token map is the stall watchdog's memory (see `RunEmission.childOutputTokens`).
+       * One emitter for the run: identity, timing, activity and the child-stall signal. The
+       * counters it shares with this loop are grouped here (see `RunEmission.childOutputTokens`).
        */
       const emission: RunEmission = {
         statistics,
@@ -404,8 +355,7 @@ export class Agent {
         workspace,
         signal,
         baselines,
-        // Read when the round runs rather than when this factory is called: the interaction adapters below assign
-        // `approveTool`, and the round is reached long after they have.
+        // Read at call time: `approveTool` is assigned by the interaction adapters below.
         approve: (approval, approvalSignal) => approveTool(approval, approvalSignal),
         request: {
           completion: input.completion,
@@ -436,11 +386,8 @@ export class Agent {
       automaticVerification.register();
       await completion.captureBaselines();
       /**
-       * The wrapper every model call of this run goes through, and the accounting it produces.
-       *
-       * One factory for both purposes: an answer call and a compaction summary are measured by the same clock
-       * and recorded as the same kind of fact, so the run's provider time includes the summaries rather than
-       * quietly omitting them (see `run/provider.ts`). A text-only connection is never sent a tool's pictures
+       * The wrapper every model call of this run goes through, so answers and compaction summaries
+       * are measured alike (`run/provider.ts`). Text-only connections never receive tool images
        * (`text-only-provider.ts`).
        */
       const measureProvider = createProviderMeasurement({
@@ -467,9 +414,8 @@ export class Agent {
       const queue = new RunQueue();
       this.inbox.open(input.sessionId, { runId, queue, emit });
       /**
-       * The approval and question adapters, which own the *record* of each request and each answer rather than
-       * the decision itself (see `run/interaction.ts`). `readOnly` is passed as a getter because the run can
-       * tighten it mid-flight, and the adapter must read the value in force when a call arrives.
+       * The approval and question adapters record each request and answer (`run/interaction.ts`).
+       * `readOnly` is a getter because it can change mid-run.
        */
       ({
         approve: approveTool,
@@ -485,12 +431,9 @@ export class Agent {
         question: this.options.question,
       }));
       /**
-       * Whether this turn carries the user's own input, which is what the goal tools read before letting the
-       * model change who is in charge of the goal.
-       *
-       * It starts as whatever the caller declared and can only ever move one way: a round the runtime started
-       * stays the user's turn the moment the user types into it (`consume` below), because the person the goal
-       * belongs to has spoken in this very round.
+       * Whether this turn carries the user's own input, read by the goal tools. It can only become
+       * true: once the user types into a runtime-started round (`consume` below), the turn is
+       * theirs.
        */
       let humanTurn = input.authority !== 'automatic';
       // The file-tool advice is said once per run (`tool-advice.ts`).
@@ -510,19 +453,16 @@ export class Agent {
           !store.goal(input.sessionId),
       });
       /**
-       * After the investigation cutoff: `act` offers file editors and targeted reads, `edit` is one last round of
-       * editors alone once those rounds are spent, and `conclude` offers nothing.
+       * After the investigation cutoff: `act` offers editors and targeted reads, `edit` is one last
+       * editors-only round, and `conclude` offers nothing.
        */
       const queryState: { phase: 'none' | 'act' | 'edit' | 'conclude' } = { phase: 'none' };
       let noChangeActRounds = 0;
       // A refused edit is the model trying to make the change, not widening the search, so it has its own count.
       let failedEditActRounds = 0;
       /**
-       * Whether the model has tried to edit the project and nothing has landed since.
-       *
-       * A run the cutoff ends after that is a change left unmade, and reporting it `completed` hid it: the
-       * 2026-10-29 sample scored two empty patches whose runs both said completed. A run that only read may have
-       * been a question, so reads alone never set this.
+       * Whether an edit was attempted and nothing has landed since. If the cutoff ends the run in
+       * this state, it must not report `completed`. Reads alone never set this.
        */
       let editRefusedUnchanged = false;
       let releaseAct: (() => void) | undefined;
@@ -555,13 +495,7 @@ export class Agent {
         progressGuard.reset();
         progressGuard.resetOscillation();
         resetQueryPhase();
-        /**
-         * A message the user typed is the user's own input, whichever run is carrying it.
-         *
-         * This is what makes a correction fold-able into a round the runtime started: the round began on the
-         * goal's behalf, and the person who owns the goal has since said something in it — so from here on the
-         * turn may change the goal's standing, exactly as a request they typed would.
-         */
+        /** A message the user typed makes this the user's turn, even in a runtime-started round. */
         humanTurn = true;
         const message = userMessage({
           workspace,
@@ -570,18 +504,16 @@ export class Agent {
           images: item.images,
           modelInfo: this.options.modelInfo,
         });
-        // The message and the record that it came from the inbox are one write: a crash between them would
-        // either lose a message the model was shown or leave an inbox entry for one already in the transcript.
+        // The message and its inbox consumption are one write, so a crash cannot lose or duplicate
+        // it.
         store.consumeQueuedInput(input.sessionId, item.id, message);
         emit('input.consumed', { id: item.id, message, queue: queue.items });
         return true;
       };
       /**
-       * Learned from provider usage, and carried across runs of this session; see `packages/core/context/calibration.ts`.
-       *
-       * The route is resolved once per run because it is what the recorded measurement is *about*: a session whose
-       * next run aims at a different model must not inherit the previous model's error, and one that declares no
-       * model at all cannot claim any earlier measurement was about the same endpoint.
+       * Learned from provider usage and carried across runs
+       * (`packages/core/context/calibration.ts`). Keyed by route, so a different model or an
+       * undeclared one does not inherit the measurement.
        */
       const calibrationRouteKey = calibrationRoute(this.options.modelInfo);
       const calibration = TokenCalibration.from(
@@ -589,9 +521,8 @@ export class Agent {
         calibrationRouteKey,
       );
       /**
-       * Delegation. The coordinator is per-run state — its budget, counters and event ids belong to this
-       * run alone — so the tool is installed per run. A child is one delegation level deeper than its
-       * parent and stops being able to delegate at the depth cap, which is what keeps the tree bounded.
+       * Delegation. The coordinator is per-run state, so the tool is installed per run. Each child
+       * is one level deeper and loses delegation at the depth cap.
        */
       let coordinator: SubAgentCoordinator | undefined;
       const residentTurns = new ResidentTurnSettlements();
@@ -626,9 +557,8 @@ export class Agent {
       const steps = new RunSteps({ store, sessionId: input.sessionId, runId, statistics, emit });
       /**
        * The compaction wait this run inherits and leaves (see `COMPACTION_RETRY_ROUNDS`).
-       *
-       * `retryRound` is the first round of *this* run that may start a threshold compaction; a previous run that
-       * ended inside its wait hands the remainder over through `context.compaction.deferred`.
+       * `retryRound` is the first round that may start a threshold compaction; the remainder passes
+       * on via `context.compaction.deferred`.
        */
       const compactionWait = {
         inherited: inheritedCompactionWait(store, input.sessionId),
@@ -654,8 +584,8 @@ export class Agent {
         if (ownWork) announcements.admitGoal();
         await announcements.snapshots(0);
         /**
-         * The system prompt, assembled from named, ordered sections (`./prompt-sections.ts`), with the trace kept so
-         * a caller can ask what the prompt it just sent was made of. Rebuilt only when the run's state changes it.
+         * The system prompt, assembled from named sections (`./prompt-sections.ts`) with a trace
+         * kept. Rebuilt only when run state changes it.
          */
         const composeSystem = (planNotice: string): string => {
           const assembled = assemblePrompt(
@@ -693,13 +623,8 @@ export class Agent {
         });
         refreshProgressTools = () => surface.refreshTools();
         /**
-         * The model tool-call batch, one per run.
-         *
-         * It owns the group scheduler, the bounded pool and the context a call runs in (see `run/tools.ts`); this
-         * run owns the seams it reads. The read-only flag, the round's policies, the approver pair, the human-turn
-         * fact and the program catalog are passed as getters on purpose: every one of them is reassigned between
-         * rounds — or, for the approver, assigned a few lines below — and a call has to run under whatever is in
-         * force when it runs, not under what was in force when this factory was called.
+         * The model tool-call batch, one per run (`run/tools.ts`). Seams that change between rounds
+         * are passed as getters so each call runs under the values in force when it runs.
          */
         const batch = createToolBatch({
           store,
@@ -738,11 +663,8 @@ export class Agent {
         );
         emit('run.started', {});
         /**
-         * The instruction files and skills this run loaded, durable as well as live.
-         *
-         * The live frame alone meant "which files did that run load?" was unanswerable once the window closed, and
-         * that question is half of "what did the model see" — the other half is the envelope, recorded per round.
-         * The payload is the same one the live frame carries, so a reader cannot be told two different things.
+         * Record loaded instruction files and skills durably too, with the same payload as the live
+         * frame.
          */
         store.recordEvent(input.sessionId, 'resources.loaded', {
           instructions: instructions.files,
@@ -763,32 +685,19 @@ export class Agent {
         // What each round asked the model to read (see `run/envelope.ts`).
         const envelopes = new RunEnvelopes(store, input.sessionId, runId);
         /**
-         * The round loop, which counts rounds without bounding them.
-         *
-         * A run ends when the model stops asking for tools, when a person cancels it, when the provider refuses
-         * one of its requests, or when its own ceiling is reached — the output limit, the window, a tool's wall
-         * clock. What it deliberately does *not* end on is a round count: a fixed number of rounds is a guess
-         * about how much work the task is, and the guess is wrong in both directions — a long migration is cut
-         * off mid-way, and a session that would have answered in two rounds is asked to keep going. A run that
-         * wants a bound on rounds nobody asked for has one, and it belongs to the goal that asked for them
-         * (`packages/core/goal-driver.ts`, `GOAL_DEFAULTS.maxGoalRounds`), which counts continuation rounds and
-         * nothing else. Every round still opens a step, so a visit to this loop is visible in the log: the
-         * count is not a limit, but it is a fact.
+         * The round loop counts rounds without bounding them. A run ends when the model stops
+         * calling tools, on cancellation, on provider refusal, or at a ceiling (output limit,
+         * window, tool clock, run budget). Goal continuations are bounded by
+         * `GOAL_DEFAULTS.maxGoalRounds`. Every round opens a step in the log.
          */
         const loopStartedAt = Date.now();
         for (let round = 0; ; round++) {
           signal.throwIfAborted();
           compactionWait.roundsStarted = round + 1;
           /**
-           * The run's total budget, checked where a round begins: every tool result of the round before is already
-           * recorded, so stopping here leaves nothing half done. This is the backstop the comment above leaves
-           * room for — not a guess at the task's size, but the ceiling an operator set on what one run may spend
-           * when nobody is watching it (`RunDefaults.maxRunRounds`; `0` turns a budget off).
-           *
-           * Both measures leave out what is not the run's own spending. Time a person took to answer an approval
-           * or a question is theirs: a run left waiting overnight has not run for a night. And input the provider
-           * served from its prompt cache is the same conversation counted again — summing it made the budget run
-           * out in proportion to rounds × context, so a long task failed for having talked a lot.
+           * The run's total budget, checked at a round boundary so nothing is half done
+           * (`RunDefaults.maxRunRounds`; `0` turns one off). Excludes time spent waiting on a
+           * person and cached input tokens.
            */
           const exhausted = runBudgetExhausted(limits, {
             rounds: round,
@@ -797,14 +706,9 @@ export class Agent {
           });
           if (exhausted) throw new RunFailure('run-budget', exhausted);
           /**
-           * A policy switched between rounds takes effect here, and the round is rebuilt around it.
-           *
-           * The desktop can change the permission preset or the sandbox *while a run is in flight*, and a run that
-           * kept the snapshot it started with would keep offering tools the policy now denies and keep telling the
-           * model it is in an environment it is no longer in. Re-read per round rather than per run: the prompt,
-           * the tool schema and the execution policy are all derived below, so all three have to be rebuilt from
-           * the same answer. A call already in flight keeps the policy it was approved under — the tool layer
-           * rechecks that separately (see `executionPolicyForCall` in the tool context).
+           * Apply a policy switched mid-run (permission preset or sandbox) and rebuild the prompt,
+           * tool schema and execution policy from it. Calls already in flight keep their approved
+           * policy (`executionPolicyForCall`).
            */
           if (surface.refreshPolicies()) {
             progressGuard.reset();
@@ -812,15 +716,10 @@ export class Agent {
             resetQueryPhase();
           }
           /**
-           * A plan approved during the previous round takes effect here, before anything about this round is
-           * built: the request, the schema and the system paragraph are all assembled below, and all three have
-           * to describe the run the model is now in.
-           *
-           * The approver is the enforcement — it reads `readOnly` per call — while the rebuilt catalogue and
-           * prompt are what keep the model from believing it still cannot write. Nothing is *granted* here that
-           * was not granted by a human a moment ago: `exit_plan_mode` is the only writer of the planning component's
-           * pending approval. It writes only after the question came back approved (I8: an effect is a fact the log or
-           * a person established, not something inferred from what a tool intended).
+           * Apply a plan approved in the previous round before building this round. The approver
+           * enforces via `readOnly`; the rebuilt catalogue and prompt tell the model it may write.
+           * Only `exit_plan_mode` writes the pending approval, and only after a human approved
+           * (I8).
            */
           const approved = planning?.takeApproval();
           if (approved) {
@@ -828,38 +727,33 @@ export class Agent {
             progressGuard.resetOscillation();
             resetQueryPhase();
             readOnly = false;
-            // The planning phase is over, so its tools leave the catalogue: offered after the approval, either one
-            // could only fail with "Plan is already approved". Removed before `setPlanNotice` rebuilds the catalogue.
+            // Remove the planning tools after approval, before `setPlanNotice` rebuilds the
+            // catalogue.
             for (const dispose of planningTools) dispose();
             automaticVerification.register(approved);
             surface.setPlanNotice(approvedPlanNotice(approved));
-            // The delegation guard was built with this run's original promise; a run that may now write may also
-            // delegate work that writes, so the coordinator is told rather than left refusing a general child.
+            // A run that may now write may also delegate writing work.
             coordinator?.promoteToWritable();
           }
           steps.begin(round);
           /**
-           * The lease is renewed at every step boundary: this run is still the session's writer, and the number
-           * is what lets a refusal elsewhere say when the owner last did anything. Nothing is decided by how old
-           * a renewal is — see `SessionLease` — so this cannot make a run's own survival depend on a timer.
+           * Renew the lease at every step boundary. Renewal age decides nothing (see
+           * `SessionLease`).
            */
           store.renewLease(input.sessionId, runId);
           while (consume('steer')) {
             /* deliver all corrections before the next request */
           }
-          // The round preamble. Policy gets to see the round before the request is built, and its
-          // context contributions are persisted user messages: a pre-step hook can refuse the run or
-          // add model-visible context, but it cannot put text in front of the model that the transcript
-          // would not show (I7).
+          // Round preamble: hooks may refuse the run or add context, which is persisted as user
+          // messages so nothing reaches the model that the transcript would not show (I7).
           const preStep = await tools.extensions.preStep(
             {
               sessionId: input.sessionId,
               runId,
               round,
               messages: store.messages(input.sessionId),
-              // What the round would use if no hook re-aims it. A policy that means "keep the run's model" reads it
-              // here rather than hardcoding a name, which is what makes "only downgrade the cheap rounds"
-              // expressible without the policy owning the default.
+              // The default the round would use, so a policy can keep the run's model without
+              // hardcoding it.
               model: aim.configuredModel ?? '',
             },
             signal,
@@ -867,8 +761,8 @@ export class Agent {
           if (preStep.blocked) throw new StepBlockedError(preStep.blocked);
           const roundAim = aim.aim(round, preStep);
           const { cacheKeyOf } = roundAim;
-          // The state the round is about to be asked about, before the round's own injections: a policy note is a
-          // message to the model, while a snapshot is the world it is being asked about.
+          // Snapshots go before the round's injections: they describe the world, injections are
+          // messages.
           await announcements.snapshots(round, {
             model: roundAim.model ?? provider.route?.model ?? null,
             protocol: this.options.modelInfo?.protocol ?? provider.route?.protocol,
@@ -880,9 +774,8 @@ export class Agent {
               notes: preStep.inject.length,
             });
           /**
-           * A `load_tools` call (or a direct call to a held-back tool) in the previous round widens this round's
-           * catalog, and a goal created (or finished) in it adds (or drops) `update_goal`. The transcript part only
-           * grows, so the catalog changes once per load or goal transition, not per round.
+           * A `load_tools` call or a goal transition in the previous round changes this round's
+           * catalog.
            */
           surface.refreshLoaded();
           if (automaticVerification.takeToolsChanged()) surface.refreshTools();
@@ -900,18 +793,15 @@ export class Agent {
             autoCompactTokens: this.options.autoCompactTokens,
             summaryTimeoutMs: limits.summaryTimeoutMs,
             onSummaryRetry: (details) => emit('context.summary.retry', details),
-            // The summary request replays the prefix of the prompt it is given, so it asks for the key of *that*
-            // prompt: without a key the provider places no cache breakpoint at all, and the replay would be
-            // byte-identical and unread.
+            // The summary request needs the key of its own prompt, or the provider places no cache
+            // breakpoint.
             cacheKeyFor: cacheKeyOf,
             calibration,
-            // The run this compaction is for: it is what the session's write lease is checked against, before the
-            // summary request and again at the write.
+            // Checked against the session's write lease before the summary request and at the
+            // write.
             runId,
-            // The model this round aims at, so a compaction records which one produced the summary. Absent when the
-            // embedder declared none, which the record then does not claim to know. The provider is recorded beside
-            // it for the same reason: a summary is a model answer, and the model name alone does not say which
-            // adapter it came back over.
+            // Recorded with the summary, alongside the protocol. Absent when the embedder declared
+            // none.
             model: roundAim.model,
             ...(this.options.modelInfo?.protocol === undefined
               ? {}
@@ -924,9 +814,8 @@ export class Agent {
             toolResultPruneHeadChars,
             toolResultPruneTailChars,
             /**
-             * The two accumulators below are the run's own, not this round's: `usage` is what the result reports
-             * and `committedSummaryUsage` is what the session's aggregates claim was stored, so the callbacks have
-             * to write into the objects the loop keeps for the rest of the run.
+             * Run-level accumulators: `usage` is reported in the result, `committedSummaryUsage` is
+             * what the session aggregates claim was stored.
              */
             usage,
             committedSummaryUsage,
@@ -950,11 +839,8 @@ export class Agent {
             });
           recordEnvelope(context);
           /**
-           * The resolved limit, not the raw option: `resolveRunLimits` is what decides whether an operator asked
-           * for a total wall-clock limit at all, and reading `this.options` here made the answer depend on
-           * whether the value came from a CLI flag or from the defaults — the one number `RunDefaults` owned in
-           * two places. There is no default for the main request (a streaming model is making progress; the
-           * stream idle timeout is what catches a stalled one), so this is `undefined` unless a limit was set.
+           * Uses the resolved limit; `undefined` unless an operator set one (stalls are caught by
+           * the stream idle timeout).
            */
           const response: ModelResponse = await requestRunRound({
             store,
@@ -984,8 +870,8 @@ export class Agent {
             onAnswerText: (answer) => {
               text = answer;
             },
-            // A nudged answer is still real model output and stays in the model's history, but the transcript
-            // must not show it beside the answer the nudge produces (see `Message.provisional`).
+            // A nudged answer stays in the model's history but is hidden beside its replacement
+            // (`Message.provisional`).
             provisionalAnswer: async () => {
               await automaticVerification.assessChanges();
               return automaticVerification.willNudge();
@@ -997,8 +883,7 @@ export class Agent {
             calibrationRouteKey,
             emit,
           });
-          // An abort after the provider's terminal event must keep the completed text while still
-          // refusing to execute any pending tool call.
+          // An abort after the terminal event keeps the text but runs no pending tool call.
           signal.throwIfAborted();
           if (response.toolCalls.length === 0) {
             if (queue.hasSteer || consume('follow-up')) {
@@ -1006,11 +891,8 @@ export class Agent {
               continue;
             }
             /**
-             * A child whose caller declared a schema answers with that object, not with prose.
-             *
-             * The caller asked for fields precisely so it would not have to read them out of text, so an answer
-             * that ends in prose has delivered nothing. One reminder, because a model that forgot the tool usually
-             * calls it when told; a second prose answer ends the run, and the child's turn reports it as failed.
+             * A child with a caller-declared schema must answer through the tool. One reminder; a
+             * second prose answer fails the child's turn.
              */
             if (
               input.reportSchema !== undefined &&
@@ -1037,9 +919,8 @@ export class Agent {
                 store,
                 input.sessionId,
                 emit,
-                // Wrapped like every other machine-written context: the transcript hides it by its tag, and the
-                // model still reads exactly the instruction it needs. Unwrapped, the nudge appeared as if the
-                // person had typed it between the two answers.
+                // Wrapped as machine context so the transcript hides it while the model still reads
+                // it.
                 '<runtime-context source="automatic-verification">\n' +
                   'The work has no verification checks yet. Inspect the project guidance and relevant tests, then call verify_work with executable commands and args before finishing. If verification is blocked or unavailable, state the limitation honestly; do not invent passing evidence.\n' +
                   '</runtime-context>',
@@ -1095,36 +976,30 @@ export class Agent {
             steps.end(round, 'final');
             break;
           }
-          // The tool calls are about to run. The message that names them is written first, so a crash while a
-          // tool is in flight leaves the record that lets recovery report its outcome as unknown rather than
-          // letting the call be replayed as if it had never happened. Everything the round appends after this
-          // point is written as one batch by the next read or by the end of the run.
+          // Write the message naming the tool calls before they run, so a crash mid-call is
+          // recorded as an unknown outcome rather than replayed.
           store.flush(input.sessionId);
-          // The calls run inside the batch that owns their grouping, their effect journal and the order their
-          // results are recorded in (see `run/tools.ts`); what comes back is what the model is told *after* those
-          // results, which is the loop's own step.
+          // The batch owns grouping, the effect journal and result order (`run/tools.ts`).
           await automaticVerification.beforeTools(response.toolCalls);
           const { injected, changedGoals, observations } = await batch.run(response.toolCalls);
           automaticVerification.observe(observations);
           for (const goal of changedGoals) announcements.goal(goal);
-          // Context a post-execute policy asked to inject becomes a persisted user message *after* the
-          // batch's tool results, never a field riding along inside a tool block (see `run/input.ts`).
+          // Injected context becomes a persisted user message after the batch's results
+          // (`run/input.ts`).
           for (const entry of injected)
             injectContext(store, input.sessionId, emit, entry.notes.join('\n\n'), {
               source: 'post-execute',
               callId: entry.callId,
               notes: entry.notes.length,
             });
-          // Only a note the run has not seen counts as an intervention: a hook repeating itself every round would
-          // otherwise clear the failure and query counts every round (`ToolProgressGuard.newIntervention`).
+          // Only an unseen note counts as an intervention (`ToolProgressGuard.newIntervention`).
           const intervened =
             changedGoals.length > 0 ||
             progressGuard.newIntervention(injected.flatMap((entry) => entry.notes));
           let progress = intervened
             ? (progressGuard.reset(), progressGuard.observeWrites(observations))
             : progressGuard.observeRound(observations);
-          // One record per hit, not one per notice: the count and the signal are what a later review reads the
-          // cost of a run from, and the prompt is only two of the hits.
+          // One record per hit, for later cost review.
           for (const hit of progressGuard.takeOscillationEvents()) {
             const record = { runId, round, count: hit.count, signal: hit.signal };
             store.recordEvent(input.sessionId, 'edit.oscillation', record);
@@ -1177,9 +1052,8 @@ export class Agent {
                 ? ++failedEditActRounds >= ACT_FAILED_EDIT_ROUNDS
                 : ++noChangeActRounds >= ACT_NO_CHANGE_ROUNDS
             ) {
-              // One round of editors alone before the conclusion. The act phase only exists while the project is
-              // unchanged (project work cancels the cutoff), and the reads it spent were for the exact text of an
-              // edit: taking the editors with them ends the run with the change it was about to make unmade.
+              // One editors-only round before concluding, so the edit the reads were preparing can
+              // still land.
               setQueryPhase('edit');
               // The specs are rebuilt by the phase change: a read-only run has no editors to offer.
               const canEdit = surface.specs.length > 0;
@@ -1203,8 +1077,7 @@ export class Agent {
               action: progress,
             });
           }
-          // Only while the file tools are there to switch to: a run whose tools were withdrawn, or that never had
-          // `read_file`, would be told to use something it cannot call.
+          // Only suggest file tools when the run actually has them.
           const shellReader =
             !shellReadAdvised && surface.specs.some((spec) => spec.name === 'read_file')
               ? shellReadIn(observations.map(({ call }) => call))
@@ -1216,16 +1089,13 @@ export class Agent {
               round,
             });
           }
-          // Submitting the plan ends the planning run: the next step is a human decision, and letting
-          // the loop continue would only burn rounds on a phase that cannot change anything.
+          // Submitting the plan ends the planning run; the next step is a human decision.
           if (planning?.submitted) {
             status = 'completed';
             steps.end(round, 'final');
             break;
           }
-          // A submitted report ends the child run too: the parent is waiting for the answer, and further
-          // rounds would only spend the budget the two of them share. A custom schema's answer ends it the
-          // same way — the caller asked for one object, and the child submitted it.
+          // A submitted report or schema answer ends the child run.
           if (reportHolder.report || reportHolder.data !== undefined) {
             status = 'completed';
             steps.end(round, 'final');

@@ -11,26 +11,14 @@ import { normalizeReport } from './contract.ts';
 const OUTPUT_BYTES = 8 * 1024 * 1024;
 
 /**
- * A sub-agent provider that runs the child in a **separate process**.
+ * A sub-agent provider that runs the child in a separate process. Capabilities are what such a
+ * child can honestly promise:
  *
- * The design question this answers is not "how do we spawn something" but "what can a child that is not in this
- * process honestly promise", and every capability below is decided by that rather than by convenience. The five
- * decisions were settled before this was implemented; this is what they resolve to.
- *
- * **The child owns its world.** It runs the CLI in a fresh scratch workspace with its own database, so a delegated
- * task here is *research*, not editing: the parent's files are not reachable from the child at all. That is a real
- * guarantee rather than a limitation dressed up — but it also means the promise the in-process provider makes
- * ("your file changes are journalled against the parent session, and undoable there") **cannot** be made here, so
- * `role: 'general'` is refused instead of quietly running somewhere it cannot affect anything. A model that asks
- * for a write-capable child out of process is told so, in those words.
- *
- * **The report is composed, not submitted.** The child is a normal one-shot run, so it has no `submit_report`
- * tool and no way to be held to a JSON Schema; `outputSchema` is therefore *not* declared, which is what makes the
- * capability check refuse a task that asked for its own shape rather than returning something that only looks
- * like it. The standard report is assembled from what the child actually said, and says so.
- *
- * **Stopping is killing.** Nothing here can ask the child to wind down cooperatively, so the provider does not
- * pretend otherwise: an abort terminates the process and reports the task as cancelled with that reason.
+ * - The child owns its world: a fresh scratch workspace and database, so it can research but not
+ *   edit the parent's files. `role: 'general'` is therefore refused.
+ * - The report is composed from the child's answer: there is no `submit_report`, so `outputSchema`
+ *   is not declared and tasks asking for their own shape are refused.
+ * - Stopping is killing: an abort terminates the process and reports the task as cancelled.
  */
 export interface SubprocessProviderOptions {
   /** Registry name. Defaults to `subprocess`. */
@@ -45,12 +33,7 @@ export interface SubprocessProviderOptions {
   scriptArgs?: readonly string[];
   /** Cap on how long a child may run, since a killed process is the only stop this provider has. */
   timeoutMs?: number;
-  /**
-   * The child's context window, which the CLI refuses to start without.
-   *
-   * `YUANTU_MAX_CONTEXT_TOKENS` has no default *by design* — it is a property of the endpoint, not a preference —
-   * so a deployment that wants this provider has to state it, exactly as it does for `run`.
-   */
+  /** The child's context window, required because `YUANTU_MAX_CONTEXT_TOKENS` has no default. */
   maxContextTokens: number;
 }
 
@@ -64,12 +47,8 @@ interface ChildResult {
 }
 
 /**
- * Read the one `{"type":"result"}` line out of a CLI run's JSONL.
- *
- * Tolerant of the frames around it on purpose: the CLI narrates events, retries and rounds on the same stream, and
- * this provider's contract is "the child's final answer", not "the whole transcript". A malformed line is skipped
- * rather than thrown on — one bad frame should not lose a completed run — while a stream with *no* result is a
- * failure, because a child that exited without one did not answer.
+ * Read the `{"type":"result"}` line from a CLI run's JSONL. Malformed lines are skipped; a stream
+ * with no result is a failure.
  */
 export function readChildResult(stdout: string): { result?: ChildResult; malformed: number } {
   let result: ChildResult | undefined;
@@ -88,25 +67,19 @@ export function readChildResult(stdout: string): { result?: ChildResult; malform
     const record = frame as { type?: unknown; result?: unknown };
     if (record.type !== 'result' || typeof record.result !== 'object' || record.result === null)
       continue;
-    // The last result wins: the CLI can print one per goal continuation round, and the parent wants where the
-    // session arrived, not where it started.
+    // The last result wins (one per goal continuation round).
     result = record.result as ChildResult;
   }
   return { result, malformed };
 }
 
 /**
- * The standard report, composed from what the child said.
- *
- * `evidence` is the child's own answer rather than a citation of it, because that is the only evidence available:
- * a subprocess child cannot point at a line in the parent's transcript the way an in-process one can, and inventing
- * a citation would be worse than quoting. `unverified` says the boundary out loud so the parent does not read this
- * as a verified finding.
+ * The standard report composed from the child's answer, quoted as evidence. `unverified` marks it
+ * as unverified.
  */
 export function reportFromChild(text: string, sessionId: string) {
   const answer = text.trim() || '(the child produced no answer)';
-  // Through the same bounds as a submitted report: the composed one reaches the same readers (the durable record,
-  // the card, the parent), and an answer quoted whole as evidence was the one report nothing kept small.
+  // Same bounds as a submitted report.
   return normalizeReport({
     summary: answer.length > 400 ? `${answer.slice(0, 400)}…` : answer,
     findings: [{ statement: 'Reported by a subprocess child', evidence: answer }],
@@ -126,17 +99,15 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
     description:
       'Runs the child as a separate process in its own scratch workspace and database. Read-only by nature: it cannot reach this session’s files.',
     /**
-     * What this provider can actually promise, and nothing more.
+     * What this provider can actually promise:
      *
-     * - `depthLimit`: the child is started with delegation switched off (`YUANTU_SUBAGENTS=false`), so it can never
-     *   nest at all — any depth cap the coordinator passes is met trivially. Leaving it undeclared refused every
-     *   task, because the coordinator always passes one, and made this provider unreachable.
-     * - `toolFilter`: the filter is handed to the child as `YUANTU_TOOL_ALLOWLIST`, which its catalogue applies as a
-     *   restriction — a tool outside it is not executable, not merely unlisted. The deployment's permission policy is
-     *   withheld too, so the child's `--json` run refuses every permission-requiring operation.
+     * - `depthLimit`: the child runs with delegation off (`YUANTU_SUBAGENTS=false`), so any cap is
+     *   met.
+     * - `toolFilter`: passed as `YUANTU_TOOL_ALLOWLIST`, a real restriction; the permission policy
+     *   is withheld, so permission-requiring operations are refused.
      *
-     * `persona` and `contextFork` stay absent: the child's prompt is its own deployment's, and there is no mechanism
-     * here to hand it this session's transcript.
+     * No `persona` or `contextFork`: there is no way to hand over this session's prompt or
+     * transcript.
      */
     capabilities: ['depthLimit', 'toolFilter'],
     async start(request) {
@@ -157,35 +128,28 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
         ? `${request.task.objective}\n\nContext you cannot rediscover cheaply:\n${request.task.context}`
         : request.task.objective;
       /**
-       * The child is given the workspace **and the database explicitly**, and both are the scratch directory.
-       *
-       * This is the difference between claiming isolation and having it. The CLI resolves its workspace from
-       * `--workspace` — an environment variable is not read for it — and its database defaults to
-       * `<workspace>/.yuantu/sessions.sqlite`, so a child spawned with neither inherits the *parent's* workspace and
-       * opens the parent's database. Observed, not theorised: the first version of this provider did exactly that
-       * and died on a database format its own build did not write. Passing both leaves the child's world wholly its
-       * own, which is the property the `general` refusal below is built on.
+       * Pass both `--workspace` and the database explicitly as the scratch directory; otherwise the
+       * child would open the parent's workspace and database.
        */
       const env: NodeJS.ProcessEnv = {
         ...process.env,
         ...options.env,
         YUANTU_WORKSPACE: workspace,
         YUANTU_MAX_CONTEXT_TOKENS: String(options.maxContextTokens),
-        // The child is a one-shot run in its own world: naming its session and scheduling work are the parent's
-        // business, and either one would make a delegated child spend its rounds on bookkeeping nobody reads.
+        // Naming sessions and scheduling work are the parent's business.
         YUANTU_WORKFLOWS: 'false',
-        // `'false'` and not `'off'`: this key is parsed as `0|1|true|false`, and any other spelling refuses the
-        // *whole* environment — which costs a spawned child its life before it reads a single byte.
+        // `'false'`, not `'off'`: this key accepts `0|1|true|false`, and anything else rejects the
+        // whole environment.
         YUANTU_SUBAGENTS: 'false',
-        // The scratch workspace has no `.yuantu`, so the child is pointed at the delegator's project to read its
-        // memories. Reading is all it can do there: a memory write needs approval, and the child has no policy.
+        // Point memory at the delegator's project; the child can only read it (writes need approval
+        // it cannot get).
         YUANTU_MEMORY_ROOT: request.parent.project ?? request.parent.workspace,
         ...(request.options.toolFilter?.length
           ? { YUANTU_TOOL_ALLOWLIST: request.options.toolFilter.join(',') }
           : {}),
       };
-      // An allow rule the deployment wrote for its own runs would let this child's commands through; the child is
-      // promised read-only, so it gets no policy and its non-interactive run refuses every permission request.
+      // No permission policy: the child is read-only and its non-interactive run refuses every
+      // permission request.
       delete env.YUANTU_PERMISSION_POLICY;
       const child = spawn(
         command,
@@ -231,12 +195,8 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
       };
       request.signal.addEventListener('abort', stop, { once: true });
       /**
-       * A signal that was already aborted never fires its listener.
-       *
-       * Registration happens after the scratch directory and the spawn, and the coordinator can cancel between
-       * checking its own signal and awaiting this call — in which case the child would run to completion (up to
-       * `timeoutMs`) before a cancellation nobody could deliver was reported. The siblings in this package test
-       * `aborted` explicitly for the same reason. `stop()` is safe here: it kills only a child still running.
+       * A signal aborted before registration never fires its listener, so check it explicitly.
+       * `stop()` only kills a still-running child.
        */
       if (request.signal.aborted) stop();
       const timer = setTimeout(() => {
@@ -255,12 +215,7 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
         stderr += stderrDecoder.end();
         const { result } = outputExceeded ? { result: undefined } : readChildResult(stdout);
         const sessionId = result?.sessionId ?? '';
-        /**
-         * Cancellation is reported as cancellation, not as a failed child.
-         *
-         * The process was killed because this call was aborted, and a parent that cancelled the work must not read
-         * its own decision back as the child's fault.
-         */
+        /** Report cancellation as cancellation, not as a child failure. */
         if (request.signal.aborted)
           return {
             sessionId,
@@ -299,8 +254,7 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
         const text = result.text ?? '';
         return {
           sessionId,
-          // A child that ran but did not complete is reported as failed with its own reason, rather than as a
-          // success carrying an apology.
+          // A child that did not complete is reported as failed with its own reason.
           status: result.status === 'completed' ? ('completed' as const) : ('failed' as const),
           text,
           rounds: 0,

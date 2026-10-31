@@ -7,30 +7,16 @@ import { runWorkspaceGit } from '../../workspaces/git.ts';
 import { normalizeCompletionPath } from './contract.ts';
 
 /**
- * A content fingerprint of the files a completion contract's evidence is about.
+ * A content fingerprint of the files a completion contract's evidence covers. `S0` is taken before
+ * the checks and `S1` after; a completion is published only when they agree, so a check that
+ * mutates what it judges is not a pass. The file journal cannot replace this: it misses writes from
+ * commands and other processes.
  *
- * The verifier's checks answer "did this pass". They cannot answer "is the thing that passed still the thing on
- * disk": a check runs, passes, and then a shell command, a delegated child or a cleanup step rewrites a file —
- * and every reader of the log would still be shown a pass. The file journal does not close that gap either: it
- * records what the *file tools* wrote, and says nothing about a command that wrote through spawn, a build that
- * emitted into a directory, or an editor outside this process.
- *
- * So the contract is fingerprinted instead. `S0` is taken before the checks, `S1` after them, and a completion is
- * only published when the two agree. A check that mutates the code it is judging is therefore not a pass at all —
- * it is a verification that invalidated its own evidence.
- *
- * Three properties matter for honesty:
- *
- * - **What is covered is stated, not implied.** `inputs` is a list of paths, and the digest covers exactly those.
- *   A caller that monitored nothing gets a digest of nothing, which is why an explicit `CompletionSpec` must name
- *   at least one input and a task may fall back to the workspace root. That fallback is Git's own view of the
- *   root — tracked files plus untracked files Git would commit, ignoring what `.gitignore` excludes — rather than
- *   every file a recursive directory listing happens to find. A root outside a Git working tree keeps the
- *   filesystem walk, because then there is no index to ask.
- * - **Exceeding a bound is a refusal, not a truncation.** A digest computed over the first N files of a larger
- *   tree is a digest of a different tree; reporting it as a pass would be the exact false assurance this is for.
- * - **Identity is the resolved root, not the logical session.** Two workspaces with identical content are still
- *   two workspaces, and evidence collected in one may never be presented as the other's.
+ * - Coverage is explicit: the digest covers exactly `inputs`. The implicit `.` range uses Git's
+ *   view of the root (tracked plus untracked-not-ignored), falling back to a filesystem walk
+ *   outside a Git tree.
+ * - Exceeding a bound is a refusal, never a truncation.
+ * - Identity is the resolved root: identical content in two workspaces still yields two digests.
  */
 export interface CompletionInputSnapshot {
   version: 1;
@@ -43,27 +29,14 @@ export interface CompletionInputSnapshot {
 
 export interface CompletionInputOptions {
   /**
-   * Paths the runtime itself is writing, excluded by their resolved location rather than by a suffix rule.
-   *
-   * The session database is the motivating case: a workspace-scoped store puts its SQLite file inside the tree
-   * being fingerprinted, and its WAL is rewritten continuously, so a snapshot that included it would differ from
-   * itself between two reads a millisecond apart. Excluding *every* `.sqlite` file would be the wrong fix — a
-   * user's own SQLite resource is source, and silently dropping it is how a monitored change goes unnoticed.
+   * Paths the runtime itself writes (e.g. a workspace-scoped session database and its WAL),
+   * excluded by resolved location, not by suffix, so user SQLite files are still covered.
    */
   runtimeStatePaths?: readonly string[];
-  /**
-   * The most files the range may hold; defaults to the workspace snapshot's own limit.
-   *
-   * Exposed so the boundary itself can be exercised without creating two hundred thousand files; no caller narrows
-   * it in production.
-   */
+  /** Most files the range may hold; defaults to the workspace snapshot limit. Exposed for tests. */
   maxFiles?: number;
   /**
-   * Told the size of the range once it is known and before any of it is read.
-   *
-   * The walk decides every limit on metadata alone, so this is the moment a caller can say "about to fingerprint
-   * N files" — the cost of the snapshot is the reads that follow, and a person watching a task end on a large tree
-   * otherwise saw nothing until they were done.
+   * Told the range's size before any of it is read, so a caller can announce a large fingerprint.
    */
   onCollected?: (scale: { files: number; bytes: number }) => void;
 }
@@ -83,27 +56,16 @@ export class CompletionInputUnstableError extends Error {
 }
 
 /**
- * The same budget a child's frozen snapshot uses, so a tree that can be delegated can also be verified: a fingerprint
- * that refused a file the snapshot accepted sent an unrelated large asset to review at the end of a task.
+ * The same budget as a child's frozen snapshot, so anything that can be delegated can be verified.
  */
 const MAX_FILES = WORKSPACE_SCALE_LIMITS.files;
 const MAX_TOTAL_BYTES = WORKSPACE_SCALE_LIMITS.totalBytes;
 const MAX_FILE_BYTES = WORKSPACE_SCALE_LIMITS.fileBytes;
 
 /**
- * Directory names the *implicit* source range never descends into.
- *
- * Excluded because they are *derived*: a checkout's `.git`, a dependency tree, the runtime's own state directory,
- * scratch space and build output all change for reasons that have nothing to do with whether the work is correct,
- * and including them would make the fingerprint flap on every build. The list is documented rather than
- * discovered, and the coverage boundary it creates is reported with the digest (`files` counts exactly what was
- * hashed) rather than left implicit. It applies to paths Git already reports too: a repository that commits
- * `dist/` still gets a digest of the source, not of the build that produced it.
- *
- * A path the contract names explicitly is not filtered by this list. `inputs`/a check path is the *subject* of
- * the evidence, and silently dropping it was how a declared `dist/out.txt` could pass, be changed, and still read
- * as verified: the two snapshots compared an empty range to an empty range. The exclusions describe the fallback
- * range of `.`, not a path a caller asked to be watched.
+ * Directory names the implicit range never descends into, because they are derived (VCS metadata,
+ * dependencies, runtime state, scratch, build output). Applied even to paths Git reports. Not
+ * applied to a path the contract names explicitly, which is the subject of the evidence.
  */
 export const COMPLETION_INPUT_EXCLUDED_SEGMENTS: readonly string[] = [
   '.git',
@@ -115,37 +77,25 @@ export const COMPLETION_INPUT_EXCLUDED_SEGMENTS: readonly string[] = [
 ];
 
 /**
- * Path segments that are never readable as inputs, mirroring the file tools' own refusals.
- *
- * A contract that names one of these is rejected rather than silently skipped: "verify this" pointed at a
- * credential file is either a mistake or an attempt to read it, and neither is served by pretending the input
- * was excluded.
+ * Path segments never readable as inputs, mirroring the file tools. A contract naming one is
+ * rejected.
  */
 const FORBIDDEN_SEGMENTS: readonly string[] = ['.ssh', '.aws', '.gnupg', '.env'];
 
 /**
- * Whether a walked path is outside the range being fingerprinted.
- *
- * `defaultSegments` is true only while walking the implicit whole-workspace range. An explicit input is the
- * subject of the evidence, so the derived-directory heuristic does not apply to it or its subtree; otherwise an
- * explicit `dist/out.txt` would contribute nothing to the digest and its later change would be invisible.
- *
- * Protected paths are skipped in every walk — a private key is never read to prove the source did not change —
- * and the runtime's own state files stay excluded by their exact relative path even under an explicit directory,
- * because their writes describe the runtime rather than the work.
+ * Whether a walked path is outside the range. `defaultSegments` is true only for the implicit
+ * range; explicit inputs ignore the derived-directory list. Protected paths and runtime state files
+ * are always skipped.
  */
 function excluded(
   relative: string,
   runtimePaths: ReadonlySet<string>,
   defaultSegments: boolean,
 ): boolean {
-  // A walk that started at the root names its children `./child`, so the leading segment is stripped before
-  // anything is compared: without this, the runtime's own database — matched by its exact relative path — would
-  // only be excluded when it happened to be named some other way, and the snapshot would flag every round.
+  // Strip the leading `./` so runtime state paths match exactly.
   const normalized = relative.replace(/^\.\//, '');
   const segments = normalized.split('/');
-  // Credential paths are skipped by a walk exactly as they are refused by name: a range of `.` that descended
-  // into `.ssh` would read a private key in order to prove the source did not change.
+  // Never read credential paths, even under `.`.
   if (segments.some(isProtectedSegment)) return true;
   if (
     defaultSegments &&
@@ -178,11 +128,8 @@ interface FileEntry {
 }
 
 /**
- * What a range is, in digest order: marker text (the root, a directory, an absent input) and the files between them.
- *
- * Collected before any content is read, so every limit — files, bytes per file, bytes in total — is decided on
- * metadata alone: a range too large to fingerprint is refused before the first byte of it is hashed, rather than
- * after most of it has been.
+ * What a range is, in digest order: marker text and files. Collected before any content is read, so
+ * every limit is decided on metadata alone.
  */
 interface Collection {
   items: (string | FileEntry)[];
@@ -204,8 +151,7 @@ function admitFile(
     throw new CompletionInputLimitError(
       `Completion input exceeds the ${String(MAX_FILE_BYTES)} byte per-file limit: ${relative}`,
     );
-  // Counted where a file is admitted, so the limit is exactly the number of files accepted: a check on the way into
-  // a directory let the last entry through after the count had already reached it.
+  // Counted where a file is admitted, so the limit is exact.
   if (collection.files >= collection.maxFiles)
     throw new CompletionInputLimitError(
       `Completion inputs exceed the ${String(collection.maxFiles)} file limit`,
@@ -220,13 +166,8 @@ function admitFile(
 }
 
 /**
- * A symbolic link, recorded as the link itself: its path and the text it points at.
- *
- * Never followed — reading through a link could reach outside the execution root, or a credential the walk would
- * otherwise refuse — but never refused either. A tracked link is ordinary in a repository, and refusing one made
- * every fingerprint of that repository fail, which sent each task and every command-running turn to review for a
- * reason that had nothing to do with the work. What the link *says* is part of the range: retargeting it changes
- * the digest, and a target inside the range is covered where the walk reaches it on its own.
+ * A symbolic link is recorded as itself (path and target text), never followed and never refused.
+ * Retargeting changes the digest.
  */
 async function admitLink(
   absolute: string,
@@ -243,11 +184,8 @@ async function admitLink(
 }
 
 /**
- * One file's own digest, streamed so memory stays one buffer whatever its size.
- *
- * A file that is not what the walk admitted — another size, another mtime, or a different number of bytes than it
- * claimed — throws, and a throw discards the whole snapshot, so a file that moved while it was read can never
- * reach a digest.
+ * One file's digest, streamed. A file that changed since the walk (size, mtime, byte count) throws
+ * and discards the whole snapshot.
  */
 async function hashFile(entry: FileEntry, signal: AbortSignal): Promise<string> {
   signal.throwIfAborted();
@@ -275,12 +213,8 @@ async function hashFile(entry: FileEntry, signal: AbortSignal): Promise<string> 
 }
 
 /**
- * Every file's digest, read `HASH_CONCURRENCY` at a time.
- *
- * The walk used to open, read and close each file in turn, so a task's end on a large tree waited for the sum of
- * every read — twice, before and after the checks. The digest's order is the walk's, not the reads', so reading
- * in parallel changes nothing about what it covers. The first failure is the answer; reads already started are
- * let finish before it is thrown, so no handle outlives the snapshot.
+ * Every file's digest, `HASH_CONCURRENCY` at a time; digest order is the walk's. The first failure
+ * is thrown after started reads finish.
  */
 async function hashFiles(files: readonly FileEntry[], signal: AbortSignal): Promise<string[]> {
   const digests = new Array<string>(files.length);
@@ -324,8 +258,7 @@ async function walk(
     throw new CompletionInputLimitError(`Unsupported path type in completion inputs: ${relative}`);
   if (!includeCurrent) collection.items.push(`directory\0${relative}\0`);
   const entries = await readdir(absolute, { withFileTypes: true });
-  // Code-unit order, like the Git listing below: a locale's collation can change with the ICU a Node build ships,
-  // and a digest compared across runs must not move because the runtime was upgraded.
+  // Code-unit order, so the digest does not depend on ICU collation.
   entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
   for (const entry of entries) {
     const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
@@ -343,15 +276,9 @@ async function walk(
 }
 
 /**
- * The paths Git would commit from this root: what is tracked, plus what is untracked but not ignored.
- *
- * This is the default range because it is the repository's own answer to "what is the project", and it is the
- * difference between reading a source tree and reading every dependency and build product a person happened to
- * leave in the directory. Untracked files stay in: a task that creates `out.txt` and verifies it has not committed
- * anything, and dropping the file it just produced would be the false assurance the fingerprint exists to prevent.
- *
- * `undefined` means Git could not answer — not a repository, no Git, a listing over the output cap. The caller
- * falls back to the filesystem walk, which is slower but keeps the old coverage rather than refusing to verify.
+ * Paths Git would commit from this root: tracked plus untracked-but-not-ignored (a freshly created
+ * output stays in). `undefined` when Git cannot answer; the caller falls back to the filesystem
+ * walk.
  */
 async function gitVisiblePaths(root: string, signal: AbortSignal): Promise<string[] | undefined> {
   try {
@@ -367,12 +294,7 @@ async function gitVisiblePaths(root: string, signal: AbortSignal): Promise<strin
 }
 
 /**
- * The implicit `.` range, in Git's order.
- *
- * The paths are sorted before hashing, exactly as a directory walk sorts its entries: `git ls-files` is stable but
- * its `--others` half is not promised to be, and a digest must not depend on the order a listing happened to use.
- * A path Git reports that no longer exists is skipped — the working tree is the subject, and a staged deletion is
- * an absent file rather than an unreadable one.
+ * The implicit `.` range in sorted Git order. Paths Git reports that no longer exist are skipped.
  */
 async function snapshotGitVisible(
   root: string,
@@ -401,8 +323,7 @@ async function snapshotGitVisible(
       await admitLink(absolute, relative, collection);
       continue;
     }
-    // A submodule is a directory Git tracks as one entry; walk it so its contents are covered exactly as a
-    // recursive listing would have covered them.
+    // Walk submodules so their contents are covered.
     if (stat.isDirectory()) {
       await walk(absolute, relative, collection, runtimePaths, signal, false, true);
       continue;
@@ -454,23 +375,14 @@ export async function snapshotCompletionInputs(
     bytes: 0,
     maxFiles: options.maxFiles ?? MAX_FILES,
   };
-  // The identity of the root is hashed first, so two workspaces with identical content produce different
-  // digests: evidence is evidence about *this* directory, not about a directory that happens to look like it.
+  // Hash the root's identity first, so evidence is tied to this directory.
   collection.items.push(`root\0${canonicalRoot}\0`);
   for (const relative of normalized) {
     signal.throwIfAborted();
     /**
-     * A path named by the contract is the subject of its evidence, so the derived-directory heuristic may not
-     * remove it. `dist/out.txt` declared as an acceptance input is not build output to be ignored: skipping it
-     * made the two snapshots compare an empty range to an empty range, and a later change to the file left the
-     * verdict at `verified`.
-     *
-     * `.` is the one name that still means the implicit range (a task without `completionInputs`), and it keeps
-     * the exclusions. In a Git working tree it also narrows to Git's view of the root: tracked files and untracked
-     * files that are not ignored, so a dependency tree `.gitignore` already excludes is never read to prove the
-     * source did not change. The runtime's own state files are refused rather than silently skipped: a contract
-     * that names the database cannot be monitored, and dropping it would be the same false assurance in another
-     * form.
+     * Contract-named paths bypass the derived-directory exclusions. Only `.` means the implicit
+     * range (narrowed to Git's view in a working tree). Runtime state files named by a contract are
+     * refused.
      */
     const implicitRange = relative === '.';
     if (!implicitRange && runtimePaths.has(relative))
@@ -497,8 +409,7 @@ export async function snapshotCompletionInputs(
       exists = false;
     }
     if (!exists) {
-      // Absence is recorded rather than skipped: a file the checks read disappearing between two snapshots has
-      // to change the digest, and "it was not there" is a fact about the range that was monitored.
+      // Record absence, so a file disappearing between snapshots changes the digest.
       collection.items.push(`absent\0${relative}\0`);
       continue;
     }

@@ -8,18 +8,9 @@ import type { WorkspaceBinding } from '../../protocol/workspaces.ts';
 import type { Disposer } from '../../tools/dispatch.ts';
 
 /**
- * The sub-agent provider seam.
- *
- * Delegation used to be one closure the agent loop handed to the coordinator: "run this child, here is
- * how". That is a single implementation with no name, no stated abilities and no way to add a second
- * one — and, more importantly, no way for a caller to learn what the implementation *cannot* do. A
- * request for something unsupported was simply ignored, which is the worst possible answer: the caller
- * believes it asked for a different model (or a tool filter, or a depth cap) and never finds out.
- *
- * A provider is therefore a named object with a declared capability list, and the registry refuses a
- * request that asks for something the provider does not advertise, before any child session exists. The
- * refusal is loud and specific — `UNSUPPORTED_CAPABILITY` — because "accepted and ignored" is how a
- * safety property silently stops holding.
+ * The sub-agent provider seam. A provider is a named object with a declared capability list, and
+ * the registry refuses a request for an unadvertised capability (`UNSUPPORTED_CAPABILITY`) before
+ * any child session exists, so nothing is accepted and silently ignored.
  */
 export const SUBAGENT_CAPABILITIES = [
   /** `agentOptions`: the provider can run the child with options the parent chose, currently the model. */
@@ -33,20 +24,13 @@ export const SUBAGENT_CAPABILITIES = [
   /** The provider can give the child its own role prompt. */
   'persona',
   /**
-   * The provider can start the child from the parent's transcript instead of from nothing.
-   *
-   * Advertised separately from `persona` on purpose: inheriting a conversation and inheriting an identity are
-   * different promises, and a provider that runs children out-of-process may well be able to do the second
-   * without any way to do the first.
+   * The provider can start the child from the parent's transcript. Separate from `persona`:
+   * inheriting a conversation and an identity are different promises.
    */
   'contextFork',
   /**
-   * The provider can give the child its own execution directory rather than the parent's.
-   *
-   * A capability rather than a given, because it is a promise about *where the child's writes land*: a provider
-   * that runs its child somewhere this runtime does not manage cannot honour it, and a request that asked for
-   * isolation and was silently given the parent's directory would be the worst possible answer — the parent would
-   * believe two children could not overwrite each other when they share one tree.
+   * The provider can give the child its own execution directory. A capability because it promises
+   * where the child's writes land.
    */
   'workspaceIsolation',
 ] as const;
@@ -59,12 +43,8 @@ export interface SubAgentTask {
   objective: string;
   context?: string;
   /**
-   * The object this task must come back with, when the caller wants its own shape.
-   *
-   * Absent means the fixed report contract (`REPORT_SCHEMA`): summary, findings with evidence, unverified,
-   * blockers. Present means the child is held to *this* schema instead, and its answer arrives as `data`
-   * rather than `report` — the two are different promises, and a caller that asked for a shape it defined
-   * should not have to parse the shape it did not.
+   * The object this task must return, when the caller defines one. Absent means the fixed report
+   * contract (`REPORT_SCHEMA`); present means the answer arrives as `data` instead of `report`.
    */
   schema?: Record<string, unknown>;
 }
@@ -85,11 +65,8 @@ export interface SubAgentOutcome {
   /** The child's structured report, when it submitted one. */
   report?: SubAgentSummaryReport;
   /**
-   * The child's structured answer, when this task declared its own `schema`.
-   *
-   * Validated rather than trusted: the child submits it through a tool whose argument schema *is* the caller's
-   * schema, so a call that arrives at all has already been checked against it. It is deliberately not part of
-   * the child's summary — the card and the settlement notice keep one shape each, and neither is polymorphic.
+   * The child's structured answer for a task with its own `schema`, already validated by the submit
+   * tool's argument schema. Not part of the summary, which keeps one shape.
    */
   data?: unknown;
   /** Present for a forked child: what it inherited, so the parent's result can state it. */
@@ -101,16 +78,16 @@ export interface SubAgentParent {
   sessionId: string;
   workspace: string;
   /**
-   * The project the parent session belongs to, when it differs from where it works (a worktree). Its memories are
-   * the project's, so a provider that runs the child elsewhere points the child's memory here.
+   * The parent's project when it differs from where it works (a worktree), so the child's memory
+   * points at the project.
    */
   project?: string;
   /** 0 for a child of the top-level run. */
   depth: number;
 }
 /**
- * What the caller asks for. Every field is optional: a provider only has to be asked for what the
- * caller genuinely needs, and an absent field is never asserted against a capability.
+ * What the caller asks for. Every field is optional; absent fields are never asserted against a
+ * capability.
  */
 export interface SubAgentRequestOptions {
   /** `{model}` asks the provider to run this child on a specific model. */
@@ -120,27 +97,17 @@ export interface SubAgentRequestOptions {
   maxDepth?: number;
   toolFilter?: readonly string[];
   /**
-   * This child's own persona, which **replaces** the deployment's for it alone.
-   *
-   * Not to be confused with the sub-agent role prompt, which is a different statement: the role says what this
-   * child may do ("you are read-only"), and it is additive — a child is told both what its parent was told and
-   * what it is. A persona is who is speaking, and two of those in one prompt is a contradiction the model has to
-   * average. So a provider that declares the `persona` capability must put this text in a slot that shadows the
-   * deployment's rather than appending it (`AgentOptions.persona` is that slot in-process).
-   *
-   * `requestOptions()` no longer sends the role prompt here — it did, which made this option a promise the
-   * built-in provider could not honour without erasing the harness's own identity paragraph.
+   * This child's own persona, which replaces the deployment's for it alone. Unlike the additive
+   * role prompt, a provider declaring `persona` must put it in a shadowing slot
+   * (`AgentOptions.persona` in-process).
    */
   persona?: string;
   /** `true` starts the child from the parent's transcript instead of from nothing. */
   contextFork?: boolean;
   /**
-   * The execution-directory mode this task wants, after `auto` has been resolved against its role.
-   *
-   * Only requested when the task genuinely needs isolation. A `shared` task asks for nothing — sharing is what
-   * every provider already does — so a request that resolves to `shared` leaves this absent and a provider that
-   * runs its child elsewhere is still usable for it. `worktree` is a promise about where the writes land, and a
-   * provider that cannot keep it must refuse the task rather than accept it and run in the parent's directory.
+   * The execution-directory mode, after resolving `auto` against the role. Only `worktree` is
+   * requested; `shared` leaves it absent, and a provider that cannot isolate must refuse a
+   * `worktree` task.
    */
   workspace?: 'shared' | 'worktree';
 }
@@ -150,11 +117,8 @@ export interface SubAgentStartRequest {
   options: SubAgentRequestOptions;
   signal: AbortSignal;
   /**
-   * The directory this child was given, when the run isolates its children.
-   *
-   * Part of the *request* rather than of the options, because it is a decision the coordinator already made for this
-   * specific task and not something a provider may choose: the options say what was asked for, this says where the
-   * child must actually work. A provider that cannot use it must have refused the request at capability time.
+   * The directory this child was given. Part of the request because the coordinator already decided
+   * it; a provider that cannot use it must have refused at capability time.
    */
   binding?: WorkspaceBinding;
   /** Called as soon as the child session exists, which is what lets progress be published early. */
@@ -200,10 +164,8 @@ export class UnknownSubAgentProviderError extends Error {
   }
 }
 /**
- * Which requested options map to which capability.
- *
- * Kept next to the capability list so a new option cannot be added without deciding what makes a
- * provider able to honour it — the same single-source-of-truth rule the event types follow.
+ * Which requested options map to which capability, kept next to the list so each new option decides
+ * its capability.
  */
 const OPTION_CAPABILITIES: readonly [keyof SubAgentRequestOptions, SubAgentCapability][] = [
   ['agentOptions', 'agentOptions'],
@@ -243,8 +205,8 @@ export class SubAgentProviderRegistry {
     }));
   }
   /**
-   * Validates a request against the named provider's declared capabilities, and returns the provider.
-   * This runs *before* the child session exists, so a refused request leaves nothing behind.
+   * Validates a request against the provider's declared capabilities and returns it, before the
+   * child session exists.
    */
   resolve(name: string, options: SubAgentRequestOptions): SubAgentProvider {
     const provider = this.providers.get(name);
@@ -253,8 +215,7 @@ export class SubAgentProviderRegistry {
     for (const [option, capability] of OPTION_CAPABILITIES) {
       const requested = options[option];
       if (requested === undefined) continue;
-      // `false` asks for nothing: an option that is switched off must not be read as a request for the
-      // capability that would switch it on.
+      // `false` asks for nothing.
       if (requested === false) continue;
       if (Array.isArray(requested) && requested.length === 0) continue;
       if (typeof requested === 'string' && !requested.trim()) continue;
@@ -264,12 +225,8 @@ export class SubAgentProviderRegistry {
   }
 }
 /**
- * Adapts a plain "run this child" closure into a provider.
- *
- * The kernel's own delegation is exactly such a closure — the agent loop owns the store, the provider
- * and the tool registry the child needs, and this module must not import the loop (the dependency is
- * one-way). Wrapping it keeps the built-in path identical while making it one provider among however
- * many an embedder registers.
+ * Adapts a plain "run this child" closure into a provider. The kernel's own delegation is such a
+ * closure; this module must not import the agent loop.
  */
 export function inProcessProvider(options: {
   name?: string;

@@ -3,29 +3,17 @@ import type { SessionStore } from '../../storage/sqlite.ts';
 import { envelopeEvent } from '../envelope.ts';
 
 /**
- * What each round of a run asked the model to read, recorded once per request the round decided on.
- *
- * The record is `context.system` rather than the compose step's own text, and that is not a detail:
- * `prepareContext` is free to change what it is given — it is the call that decides whether to compress, and that
- * decision can rewrite the prompt — so the prompt the request carries is only knowable after it. A record taken
- * earlier would name a prompt nobody was ever sent.
- *
- * Once per round, plus once more when a provider-confirmed overflow re-prepares the context and re-sends under a
- * different summary — that round really did send two envelopes, and the log says so rather than keeping only the
- * first. Retries are deliberately not recorded again: they re-send the same request, so a second record would be
- * a second answer to a question that has one.
+ * What each round asked the model to read, recorded after `prepareContext` (which may rewrite the
+ * prompt). Once per round, plus once more when an overflow recovery re-sends under a different
+ * summary. Retries re-send the same request and are not recorded again.
  */
 export class RunEnvelopes {
   private readonly store: SessionStore;
   private readonly sessionId: string;
   private readonly runId: string;
   /**
-   * The identities the session's newest envelope already carries, so this run records rather than re-copies.
-   *
-   * Seeded from the log rather than from an empty hand: a reopened session whose prompt and catalogue have not
-   * changed since the last run would otherwise write a second copy of each — and the catalogue is the large
-   * half, so that is the copy worth avoiding. Within the run these are updated as rounds go, so a prompt that
-   * changes mid-run still arrives with its own text.
+   * Identities the session's newest envelope already carries, seeded from the log and updated per
+   * round, so unchanged prompts and catalogues are not copied again.
    */
   private systemHash: string | undefined;
   private toolsHash: string | undefined;

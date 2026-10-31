@@ -149,16 +149,9 @@ function taskAttemptStatus(
 }
 
 /**
- * Persist terminal attempt evidence inside the run's own finalization transaction.
- *
- * This is deliberately not a transaction of its own. It is handed to `SessionStore.finishRun`, which runs it
- * before writing the completion record and the run row, so the Task, the Attempt and the Run either commit
- * together or commit nothing. The earlier shape wrote the task first and learned about a failed run-end invariant
- * or a failed run write afterwards, leaving Task=completed beside Run=failed and letting the Host announce
- * `task.completed` for a run that never finished.
- *
- * It throws when the attempt cannot be written: the caller's transaction must roll back rather than persist a
- * run row whose attempt still says in_progress or, worse, claims a completion the run never reached.
+ * Persist terminal attempt evidence inside `SessionStore.finishRun`'s transaction, so task, attempt
+ * and run commit together or not at all. Throws when the attempt cannot be written, rolling the
+ * transaction back.
  */
 export function finishRunTask(options: FinishRunTaskOptions): RunTaskSettlement | undefined {
   const { store, sessionId, task, taskAttempt, status, error, verification } = options;

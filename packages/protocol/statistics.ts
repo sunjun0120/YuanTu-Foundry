@@ -1,26 +1,18 @@
 import type { Usage } from './index.ts';
 /**
- * What a session has spent and how long it took, in the shape DSH's session panel reads.
+ * What a session has spent and how long it took, defined the same way as DSH's session panel so the
+ * two agree:
  *
- * Every figure here is defined the way the DSH harness defines it, because the desktop shows these numbers
- * next to DSH's own and two answers to "how long did the model take" would be worse than one:
+ * - `modelMs` is the step's wall time (start to assembled answer), retries included; a step with no
+ *   answer contributes nothing.
+ * - `firstTokenMs` runs from step start to first visible text.
+ * - `decodeMs` starts at visible body text; `decodeTokens` excludes reasoning and counts only
+ *   text-only answers with a known usage split. Throughput needs `decodeKnown`.
+ * - `toolMs` pairs a call with its result, approval waits included.
+ * - `turns`/`steps` count closed boundaries, so counts match a reloaded log.
  *
- * - `modelMs` is the *step's* wall time (`step/start` → the assembled answer), not the provider call's. A
- *   round that retried its request, or spent time building a request before sending it, is one step and one
- *   span, and a step that assembled no answer — a cancellation or a failure mid-stream — contributes no span
- *   at all rather than a partial one.
- * - `firstTokenMs` counts from the step's start to the step's first visible text, so it survives a retry
- *   inside the step exactly as the span does.
- * - `decodeMs` starts at visible body text. `decodeTokens` excludes reported reasoning and only counts
- *   text-only answers with a known usage split. Throughput is available only when `decodeKnown` is true.
- * - `toolMs` pairs a tool call with its result, so it includes any approval wait in between.
- * - `turns`/`steps` are the session's closed boundaries. A run is one turn, and a run that closed no step
- *   contributes no turn — which is what makes the counts agree with a reloaded log instead of only with a
- *   process that happened to be watching.
- *
- * `cacheKnown`, `timingKnown` and `usageComplete` say whether the provider ever failed to report part of
- * what these totals are made of. They are recorded rather than inferred, and they survive the reload because
- * the run's own result carries them.
+ * `cacheKnown`, `timingKnown` and `usageComplete` record whether the provider ever omitted part of
+ * a total.
  */
 export interface SessionStatistics {
   /** Request-level spans, independent of the legacy completed-step wall time. */
@@ -78,11 +70,8 @@ export function emptyRequestTiming(): RequestTiming {
   };
 }
 /**
- * What a token budget counts: output, plus the input the provider did not serve from its prompt cache.
- *
- * A cached read is the prefix an earlier round already paid for, replayed; counting it makes a budget run out in
- * proportion to rounds × context rather than to new work. A provider that reports no cache figure has every input
- * token counted, which is the conservative reading of "unknown".
+ * What a token budget counts: output plus uncached input. Cached reads are excluded so budgets
+ * track new work, not rounds x context. With no cache figure, all input counts.
  */
 export function billableTokens(usage: Usage): number {
   const cached = Math.max(0, Math.min(usage.cachedInputTokens ?? 0, usage.inputTokens));
@@ -208,11 +197,8 @@ export function normalizeStatistics(value: unknown): SessionStatistics {
   return clean;
 }
 /**
- * Sum two totals.
- *
- * The five boundary and decode fields are read defensively, because they are newer than the log that is
- * folded here: a session recorded by an older build carries statistics without them, and `undefined + 0`
- * would poison every later total with `NaN` instead of reading as "this run closed no step we counted".
+ * Sum two totals. Newer fields are read defensively because older logs lack them and `undefined`
+ * would turn every total into `NaN`.
  */
 export function addStatistics(a: SessionStatistics, b: SessionStatistics): SessionStatistics {
   a = normalizeStatistics(a);

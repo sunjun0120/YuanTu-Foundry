@@ -1,21 +1,8 @@
 /**
- * What a parent still owes its attention: work it started that finished without anybody reading the result.
- *
- * Delegation with `wait: false` is the one place where work escapes the turn that started it, and the parent
- * model's context is the only place its outcome can be delivered. Without a notice, the parent has to *poll*
- * — and a parent that has already answered the user has nothing to poll from: the coordinator that knew about
- * the child lived inside the run that just ended, so `collect_subagents` on the next turn answers "no
- * outstanding sub-agents" while the child's finished work sits in its own session, unread.
- *
- * This module reads the parent's own log, which is the only place that survives the run: `subagent.assigned`
- * names the child, `subagent.finished` and `subagent.interrupted` say how it ended, and `subagent.collected`
- * says the parent has already been told. The difference is the notice.
- *
- * A background command is the same gap with a different shape (`commandNotices`, below): the process outlives
- * the call that started it, so the exit code and the output have nowhere to be announced. Both are folded from
- * the log rather than from anything in memory, both repeat until the model reads the result, and both are
- * bounded per call so a session with a hundred delegations and a hundred commands cannot turn every request
- * into a wall of text.
+ * What a parent still owes its attention: background work that finished without anyone reading the
+ * result. Folded from the parent's log (`subagent.assigned`, `subagent.finished`/`interrupted`,
+ * `subagent.collected`), since the coordinator dies with its run. Background commands
+ * (`commandNotices`) are the same gap. Both notices repeat until read and are bounded per call.
  */
 import type { CommandRecord } from '../../protocol/jobs.ts';
 import type { SubAgentRole, SubAgentSummary } from '../../protocol/index.ts';
@@ -36,13 +23,7 @@ export interface SettlementNotice {
   /** The structured report, when the child submitted one. The full text always lives in the child session. */
   report?: SubAgentSummary['report'];
 }
-/**
- * Children whose settlement the parent has not read, oldest first.
- *
- * A child is listed once it has settled and until a `subagent.collected` record names it. A child that is
- * still working is deliberately absent: it is not a result the parent is missing, and announcing it would make
- * every request carry the list of things that have not happened yet.
- */
+/** Settled children the parent has not read, oldest first. Children still working are absent. */
 export function settlementNotices(
   store: SessionStore,
   sessionId: string,
@@ -51,10 +32,7 @@ export function settlementNotices(
   return settlementBacklog(store, sessionId, limit).notices;
 }
 /**
- * The uncollected settlements up to `limit`, and how many there are in all.
- *
- * The total is what lets the notice say that more are waiting: a list cut at the limit without saying so reads as
- * the whole of it, and the ones past the cut would never be asked about.
+ * The uncollected settlements up to `limit`, plus the total so the notice can say more are waiting.
  */
 export function settlementBacklog(
   store: SessionStore,
@@ -71,10 +49,7 @@ export function settlementBacklog(
   return { notices, total: settled.size };
 }
 /**
- * The settlement fold, kept per store and continued from the last seq it read (see `logProjection`).
- *
- * The notice is assembled for every prompt and `collect_subagents` reads it on every call, so folding the whole log
- * each time made both cost the session's age rather than what changed since the last read.
+ * The settlement fold, cached per store and continued from the last seq read (see `logProjection`).
  */
 const settlementLog = logProjection<{
   assigned: Map<string, { childSessionId: string; role: SubAgentRole; objective: string }>;
@@ -138,17 +113,9 @@ const settlementLog = logProjection<{
   },
 );
 /**
- * The notice as the parent model reads it.
- *
- * Prose rather than JSON because it is an instruction: it has to say what happened, that the child is still
- * reachable, and which of the two id spaces each follow-up tool wants — a parent that has to guess between a
- * task id and a child session id will guess wrong.
- *
- * It deliberately carries **no report text**, not even the summary. This block goes into the system prompt,
- * and a child's prose is not the parent's instruction: an `explore` child reads files it did not write, so its
- * report is exactly the kind of text that must reach the parent as *data*, which is the position a tool result
- * has and a system prompt does not. The notice says what happened and points at the tool; `collect_subagents`
- * hands over the report itself.
+ * The notice as the parent model reads it: what happened, that the child is reachable, and which id
+ * each follow-up tool takes. It carries no report text: this goes into the system prompt, and child
+ * output must reach the parent as data via `collect_subagents`.
  */
 export function settlementNoticeText(
   notices: readonly SettlementNotice[],
@@ -171,28 +138,13 @@ export function settlementNoticeText(
     '\nRead a report with `collect_subagents` (by its id) or `job_output` (by its childSessionId); a child that was cancelled or interrupted can be asked to continue with `send_message`, which resumes the same child with its earlier work in its own transcript. Until you collect one it stays on this list.'
   );
 }
-/**
- * The background commands a session started whose outcome the model has not read.
- *
- * The other half of the same gap, in the same shape: a command is started inside a turn and finishes outside it,
- * so the tool result that would have carried the exit code belongs to a call nobody is making any more. This is
- * what makes "the build failed ten minutes ago" something the next turn can know.
- */
+/** Background commands whose outcome the model has not read. */
 export function commandNotices(store: SessionStore, sessionId: string, limit = 8): CommandRecord[] {
   return unsettledCommands(store, sessionId, limit);
 }
 /**
- * The command notice as the model reads it.
- *
- * Like the sub-agent notice and for the same reason, this carries **no output text**: a command's output is
- * whatever the program printed, which is exactly the kind of text that must reach the model as *data* — the
- * position a tool result has — rather than as a line of its instructions. The notice says which command finished
- * and how, and `job_output` hands over the output itself.
- *
- * It also says what is left of that output after a restart, because that changes what the model should expect:
- * the tail recorded at settlement is answerable from the log forever, while the full ring lived in the process
- * that ran the command. A model that knows which of the two it is reading does not conclude the command was
- * quiet when it was merely gone.
+ * The command notice. No output text, for the same reason; `job_output` returns it. Says whether
+ * only the recorded tail survives a restart.
  */
 export function commandNoticeText(notices: readonly CommandRecord[]): string {
   if (!notices.length) return '';

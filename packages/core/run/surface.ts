@@ -6,17 +6,9 @@ import type { ToolRegistry } from '../../tools/registry.ts';
 import { LoadedDeferredTools, sameToolSet } from './catalog.ts';
 
 /**
- * What one run's next request is made of on the model's side: the system prompt, the tool schema it is sent, the
- * catalog a program may call, and the two policies both are derived from.
- *
- * These used to be six `let`s in `Agent.run`, each rebuilt by hand at three different places — a policy switched
- * mid-run, a plan approved mid-run, a deferred tool loaded — and every one of those places had to remember to
- * rebuild all of them together. They change together or the run tells the model something untrue (a prompt that
- * says read-only beside a schema that can write, or the reverse), so they live together and change through one
- * `rebuild`.
- *
- * `readOnly` stays the run's own: the approver, the delegation guard and the tool batch read it per call, and this
- * only needs to *see* it when a schema is built.
+ * What one run's next request consists of on the model's side: the system prompt, the tool schema,
+ * the program catalog, and the two policies they derive from. They must change together, so they
+ * change through one `rebuild`. `readOnly` stays the run's own.
  */
 export interface RunSurfaceOptions {
   store: Pick<SessionStore, 'messages' | 'goal'>;
@@ -59,11 +51,8 @@ export class RunSurface {
     this.rebuild();
   }
   /**
-   * Re-read both policies; rebuild and answer `true` when either changed.
-   *
-   * The desktop can switch the permission preset or the sandbox while a run is in flight, and a run that kept the
-   * snapshot it started with would keep offering tools the policy now denies and describing an environment it is no
-   * longer in. A call already in flight keeps the policy it was approved under — the tool layer rechecks that.
+   * Re-read both policies; rebuild and return `true` when either changed. Calls in flight keep
+   * their approved policy.
    */
   refreshPolicies(): boolean {
     const policy = this.options.currentPolicy?.();
@@ -84,10 +73,8 @@ export class RunSurface {
     this.rebuild();
   }
   /**
-   * Widen (or narrow) the catalog when the transcript loaded a deferred tool or a goal changed.
-   *
-   * The transcript part only grows, so this rebuilds once per load or goal transition rather than per round. The
-   * prompt is not rebuilt: the tool list is not part of it.
+   * Rebuild the catalog when a deferred tool was loaded or a goal changed. The prompt does not
+   * include the tool list, so it is not rebuilt.
    */
   refreshLoaded(): void {
     if (!this.loaded) return;

@@ -99,14 +99,8 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
     code = undefined;
   }
   /**
-   * Stop hooks may annotate the answer or touch source files. They must settle before the final fingerprint — and
-   * before the tool resources close.
-   *
-   * They used to run after `tools.close()`, which had already shut the browser, MCP servers and language servers a
-   * hook might reasonably use, and — for a registry that owns its hooks — closed the hook registry itself, which
-   * releases the bridge an embedded or CLI host's hooks are reached through. A hook that "may touch source files"
-   * could find nothing left to touch them with. A cleanup failure still fails the run below; the hooks see the
-   * status the run ended with, before cleanup had a chance to change it.
+   * Stop hooks run before the final fingerprint and before tool resources close, since they may
+   * touch source files with those tools. They see the run's status before cleanup could change it.
    */
   try {
     const stopped = await underExecutionPolicy(agent.executionPolicy?.(), () =>
@@ -181,29 +175,19 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
     ...(completion.state.summary ? { completion: completion.state.summary } : {}),
   };
   /**
-   * Anything still queued was never folded into a turn, and the run it was queued for is now over. The
-   * record says so — the reason distinguishes "the person pressed Stop" from "the run reached its end
-   * first" — because the alternative, an empty queue nobody wrote about, is exactly the silent loss the
-   * durable inbox exists to remove. What is *not* written here is the crash case: a process that dies
-   * before this point leaves `input.queued` standing, which is how a later reader knows.
+   * Record anything still queued as never delivered, with the reason (Stop vs. run end). A crash
+   * before this leaves `input.queued` standing.
    */
   releaseRun(
     queue.clear().map((item) => item.id),
     status === 'cancelled' ? 'cancelled' : 'run-ended',
   );
   emit('queue.changed', { queue: [] });
-  /**
-   * The run-end promises are checked before the result is persisted, so a broken one is reported as a
-   * failed run rather than discovered later against a run that claims to have completed. `failed` is
-   * already part of `RunStatus`, so nothing downstream has to learn a new vocabulary — and a run whose
-   * promises were broken is exactly what `failed` means.
-   */
+  /** Check run-end invariants before persisting, so a broken promise makes the run `failed`. */
   await checkRunEnd(result, [...emittedTypes]);
   /**
-   * The verdict was computed for the status the run believed it had. A run-end invariant can still lower it, so
-   * status, error and the completion summary move together here, before either terminal row is written. The
-   * previous order wrote the task attempt first and only then discovered the invariant failure, which is how a
-   * failed run kept a completed attempt (and could announce `task.completed` to a dependent task).
+   * An invariant can lower the status, so status, error and completion summary move together before
+   * any terminal row is written.
    */
   if (result.status !== status) {
     status = result.status;
@@ -229,12 +213,9 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
       ? boundGoal.objective
       : undefined;
   /**
-   * The task attempt, the completion record and the run row are one commit.
-   *
-   * `settleTask` runs inside `finishRun`'s transaction, before anything terminal is written. A failure there
-   * aborts the whole commit, so an attempt can never be durable as completed beside a run that failed to
-   * finalize; the retry below re-runs the same commit, and only when the settlement itself was what threw does it
-   * fall back to writing the run row alone (an open attempt is honest, a falsely completed one is not).
+   * The task attempt, completion record and run row commit together inside `finishRun`'s
+   * transaction. If the settlement itself threw, the retry writes the run row alone: an open
+   * attempt is honest, a falsely completed one is not.
    */
   let taskSettlementFailed = false;
   const settleTask =
@@ -273,10 +254,8 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
         reason: 'finalization-failed',
       };
     /**
-     * The retry is the same write, so it can fail the same way — and a rejection from here would escape the
-     * `finally` that called this, turning a run that has a result into a rejected `run()` with no
-     * `run.finished` at all. The result stays in memory for the caller; the row this could not write is what
-     * the next process's reconciliation converges, and that is the smaller loss of the two.
+     * The retry can fail too; don't let it reject out of `finally`. The next process's
+     * reconciliation converges the unwritten row.
      */
     try {
       store.finishRun(result, taskSettlementFailed ? {} : finalizationOptions);
@@ -307,11 +286,8 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
 }
 
 /**
- * Runs the `run-end` invariants and turns a violation into a failed run.
- *
- * A violation is logged as well as recorded: the registry is process-wide and a host may outlive many
- * runs, so the log is where an operator sees that a promise broke even if nobody looks at this run's
- * result.
+ * Runs the `run-end` invariants and turns a violation into a failed run. Also logged, since the
+ * registry outlives individual runs.
  */
 export async function checkRunEnd(
   agent: Pick<AgentOptions, 'invariants' | 'onEvent' | 'store'>,

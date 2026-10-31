@@ -1,32 +1,21 @@
 /**
  * The vocabulary of sub-agent workspace isolation.
  *
- * A session keeps belonging to the *logical* project it was created for (`Session.workspace`), and what a run's
- * file tools, commands, instructions and spill actually touch is resolved from a separate, durable binding. The
- * two are different statements and this module is where that difference is written down: a project is where a
- * session lives, an execution root is the directory a child works in while its parent's own directory stays as
- * the parent left it.
- *
- * Everything a store or an RPC peer hands back is re-checked here rather than trusted. A binding read out of
- * SQLite, or sent over the client seam, is data: an unrecognised state, a relative path, a truncated digest or a
- * fork-forming first state would otherwise be interpreted as if this build had written it.
+ * A session belongs to its logical project (`Session.workspace`); what a run's tools actually touch
+ * is resolved from a separate durable binding, so a child can work in its own execution root while
+ * the parent's directory stays untouched. Everything read from a store or an RPC peer is
+ * re-validated here.
  */
 
 /**
- * How a delegation decides a child's execution directory.
- *
- * `auto` is what the product ships once isolation has been accepted: read-only exploration shares the
- * delegator's directory (it cannot change anything, so a copy would only cost disk), and anything that may write
- * gets its own worktree. `shared` keeps the pre-isolation behaviour verbatim and exists so an operator can ask
- * for it deliberately; `worktree` isolates every child, including read-only ones.
+ * How a delegation picks a child's execution directory. `auto` shares the directory for read-only
+ * children and gives writers their own worktree; `shared` never isolates; `worktree` isolates every
+ * child.
  */
 export const WORKSPACE_MODES = ['auto', 'shared', 'worktree'] as const;
 /**
- * How much working tree the runtime will hold evidence about, in one place.
- *
- * A child's frozen snapshot and a completion contract's fingerprint describe the same tree, so they share one budget:
- * a tree that can be frozen for a delegated task can also be verified when the task ends, and a large unrelated asset
- * is refused (or accepted) by both rather than passing one and sending the other to review.
+ * How much working tree the runtime will hold evidence about. Child snapshots and completion
+ * fingerprints share one budget, so a tree that can be frozen can also be verified.
  */
 export const WORKSPACE_SCALE_LIMITS = {
   /** One file larger than this is not a source file these features were built for. */
@@ -39,11 +28,8 @@ export function isWorkspaceMode(value: unknown): value is WorkspaceMode {
   return typeof value === 'string' && (WORKSPACE_MODES as readonly string[]).includes(value);
 }
 /**
- * Where a managed workspace is in its life.
- *
- * `preparing` exists as a durable state *before* any child session does, which is what makes an interrupted
- * allocation recoverable instead of an orphan directory: a row in `preparing` is a directory this service may
- * still own, and one with no session is not a child anybody can address.
+ * Where a managed workspace is in its life. `preparing` is durable before any child session exists,
+ * so an interrupted allocation is recoverable rather than an orphan directory.
  */
 export const WORKSPACE_STATES = [
   'preparing',
@@ -59,17 +45,10 @@ export function isWorkspaceState(value: unknown): value is WorkspaceState {
   return typeof value === 'string' && (WORKSPACE_STATES as readonly string[]).includes(value);
 }
 /**
- * Which states a state may move to, in one table.
- *
- * A transition that is not here is refused by the store rather than written, so a crash-recovery pass cannot
- * accidentally resurrect an archived workspace as `ready` or hand a `preparing` row to a tool. `blocked` is reachable
- * from both live states because either can fail validation, and `archived`/`removed` are terminal except for an
- * explicit restore, which starts over at `preparing`.
- *
- * `ready → preparing` is on the list because an explicit restore is not only for an *archived* workspace: a binding
- * whose directory was removed or replaced behind its back is still `ready` in its row, and rebuilding it has to pass
- * through the same `preparing` state a fresh allocation does. That is what keeps "this directory exists and has been
- * validated" a single fact, rather than one rule for allocation and a second, weaker one for recovery.
+ * Allowed state transitions; the store refuses anything else. `blocked` is reachable from both live
+ * states; `archived` and `removed` are terminal except for an explicit restore, which goes through
+ * `preparing`. `ready -> preparing` lets a binding whose directory vanished be rebuilt through the
+ * same validation.
  */
 export const WORKSPACE_TRANSITIONS: Readonly<Record<WorkspaceState, readonly WorkspaceState[]>> = {
   preparing: ['ready', 'blocked', 'removing', 'removed'],
@@ -84,11 +63,8 @@ export function canTransition(from: WorkspaceState, to: WorkspaceState): boolean
   return from === to || WORKSPACE_TRANSITIONS[from].includes(to);
 }
 /**
- * How a binding came to exist.
- *
- * `shared` is not "isolation that failed": it is the statement that the child runs in the delegator's own
- * directory, which is exactly what every delegation did before this feature and what an explicit `shared` run
- * still asks for. A reader that showed it as isolated would be promising a protection that is not there.
+ * How a binding came to exist. `shared` means the child runs in the delegator's directory, with no
+ * isolation; readers must not present it as isolated.
  */
 export type WorkspaceKind = 'shared' | 'worktree';
 export function isWorkspaceKind(value: unknown): value is WorkspaceKind {
@@ -96,13 +72,9 @@ export function isWorkspaceKind(value: unknown): value is WorkspaceKind {
 }
 
 /**
- * One durable directory assignment.
- *
- * `sessionId` is null exactly while the row is `preparing`: the directory exists before the child session does,
- * because a child session that cannot get a directory must not exist at all. `projectRoot` is the logical
- * project (`Session.workspace`, unchanged) and `executionRoot` is where the work happens; for a shared binding
- * the two are the same directory, which is what lets every existing session be read as a shared binding without
- * rewriting its history.
+ * One durable directory assignment. `sessionId` is null exactly while `preparing`, since the
+ * directory is created before the child session. For a shared binding `projectRoot` and
+ * `executionRoot` are the same.
  */
 export interface WorkspaceBinding {
   id: string;
@@ -125,12 +97,9 @@ export interface WorkspaceBinding {
 }
 
 /**
- * A frozen picture of the delegator's directory at one moment.
- *
- * The bytes captured here — including files that were staged and then modified again, deletions and untracked
- * files — are the baseline every child of one delegation call sees. `baseCommit` is a synthetic commit built
- * from a private index, so the user's own index and HEAD are never touched, and `manifestHash` is what makes the
- * manifest itself comparable across processes.
+ * A frozen picture of the delegator's directory (staged, modified, deleted and untracked files),
+ * the baseline for every child of one delegation. `baseCommit` comes from a private index, so the
+ * user's index and HEAD are untouched.
  */
 export interface WorkspaceSnapshot {
   id: string;
@@ -162,11 +131,8 @@ export function isWorkspaceResultStatus(value: unknown): value is WorkspaceResul
 }
 
 /**
- * One frozen set of changes a child produced.
- *
- * `comparisonTree` is what the result is a difference *against*: the frozen baseline for a first export, and the
- * subtree of the last successful import for every later one. That is what keeps a second export from re-offering
- * changes the parent already accepted, and it moves only after an import actually succeeded.
+ * One frozen set of changes a child produced. `comparisonTree` is the baseline for the first export
+ * and the last successful import afterwards, so accepted changes are not offered again.
  */
 export interface WorkspaceResult {
   id: string;
@@ -183,11 +149,8 @@ export interface WorkspaceResult {
 }
 
 /**
- * The durable receipt of one import, keyed by result, digest and target binding.
- *
- * It exists so that a repeated request is answered with what already happened instead of writing the same bytes
- * twice: the receipt is written inside the same transaction that records the file change, so "the change exists"
- * and "this result was imported" cannot disagree.
+ * The durable receipt of one import, written in the same transaction as the file change, so a
+ * repeated request returns what already happened.
  */
 export interface WorkspaceApplyReceipt {
   id: string;
@@ -199,12 +162,9 @@ export interface WorkspaceApplyReceipt {
 }
 
 /**
- * The codes a blocked workspace reports, as a closed set.
- *
- * Structured rather than prose because the callers that must act on a refusal are not people: the coordinator
- * decides whether to fail the task or fall back to a shared read-only child, the Host decides whether the user
- * needs to be told, and a test asserts the specific reason. `WORKSPACE_SOURCE_CHANGED` in particular is the
- * answer to "the directory moved while I was freezing it", which must never be reported as a generic failure.
+ * The codes a blocked workspace reports, as a closed set for callers that branch on them.
+ * `WORKSPACE_SOURCE_CHANGED` (the directory changed while freezing) must never be reported as
+ * generic.
  */
 export type WorkspaceFailureCode =
   | 'WORKSPACE_POLICY_UNSUPPORTED'
@@ -247,22 +207,16 @@ export function workspaceFailureMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/* ------------------------------------------------------------------------------------------------
+/**
+ * ------------------------------------------------------------------------------------------------
  * Validation
  *
- * One implementation per rule, used by both the store (reading rows) and the protocol boundary (reading RPC).
- * Two copies is how a value written by one build and read by another ends up interpreted differently in the two
- * places that were supposed to agree about it.
- * ---------------------------------------------------------------------------------------------- */
+ * One implementation per rule, shared by the store and the RPC boundary.
+ * ----------------------------------------------------------------------------------------------
+ */
 
 const MAX_ID = 200;
-/**
- * Whether a string is usable as an identifier, and what "usable" means here.
- *
- * Ids are generated locally (`randomUUID`, a snapshot's own digest or a service-made id) and are also read back
- * from durable rows, so the check is about shape rather than provenance: no control characters, no path
- * separators (an id is never a path fragment), and a bounded length.
- */
+/** A usable identifier: no control characters, no path separators, bounded length. */
 export function workspaceId(value: unknown): string {
   if (typeof value !== 'string' || !value.trim() || value.length > MAX_ID)
     throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Invalid workspace identifier');
@@ -275,11 +229,7 @@ export function optionalWorkspaceId(value: unknown): string | null {
   return workspaceId(value);
 }
 /**
- * A directory this runtime may act on, as an absolute path.
- *
- * Relative paths are refused rather than resolved: a binding is created from a directory the runtime already
- * resolved, so a relative one is either a bug or a hand-edited row, and guessing a base directory for it would
- * silently point a child at the wrong tree.
+ * An absolute directory path. Relative paths are refused, never resolved against a guessed base.
  */
 export function workspacePath(value: unknown, field = 'path'): string {
   if (typeof value !== 'string' || !value.trim() || value.length > 4_096)
@@ -291,11 +241,7 @@ export function workspacePath(value: unknown, field = 'path'): string {
   return value;
 }
 /**
- * A Git object id, in the width this repository actually uses.
- *
- * Not a fixed 40 characters: SHA-256 repositories exist and produce 64, and a validator that only accepted 40
- * would refuse to read a perfectly good binding. Nor is it "any hex string": the length has to be a real object
- * format, or a truncated digest would be accepted as an id and later fail as a missing object.
+ * A Git object id: 40 (SHA-1) or 64 (SHA-256) hex characters, so truncated digests are rejected.
  */
 export function gitObjectId(value: unknown, field = 'object'): string {
   if (typeof value !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value))
@@ -323,7 +269,7 @@ export function relativeWorkspacePath(value: unknown): string {
     throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Invalid workspace path');
   if (value.includes('\u0000'))
     throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Invalid workspace path');
-  // `.` and `..` segments are what a path-traversal bug looks like after normalisation stopped helping.
+  // Empty, `.` and `..` segments indicate path traversal.
   if (value.split('/').some((segment) => segment === '' || segment === '.' || segment === '..'))
     throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Invalid workspace path');
   return value;
@@ -430,11 +376,8 @@ export function workspaceApplyReceiptFrom(value: unknown): WorkspaceApplyReceipt
 }
 
 /**
- * The state a *new* binding starts in, and the one fact a caller must not get wrong.
- *
- * A binding is written before the session it will belong to exists, so it starts at `preparing` with no session.
- * Exported as a function rather than left to each writer because two writers disagreeing about the first state
- * would produce rows that recovery cannot classify.
+ * The state a new binding starts in: `preparing` with no session. A function so every writer
+ * agrees.
  */
 export function newWorkspaceBindingState(): {
   state: WorkspaceState;

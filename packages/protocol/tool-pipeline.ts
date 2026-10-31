@@ -23,11 +23,8 @@ export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 /** Rendered order, for messages and docs. */
 export const PIPELINE_ORDER = PIPELINE_STAGES.join(' -> ');
 /**
- * The identity-protected view of one tool call as it enters a stage.
- *
- * Frozen, and holding a frozen clone of the call: a stage observes the call, it does not rewrite it.
- * A stage that wants a different call must deny and let the model ask again, which keeps every
- * recorded tool message a faithful record of what was requested.
+ * The frozen view of one tool call entering a stage. Stages observe the call and never rewrite it;
+ * to change it they deny and let the model ask again.
  */
 export interface ToolExecution {
   readonly call: ToolCall;
@@ -45,11 +42,8 @@ export type PreToolDecision = { action: 'deny'; reason: string };
 /** What a guard may return. Deny-only by construction, exactly like `PreToolDecision`. */
 export type GuardDecision = void | { deny: string };
 /**
- * What a post-execute stage may decide.
- *
- * `block` is decided first and wins: once any policy blocks a result, later replacements cannot
- * un-block it. `replace`/`replace-content` chain (the last one in registration order wins) so that a
- * later, more specific policy can refine an earlier one, and `add-context` accumulates.
+ * What a post-execute stage may decide. `block` wins over everything; `replace`/`replace-content`
+ * chain with the last in registration order winning; `add-context` accumulates.
  */
 export type PostToolDecision =
   | { action: 'accept' }
@@ -58,12 +52,8 @@ export type PostToolDecision =
   | { action: 'replace-content'; content: string }
   | { action: 'add-context'; context: string };
 /**
- * A tool result plus the model-visible context the pipeline asked to inject.
- *
- * `additionalContext` is deliberately *outside* `ToolResult`: the caller must decide where to put it.
- * In the agent loop it becomes a persisted user message after the batch's tool results, so injected
- * context is logged exactly like every other model-visible input instead of riding along inside a
- * tool block where neither the transcript nor the summary would show it.
+ * A tool result plus context the pipeline asked to inject. Kept outside `ToolResult` so the agent
+ * loop persists it as a user message after the batch, logged like any other model input.
  */
 export interface ToolExecutionResult extends ToolResult {
   additionalContext?: string[];

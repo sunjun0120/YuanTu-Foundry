@@ -12,25 +12,14 @@ export interface AssignedChild {
   /** When the delegation was recorded, which is the closest thing a child has to a start time. */
   at: string;
   /**
-   * Who the child speaks as, and which model it answers on, when the delegation named them.
-   *
-   * Both belong to the delegation rather than to the child's transcript, so a child resumed in a process that
-   * never saw the delegation would otherwise come back as somebody else: the deployment's persona instead of its
-   * own, and the *parent's* model instead of the one the task chose — silently, because the resumed turn looks
-   * exactly like a normal one.
-   *
-   * The rest of a delegation is deliberately not here; `subagent.assigned` in `packages/storage/events.ts` states
-   * what the record carries and what it does not.
+   * Persona and model, when the delegation named them, so a child resumed in another process is the
+   * same child. See `subagent.assigned` in `packages/storage/events.ts` for what else is recorded.
    */
   persona?: string;
   model?: string;
 }
 /**
- * The children a session durably recorded delegating to, read back out of its own log.
- *
- * This is the authority that survives a restart: a child whose activation is gone is still a child that was
- * delegated, and it is resumed from this record when it is messaged — with the descriptor the delegation named,
- * which is what makes the resumed turn the same child rather than a lookalike.
+ * The children a session recorded delegating to, read from its log; the authority across restarts.
  */
 export function assignedChildren(store: SessionStore, sessionId: string): AssignedChild[] {
   const found: AssignedChild[] = [];
@@ -56,11 +45,8 @@ export function assignedChildren(store: SessionStore, sessionId: string): Assign
   return found;
 }
 /**
- * A sub-agent as a job.
- *
- * The output is its own durable transcript rather than an in-flight buffer: a child's text lands in its own
- * session as it finishes each round, so `job_output` answers the same way whether the child is mid-turn,
- * idle, or was left behind by an earlier process — and a number that only grows makes the cursor honest.
+ * A sub-agent as a job. Output is the child's durable transcript, so `job_output` behaves the same
+ * whether the child is mid-turn, idle or from an earlier process.
  */
 export function subAgentJobProducer(options: {
   store: SessionStore;
@@ -72,12 +58,9 @@ export function subAgentJobProducer(options: {
   const durable = (id: string, scope: string) =>
     assignedChildren(store, scope).find((entry) => entry.childSessionId === id);
   /**
-   * The child's answer text from `cursor` on, at most the last `OUTPUT_WINDOW` characters of it.
-   *
-   * Positions are offsets into the child's assistant texts joined by newlines — the cursor a caller holds — but
-   * the joined text is never built: a poll used to concatenate the whole transcript to keep its last few thousand
-   * characters, so polling a long-lived child cost its entire history every time. The length is a sum, and only
-   * the messages the window reaches are joined.
+   * The child's answer text from `cursor` on, at most the last `OUTPUT_WINDOW` characters. Offsets
+   * index the assistant texts joined by newlines, but only the messages the window reaches are
+   * joined.
    */
   const outputFrom = (childSessionId: string, cursor: number | undefined) => {
     const parts: string[] = [];
@@ -111,12 +94,8 @@ export function subAgentJobProducer(options: {
     outputTokens: child.usage.outputTokens,
   });
   /**
-   * `cursor` undefined means "tell me what the job is, not what is new" — the shape `job_list` wants, and
-   * the shape the command listing had. A cursor beyond the end is refused rather than clamped, because
-   * silently returning everything would turn a caller's bookkeeping bug into a wall of text.
-   *
-   * `known` lets a caller that has already resolved the child hand it in: reading the log once per listed
-   * child would make `job_list` quadratic in the number of delegations a session has ever made.
+   * An undefined `cursor` asks for the job summary (`job_list`); a cursor past the end is refused.
+   * `known` lets a caller pass an already-resolved child to avoid re-reading the log.
    */
   const read = (
     id: string,
@@ -193,12 +172,7 @@ export function subAgentJobProducer(options: {
       // Cursor validation and every transcript/statistics read must succeed before taking delivery.
       const snapshot = read(job.id, job.scope, job.cursor);
       /**
-       * Reading the transcript *is* taking delivery.
-       *
-       * `job_output` and `collect_subagents` are two names for the same act — the parent reading what a child
-       * produced — so both have to stop the reminder, or a parent that read the transcript through the job
-       * tools would be told again on its next turn that it never collected the child. The id here is the child
-       * session id and the reminder matches either id, which is why this can be recorded from here at all.
+       * Reading the transcript is taking delivery, so record it as collected (by child session id).
        */
       if (resident(job.id, job.scope) ?? durable(job.id, job.scope))
         store.recordEvent(job.scope, 'subagent.collected', { ids: [job.id] });

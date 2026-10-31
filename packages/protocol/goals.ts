@@ -1,24 +1,12 @@
 /**
- * A goal: one objective a session is pursuing across runs, recorded so it survives the run that declared it.
+ * A goal: one objective a session pursues across runs, recorded so it outlives the run that
+ * declared it. Unlike a task (user-defined, with acceptance checks) or a todo list (the model's
+ * in-run plan), a goal is the model's own statement of intent, one per session, with a round count
+ * and a terminal state.
  *
- * The durable session already has two things that look adjacent and are not:
- *
- * - A **task** is created by the user, carries acceptance checks and triggers, and is what an attempt is
- *   verified against. It is the operator's definition of done.
- * - A **todo list** is the model's plan *inside* one session, replaced wholesale on every write, and
- *   deliberately not carried anywhere: it is progress the user watches, not a promise the runtime keeps.
- *
- * A goal is the missing third thing: the model's own statement of what it is trying to achieve, one per
- * session, with a round count that makes "how long has this been going on" answerable and a terminal state
- * that makes "is it still running" answerable. The record schedules nothing by itself: the transitions here
- * are pure, and an active goal is inert until something runs it. What runs it is not this module — a carrier
- * starts the next round through `runGoalRounds` (`packages/core/goal-driver.ts`) after a run finishes, and
- * admission at run start (`admitGoalRound` below, applied by the kernel) spends one of the goal's rounds.
- * The split is stated here rather than implied, because a record that looked like it would continue on its
- * own would be trusted to.
- *
- * The transitions are pure and live here, away from the tools that drive them, for the same reason
- * `todoDiff` does: the rules that decide whether an update is allowed are the part worth testing directly.
+ * The record schedules nothing. A carrier starts further rounds via `runGoalRounds`
+ * (`packages/core/goal-driver.ts`), and `admitGoalRound` spends one round at run start. Transitions
+ * are pure so the rules can be tested directly.
  */
 export type GoalStatus = 'active' | 'paused' | 'completed' | 'blocked';
 export const GOAL_ACTIONS = ['edit', 'pause', 'resume', 'complete', 'blocked'] as const;
@@ -27,21 +15,16 @@ export interface Goal {
   objective: string;
   status: GoalStatus;
   /**
-   * Runs that began with this goal active, including the one that created it.
-   *
-   * This is the count the blocked floor is expressed in: "I could not do this" is a claim that costs
-   * something, so it needs to be a claim that has actually been worked on.
+   * Runs that began with this goal active, including the one that created it. The blocked floor is
+   * expressed in this count.
    */
   roundsStarted: number;
   maxGoalRounds: number;
   blockedReason?: string;
   /**
-   * Why the runtime stopped continuing this goal on its own while leaving it active, when it did.
-   *
-   * An active goal tells the user rounds are coming; after the Host stands down (a round that learned nothing
-   * new, or this request's continuation limit) none are, until the user sends something. Recording it on the goal
-   * is what lets a window — including one opened later — say so instead of showing an active goal that has gone
-   * quiet. The next admitted round, or any change to the goal, clears it.
+   * Why the runtime stopped continuing this goal while leaving it active (no progress, or the
+   * request's continuation limit), so a window can say so. Cleared by the next admitted round or
+   * any goal change.
    */
   standDown?: GoalStandDown;
   createdAt: string;
@@ -56,12 +39,8 @@ export interface GoalStandDown {
 }
 export const GOAL_CEILINGS = {
   /**
-   * How many runs one goal may span, at most.
-   *
-   * The same ceiling DeepSeek Harness resolves for its continuation driver, and for the same reason: a round
-   * is one *run*, and the bound has to be large enough that a long task finishes rather than a number chosen to
-   * be cautious. What keeps it safe is not this number being small — it is that every round is an ordinary run
-   * with its own step, tool and time limits, and that a person can stop the session.
+   * Most runs one goal may span. Large on purpose: each round is an ordinary bounded run and a
+   * person can stop the session.
    */
   maxGoalRounds: 4_096,
   objectiveChars: 4000,
@@ -71,59 +50,31 @@ export const GOAL_DEFAULTS = {
   /** Runs a goal spans when the model does not ask for a number. */
   maxGoalRounds: 256,
   /**
-   * How many admitted rounds a `blocked` verdict needs before it is accepted.
-   *
-   * Not a veto on stopping — the model can always stop and explain itself in prose. It is a veto on
-   * *recording* the verdict on the first round, which is what makes the recorded state worth reading:
-   * a `blocked` goal means the work was attempted repeatedly, not that the first attempt was awkward.
+   * Admitted rounds required before a `blocked` verdict is recorded, so `blocked` means repeated
+   * attempts. The model can still stop and explain in prose.
    */
   blockedMinRounds: 3,
 } as const;
 /**
- * The most continuation rounds one request may start on its own, whatever the goal's budget says.
- *
- * A *second* bound, and the reason it is not `GOAL_CEILINGS.maxGoalRounds` is the whole point of having it:
- * that ceiling is a number the model can raise through `update_goal`, so a host that passed it here had one
- * bound wearing two names — a model that edited `max_goal_rounds` to the ceiling also decided how many rounds
- * the host would run unattended. This one is not reachable from a tool call at all.
- *
- * Deliberately far below the goal's default budget. Each continuation is a whole run with no round or token cap
- * of its own, so 256 of them behind one request was an unbounded bill in practice; a goal that needs more gets
- * another request from the user, which is the cheap way to check in before spending more than somebody agreed
- * to. The goal's own count carries across requests, so the next request continues where this one stopped.
+ * Most continuation rounds one request may start on its own. Separate from
+ * `GOAL_CEILINGS.maxGoalRounds` because that one the model can raise via `update_goal`; this one no
+ * tool can reach. Further rounds need another user request; the goal's count carries over.
  */
 export const GOAL_CONTINUATIONS_PER_REQUEST = 32;
 /**
- * The most tokens the automatic continuations of one request may spend, input and output together.
- *
- * The round cap above bounds how many runs start; this bounds what they cost, since a single round over a large
- * context can spend millions of tokens. Like the round cap it is not reachable from a tool call, and the next
- * request from the user starts a fresh allowance.
+ * Most tokens one request's automatic continuations may spend. Not reachable from a tool call; each
+ * user request starts a fresh allowance.
  */
 export const GOAL_TOKENS_PER_REQUEST = 20_000_000;
 /**
- * The goal actions only a person's own turn may take.
+ * Goal actions only a person's own turn may take. `edit` would let a model widen its own autonomy
+ * (`max_goal_rounds`), and `pause`/`resume` decide whether the runtime keeps going. A turn carrying
+ * the user's input (a run they started, or a round that consumed their message) may take all three.
  *
- * The goal exists so an objective outlives the run that declared it, and the runtime is what starts the rounds
- * nobody asked for. That makes the record's own standing the one thing a model must not be able to rewrite by
- * itself: `edit` is how a model would widen its own autonomy (`max_goal_rounds` is the autonomy budget), and
- * `pause` / `resume` decide whether the runtime keeps going at all — so `resume` is how a model would overrule
- * a person who paused the work, and `pause` is how it would quietly stop work a person is waiting for.
- *
- * A turn that carries the user's own input may do all three, because then it is the user's turn doing it: both
- * a run the user started and a round that consumed a message the user typed while it was working.
- *
- * `complete` and `blocked` are deliberately absent. Recording that the objective is achieved, or that a
- * concrete condition stopped it, is the model's job and its only way to end a goal; gating those would leave
- * every goal `active` forever and make the watchdog below meaningless.
+ * `complete` and `blocked` stay with the model: they are its only way to end a goal.
  */
 export const HUMAN_ONLY_GOAL_ACTIONS = ['edit', 'pause', 'resume'] as const;
-/**
- * Why this action may not be taken in this turn, or `undefined` when it may.
- *
- * A pure function rather than a check inside the tool body for the reason `changeGoal` is: this is a rule about
- * who is allowed to do what, and a rule worth having is worth testing without a tool call.
- */
+/** Why this action may not be taken in this turn, or `undefined` when it may. */
 export function goalAuthorityRefusal(action: GoalAction, humanTurn: boolean): string | undefined {
   if (humanTurn || !(HUMAN_ONLY_GOAL_ACTIONS as readonly GoalAction[]).includes(action))
     return undefined;
@@ -141,22 +92,15 @@ export function goalAuthorityRefusal(action: GoalAction, humanTurn: boolean): st
 }
 /** What one accepted action changes. Every field is optional: an action names only what it means. */
 export interface GoalChange {
-  /**
-   * Deliberately `unknown`: these are what the model proposed, and the validating functions below are the only
-   * place that turns a proposal into a value. Typing them as strings here would move half the check into the
-   * type system and leave the other half — the length, the emptiness, the range — in a second copy.
-   */
+  /** `unknown` on purpose: these are model proposals, validated only by the functions below. */
   objective?: unknown;
   maxGoalRounds?: unknown;
   blockedReason?: unknown;
 }
 /**
- * Every label a recorded change can carry: the five a tool can ask for, plus the three the runtime performs.
- *
- * `create` and `round` are not actions the model may request — they are what the runtime does when a goal is
- * declared and when a later run is admitted to it; `stand-down` is the Host recording that it stopped continuing. They are labels on the same event because a reader of the
- * log should see the goal's whole history in one shape, and because a projection that folded two event types
- * would have two chances to disagree.
+ * Every label a recorded change can carry: the five tool actions plus `create`, `round` and
+ * `stand-down`, which only the runtime performs. One event shape keeps the goal's history in one
+ * fold.
  */
 export type GoalChangeAction = GoalAction | 'create' | 'round' | 'stand-down';
 export class GoalError extends Error {
@@ -206,15 +150,13 @@ export function newGoal(input: { objective: unknown; maxGoalRounds?: unknown }, 
   };
 }
 /**
- * One accepted action, or a throw naming why it is not one.
- *
- * The three authority-adjacent rules a reader should be able to find here rather than in a tool body:
- * a terminal goal takes no edits except the one that reopens it, `blocked` needs a reason *and* a
- * worked-on goal, and nothing here can resurrect a completed objective except a changed objective.
+ * One accepted action, or a throw naming why not. A terminal goal takes no edits except one that
+ * reopens it, `blocked` needs a reason and a worked-on goal, and only a changed objective reopens a
+ * completed goal.
  */
 export function changeGoal(goal: Goal, action: GoalAction, input: GoalChange, now: string): Goal {
   const next: Goal = { ...goal, updatedAt: now };
-  // Any accepted change is somebody deciding what happens next, which is what a stand-down was waiting for.
+  // Any accepted change clears a stand-down.
   delete next.standDown;
   switch (action) {
     case 'edit': {
@@ -223,8 +165,8 @@ export function changeGoal(goal: Goal, action: GoalAction, input: GoalChange, no
       if (input.objective === undefined && input.maxGoalRounds === undefined)
         throw new GoalError('edit needs an objective or a max_goal_rounds to change');
       /**
-       * A verdict belongs to the objective it was reached against. Changing that objective therefore
-       * reopens the goal rather than leaving a `blocked` row that describes work nobody is doing any more.
+       * Changing the objective reopens a terminal goal, since the verdict belonged to the old
+       * objective.
        */
       if (next.status === 'blocked' || next.status === 'completed') {
         next.status = 'active';
@@ -263,12 +205,8 @@ export function changeGoal(goal: Goal, action: GoalAction, input: GoalChange, no
   }
 }
 /**
- * The goal one more round belongs to, or the same goal when its limit is reached.
- *
- * Clamped rather than thrown: reaching the limit is not an error the run should die on, and it is not a
- * state that changes what the model may do — it is a fact the next `get_goal` reports and the run-start
- * notice states, so the decision to raise the ceiling, complete the goal or record it blocked stays with
- * the model instead of being made silently on its behalf.
+ * The goal with one more round, or unchanged at its limit. Clamped rather than thrown so the model
+ * decides whether to raise the ceiling, complete or block.
  */
 export function admitGoalRound(goal: Goal, now: string): Goal {
   if (goal.status !== 'active' || goal.roundsStarted >= goal.maxGoalRounds) return goal;
@@ -292,17 +230,9 @@ export function goalExhausted(goal: Goal): boolean {
   return goal.roundsStarted >= goal.maxGoalRounds;
 }
 /**
- * The verdict to record for a goal whose rounds are spent, or `undefined` when there is nothing to say.
- *
- * This is a transition of its own rather than a call to `changeGoal` because of one rule it deliberately does
- * not apply: the blocked floor. That floor exists so a *model* cannot take the easy exit on its first round —
- * it is what makes a recorded `blocked` mean "attempted repeatedly" rather than "the first attempt was
- * awkward". This verdict is not the model's claim. It is the runtime stating the one thing it knows for
- * certain, that its own loop will not start another round, and the reason it writes carries the counts the
- * verdict rests on so a reader can weigh it.
- *
- * A goal left `active` after its budget is spent is the state that must not survive, because `active` is
- * exactly what tells the next request to start another round.
+ * The verdict for a goal whose rounds are spent, or `undefined`. Skips the blocked floor because
+ * this is the runtime's statement, not the model's; the reason carries the counts. A spent goal
+ * must not stay `active`, or the next request would start another round.
  */
 export function exhaustedGoalVerdict(goal: Goal, now: string): Goal | undefined {
   if (goal.status !== 'active' || !goalExhausted(goal)) return undefined;

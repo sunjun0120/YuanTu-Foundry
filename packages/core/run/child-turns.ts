@@ -37,11 +37,8 @@ export interface ChildTurnOptions {
   taskEffectScope: AgentOptions['taskEffectScope'];
   createAgent(options: AgentOptions): Pick<Agent, 'run' | 'enqueue'>;
   /**
-   * Where this host freezes what an isolated child produced.
-   *
-   * Called once a turn has ended, which is the first moment the answer is meaningful: the child has stopped writing,
-   * its journalled writes have settled, and the directory holds one state rather than a moment of a build. Absent
-   * for a host that manages no workspaces, and then nothing is exported and nothing is claimed.
+   * Where this host freezes an isolated child's result, called once a turn has ended and its writes
+   * have settled. Absent when the host manages no workspaces.
    */
   workspaceResults?: WorkspaceResults | undefined;
 }
@@ -50,9 +47,8 @@ export interface ChildTurnOptions {
 export function createChildTurns(options: ChildTurnOptions): ChildTurns {
   const { store, tools, taskEffectScope } = options;
   /**
-   * The run this child's frames belong to, rebound by the residency when a new parent run continues an
-   * existing child. It is a variable rather than a captured constant because the same turn closure serves
-   * every later turn of a resident child.
+   * The run this child's frames belong to; a variable because a resident child's turn closure
+   * serves every later turn under new parent runs.
    */
   let emit = options.emit;
   return (input_: {
@@ -68,27 +64,18 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
     childProvider?: Provider;
     childSignal?: AbortSignal;
     /**
-     * The shape this child's answer must take, when its caller defined one.
-     *
-     * Carried on the *child* rather than on the turn, because it belongs to the task: a resident child asked a
-     * follow-up later is being asked a question, not handed the original task again.
+     * The shape this child's answer must take, when its caller defined one. Carried on the child: a
+     * follow-up is a question, not the original task again.
      */
     reportSchema?: Record<string, unknown>;
     /**
-     * This child's persona, when the delegation asked for one.
-     *
-     * A *different* statement from `rolePrompt`, which every child gets: the role says what the child may do
-     * and is additive, while a persona is who is speaking and replaces the deployment's (`AgentOptions.persona`
-     * shadows `deploymentPersona` in the prompt's own slot). Passing the role prompt here instead — which the
-     * coordinator used to do — would have erased the harness's identity paragraph for every delegated child.
+     * This child's persona, when the delegation asked for one. Unlike the additive `rolePrompt`, a
+     * persona replaces the deployment's (`AgentOptions.persona` shadows `deploymentPersona`).
      */
     persona?: string;
     /**
-     * The directory this child was given, when the run isolates its children.
-     *
-     * Everything the child's turn reaches — its registry, its instructions, its spill, its language servers — is
-     * built from *this* root rather than the delegator's. That is the whole point of isolation at this seam: a child
-     * told to work in a copy and then handed the original's tools would write into the tree it was protected from.
+     * The directory this child was given, when children are isolated. Everything the turn reaches
+     * (registry, instructions, spill, language servers) is built from this root.
      */
     binding?: WorkspaceBinding;
   }): { turn: ResidentChildInput['turn']; close?: () => Promise<void> } => {
@@ -96,38 +83,19 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
     const childProvider = input_.childProvider;
     const model = task.model;
     /**
-     * The registry this child uses.
-     *
-     * A resident child owns one built by the host and keeps it for its whole residency: the parent
-     * run's registry dies with the run, so a child that borrowed it would lose its tools between
-     * turns. A one-shot child keeps borrowing the parent's copy, which is what makes its parent's
-     * language servers, background commands and MCP connections reachable without duplicating them —
-     * unless it was given a directory of its own, in which case borrowing would mean reading and
-     * writing the delegator's tree through tools that were built for it.
+     * The registry this child uses. A resident child owns a host-built one for its whole residency;
+     * a one-shot child borrows the parent's, unless it has its own directory.
      */
     const binding = input_.binding;
     /**
-     * Whether this child must build its *own* tools rather than borrow the parent's copy.
-     *
-     * A borrowed registry carries the parent's `workspaceRoot` and the factories that were bound to it, so every
-     * file, command, language server and spill would still point at the delegator's directory. Isolation is
-     * therefore a rebuilding decision at this seam and not merely a path change.
+     * An isolated child must build its own tools: a borrowed registry is bound to the delegator's
+     * directory.
      */
     const rebuildTools = Boolean(binding && binding.executionRoot !== binding.projectRoot);
     /**
-     * The tools this child may use, from whichever factory owns it.
-     *
-     * The read-only narrowing is applied to the registry a child *borrows*, and deliberately not to one a host
-     * factory builds. A factory is asked for a registry, and the host that owns it decides what that registry
-     * contains — a resident child's registry outlives the run, is never copied from the parent's, and may already
-     * carry restrictions of its own. Narrowing it here would be this module overruling the host that built it,
-     * which is exactly what a resident child's first tool call exposed: the registry a host had handed over came
-     * back with the parent's tools *and* the read-only allowlist applied to them, so a tool the host had installed
-     * on it was reported as "registered but excluded by a restriction".
-     *
-     * The borrowed path is where the narrowing genuinely belongs: `forRun()` is the copy the parent's own registry
-     * produces, and `allow: EXPLORE_TOOLS` is what stops a read-only child from stopping its parent's background
-     * jobs or language servers — tools that carry no permission and would otherwise pass the read-only filter.
+     * The tools this child may use. The read-only allowlist (`EXPLORE_TOOLS`) applies only to a
+     * borrowed `forRun()` copy, where it stops a read-only child from controlling the parent's jobs
+     * or language servers. A host-built registry is left as the host made it.
      */
     const buildTools = (): ToolRegistry => {
       if (options.agent.childTools) return options.agent.childTools(binding);
@@ -140,22 +108,15 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
     const ownsRegistry = Boolean(options.agent.subagentResidency) || rebuildTools;
     const childRegistry = buildTools();
     /**
-     * Memory writes are taken away from every child, including from a registry a host factory built.
-     *
-     * Unlike the read-only allowlist above, this is not a narrowing that depends on how the registry was obtained:
-     * no child may save or forget a memory, so a factory-built registry gets the same rule as a borrowed one. A
-     * name-only deny, so a memory tool installed later under the same name is caught as well.
+     * No child may save or forget memories, whatever registry it has. Denied by name so later tools
+     * with the same name are caught too.
      */
     childRegistry.restrict({ deny: CHILD_DENIED_TOOLS });
     let rounds = 0,
       toolCalls = 0;
     /**
-     * The child's token budget, enforced per turn against the child session's whole spend.
-     *
-     * Here rather than only in the coordinator, because a resident child's follow-up turns (`send_message`) are not
-     * the coordinator's to watch: the delegation that admitted the child has settled, so a budget checked there
-     * stopped applying after the first answer and a child asked again and again could spend without limit. Every
-     * turn of every child passes through this function, so this is the one place both cases meet.
+     * The child's token budget, checked per turn against the child session's whole spend. Here
+     * because resident children's follow-up turns are not watched by the coordinator.
      */
     const maxTokens = resolveSubAgentOptions(options.agent.subagents).maxTokens;
     /** One turn on this child session. A resident child replays it; a one-shot child runs it once. */
@@ -165,9 +126,7 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
       rounds = 0;
       toolCalls = 0;
       /**
-       * The child's token total, in the two halves it is made of: what its already-logged turns spent, and
-       * what the run being reported now has spent. Kept apart rather than re-read as one number because the
-       * settled half is a fold of the child's log and the live half is a frame in flight.
+       * The child's token total in two halves: settled turns from its log, and the run in flight.
        */
       let settledUsage: Usage = { inputTokens: 0, outputTokens: 0 };
       let liveUsage: Usage = { inputTokens: 0, outputTokens: 0 };
@@ -178,20 +137,16 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
           ? { modelInfo: { ...options.agent.modelInfo, model: redactSecrets(model) } }
           : {}),
         tools: childRegistry,
-        // A one-shot child must not close the registry it borrowed; a resident child's registry is
-        // closed by its activation, which is the only thing that knows when the residency ends.
+        // A one-shot child must not close a borrowed registry; a resident child's is closed by its
+        // activation.
         ownsToolResources: false,
         subagentDepth: input_.depth + 1,
         subagentTag: tag,
         ...(taskEffectScope ? { taskEffectScope } : {}),
         rolePrompt: subAgentRolePrompt(task.role),
         /**
-         * A persona is **per agent**, so the child's is decided by its delegation and never inherited.
-         *
-         * Without this the child would carry the parent's persona, and the prompt slot would report the
-         * deployment's persona as replaced by a paragraph the child was never given. `deploymentPersona` *is*
-         * inherited, deliberately: it is the deployment's default, and a child of this deployment speaks with
-         * it unless its delegation says otherwise.
+         * A persona is per agent: the child's comes from its delegation, never from the parent.
+         * `deploymentPersona` is inherited on purpose.
          */
         persona: input_.persona,
         subagentResidency: undefined,
@@ -207,22 +162,12 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
             : Promise.resolve({ answered: false, answers: [], reason: 'unavailable' }),
         onEvent: (event) => {
           /**
-           * What this child has spent and how long it has worked, folded from the child's own frames.
-           *
-           * The parent's card and the header catalog both show a running child's tokens and time, and
-           * neither number exists on the parent's side: usage reaches it only when the child finishes, and
-           * the child's turn clock belongs to the child's session. The child's own frames carry both, so
-           * they are folded here into one live shape — per delivered frame, which is the same cadence
-           * `subagent.delta` already runs at.
-           *
-           * The usage total is settled turns plus the run in flight: the child's session statistics hold
-           * everything already logged, and `statistics.updated` holds the run being reported now, so a
-           * resident child's second turn does not start its card back at zero.
+           * The child's spend and work time, folded from its own frames for the parent's card and
+           * catalog, per delivered frame. Usage is settled turns plus the run in flight, so a
+           * resident child's card does not reset.
            */
           const reportProgress = (): void => {
-            // The budget counts what the child spent, not the prefix its provider replayed from cache: a long-context
-            // child (a fork above all) re-reads its history every round, and summing that ran the budget out in
-            // proportion to rounds × context — the same rule the parent's own run budget applies.
+            // Count billable tokens only, excluding cached replays, like the parent's run budget.
             const spent = billableTokens(settledUsage) + billableTokens(liveUsage);
             if (maxTokens > 0 && spent > maxTokens && !overBudget.signal.aborted)
               overBudget.abort(new Error(budgetMessage(maxTokens)));
@@ -259,21 +204,15 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
               reportProgress();
             }
           } else if (event.type === 'run.finished') {
-            // The run's own end is durable by now (`finishRun` records it before it is announced), so the
-            // fold already holds the settled total this frame is about to publish.
+            // The run's end is already durable, so the fold holds the settled total.
             reportProgress();
           } else if (event.type === 'message.finished') rounds++;
           else if (event.type === 'message.delta')
             emit('subagent.delta', { id: task.id, text: event.data.text });
           else if (event.type === 'input.consumed') {
             /**
-             * The child's own turn took the message up: this is the receipt the parent's log was missing.
-             *
-             * The id is the one *this* parent gave the message (`send_message` passes it into the child's
-             * queue), so the two records are about one message, and a child that folds a correction into its
-             * transcript now says so durably instead of leaving the parent to infer it from "handed" — which
-             * only ever meant "a turn's queue accepted it". An id this session never queued is ignored by the
-             * fold: ids are unique, so a record that cancels nothing cannot cancel the wrong thing.
+             * The child's turn consumed the message: record the receipt under the id this parent
+             * gave it. Unknown ids cancel nothing.
              */
             const id = String(event.data.id ?? '');
             if (id)
@@ -306,17 +245,9 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
       // turn's own queue, which the run loop consumes at its next step boundary. Attached after the
       // run has been started, so the session is already marked running and the queue will take it.
       /**
-       * Either signal ends the turn: the delegation's (a cancelled or ended parent run) or the
-       * activation's (an interrupt aimed at this child).
-       *
-       * The delegation's signal is bridged per turn rather than combined into the turn's own signal.
-       * `AbortSignal.any` captures its inputs at construction: a resident child's turn closure is built
-       * once, by the delegation, and reused by every later turn — so combining the delegation signal into
-       * it meant that once a run cancelled the child, every following turn aborted the moment it started.
-       * The child looked reachable (a turn ran, the counter moved) and answered "Run cancelled" forever,
-       * which is the opposite of what "the activation survives as idle" promises. A listener added to an
-       * already-aborted signal never fires, so a turn started after the delegation ended runs normally,
-       * while a turn already in flight still stops when its delegation is cancelled.
+       * Either signal ends the turn: the delegation's or the activation's. The delegation signal is
+       * bridged per turn, not combined with `AbortSignal.any`, because the closure is reused:
+       * combining it would abort every later turn once the child had been cancelled once.
        */
       const delegationEnded = new AbortController();
       const end = () => delegationEnded.abort(input_.childSignal?.reason);
@@ -330,23 +261,14 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
             : [turnSignal, overBudget.signal],
         ),
         readOnly: task.role === 'explore',
-        // A child answers through the report tool, so the parent gets findings it can cite; its
-        // final prose is the fallback when it never gets that far. A follow-up on a resident child
-        // is an ordinary turn: it was asked a question, so its answer is the text.
+        // A child answers through the report tool; its prose is the fallback. A follow-up turn's
+        // answer is its text.
         reportRequired,
-        // Only when this turn *is* the task: a follow-up on a resident child is a question, and holding it
-        // to the original task's shape would be answering a question with a form.
+        // Only when this turn is the task; a follow-up is a question.
         ...(reportRequired && input_.reportSchema ? { reportSchema: input_.reportSchema } : {}),
         /**
-         * The child's writes are journaled against the session whose directory they happened in — which is decided
-         * by the *kind* of binding, not by whether one exists.
-         *
-         * A shared child works in the delegator's directory, so its journal belongs to the delegator: that is what
-         * keeps the session change list and undo one surface, and it is what every delegation did before isolation
-         * existed. An isolated child's paths are relative to a directory the delegator's undo has never seen, so
-         * writing them into the parent's journal would make the parent's undo operate on files it does not have.
-         * Testing "is there a binding" instead of "is it isolated" would send every shared child's writes into its
-         * own hidden session, where the parent's change list could not show them at all.
+         * Journal writes against the session whose directory they happened in: a shared child's go
+         * to the delegator (one change list and undo), an isolated child's to its own session.
          */
         journalSessionId: binding?.kind === 'worktree' ? childSession.id : options.sessionId,
       });
@@ -356,13 +278,8 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
           return true;
         } catch (error) {
           /**
-           * A full queue is not "the turn ended".
-           *
-           * Both used to arrive here as one throw, and answering "no live turn" for a full queue had the
-           * caller start a second turn on a child that is already running — refused by the store's run lock —
-           * and then record the message as handed over, because the child still *is* running. Letting this
-           * one out keeps the message `queued`: the parent is told the child could not take it, which is the
-           * truth, and `collect_subagents` reports it as something to send again.
+           * A full queue is not "the turn ended": rethrow so the message stays `queued` instead of
+           * starting a second turn and wrongly recording it as handed over.
            */
           if (error instanceof RunQueueFull) throw error;
           // The turn ended between the delivery and the queue: the caller runs a new turn instead.
@@ -372,26 +289,14 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
       try {
         const result = await started;
         /**
-         * The child's work is frozen as soon as its turn is over.
-         *
-         * Here rather than at collect time, because this is the last moment the directory provably holds one state:
-         * the turn has ended, the tools have returned, and nothing of this child's is running. Exporting later —
-         * when the parent finally reads a report, which may be a run boundary away — would freeze whatever the
-         * directory had become by then, including anything a follow-up turn added.
-         *
-         * A failure to export never fails the child's turn. The turn *happened*: its report, its usage and its
-         * journal are all recorded, and a parent that was told "your child failed" because a frozen record could not
-         * be written would be losing the answer it paid for. The child's outcome is reported as it is, and the
-         * failure is published as a diagnostic so the reason is visible rather than silent.
+         * Freeze the child's work as soon as its turn ends, the last moment the directory provably
+         * holds one state. An export failure never fails the turn; it is published as a diagnostic.
          */
         if (binding?.kind === 'worktree' && options.workspaceResults) {
           try {
             /**
-             * One frame per five hundred paths, plus the final one.
-             *
-             * A 50k-file first export spends its time in the walk, and a line that only appears when the export is
-             * over is indistinguishable from a hang. The throttle is by count rather than time because the walk
-             * itself is synchronous enough that a timer would only add frames between files that changed nothing.
+             * One progress frame per five hundred paths plus the final one, so a long export does
+             * not look hung.
              */
             let reportedProgress = 0;
             const onProgress = (progress: TreeWalkProgress): void => {
@@ -411,11 +316,8 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
               onProgress,
             });
             /**
-             * Where the child worked, and what it produced — published as one frame, after the export.
-             *
-             * The result is only a fact once it has been frozen, so this cannot ride `subagent.finished`: that frame
-             * is emitted during settlement, and a card that showed "awaiting import" before an export existed would
-             * be offering work the parent cannot apply.
+             * Where the child worked and what it produced, published after the export (not on
+             * `subagent.finished`, which settles earlier).
              */
             const dependencyWarning =
               binding.kind === 'worktree'
@@ -452,11 +354,8 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
         // A turn the budget stopped says so, rather than the anonymous "Run cancelled" its signal produced.
         const budgetError = overBudget.signal.aborted ? budgetMessage(maxTokens) : undefined;
         /**
-         * A turn held to a caller's schema that never submitted it did not do what it was asked.
-         *
-         * Reporting it as completed would hand the caller a success with no object in it — a workflow script reads
-         * `status` and then finds `data` missing. The prose is kept (it is still in `text`), but the status says the
-         * contract was not met.
+         * A turn held to a caller's schema that never submitted it is not completed; the prose
+         * stays in `text`.
          */
         const missingAnswer =
           !budgetError &&
@@ -479,8 +378,7 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
           toolCalls,
         };
       } finally {
-        // The bridge belongs to this turn: left attached, a later delegation signal would abort nothing
-        // anyway, but the listener would keep the dead delegation alive in memory for the process's life.
+        // Detach the bridge so the dead delegation is not kept alive.
         input_.childSignal?.removeEventListener('abort', end);
       }
     };

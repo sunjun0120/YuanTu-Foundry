@@ -1,13 +1,9 @@
 import type { Plan, Tool, Questioner } from '../protocol/index.ts';
 import { normalizePlanBody, planHash, type PlanApprovalStore } from '../protocol/plans.ts';
 /**
- * How much of a plan may be put in front of a person as a question.
- *
- * `exit_plan_mode` asks the user to approve the plan it just produced, which only works if the plan is in the
- * question they read — a question that says "approve the plan shown elsewhere" is asking them to approve
- * something they cannot see. A plan longer than this is therefore refused, and the model is told to use
- * `submit_plan`, which records it where it can be read in full. Roughly four times the largest plan a person
- * will read in a dialog, and comfortably above any plan this agent produces: 40 steps at 100 characters.
+ * How much of a plan `exit_plan_mode` may put in an approval question; the person must see what
+ * they approve. Longer plans are refused in favour of `submit_plan`. About 40 steps of 100
+ * characters, with margin.
  */
 const MAX_PLAN_QUESTION_CHARS = 6000;
 /** Said when a plan for this run is already approved and the model asks again in the same round. */
@@ -38,13 +34,8 @@ export function createPlanningTools(options: {
     steps: Array.isArray(args.steps) ? (args.steps as string[]) : [],
   });
   /**
-   * How much of a plan may be put in a question.
-   *
-   * The point of asking here rather than recording the plan for later is that the person decides *now*, so
-   * the plan they decide on has to be in the question they read. A plan too long to fit is therefore not
-   * asked about at all: the call names `submit_plan` instead, which records it in the plan panel where it
-   * can be read in full. Approving a plan nobody could read would be the one failure this tool exists to
-   * prevent, so the budget is a refusal, not a truncation.
+   * The plan as a question, or a refusal naming `submit_plan` when it does not fit; never
+   * truncated.
    */
   const planQuestionText = (plan: {
     title: string;

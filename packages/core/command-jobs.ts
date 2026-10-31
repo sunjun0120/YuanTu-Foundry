@@ -2,24 +2,12 @@ import type { CommandJournal, CommandRecord } from '../protocol/jobs.ts';
 import { logProjection } from './log-projection.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 /**
- * The session's durable record of the background commands it started.
+ * The session's durable record of background commands. `packages/tools/background.ts` owns the
+ * processes; this records what a later run needs:
  *
- * `packages/tools/background.ts` owns the processes: it holds the ring, the pid and the exit code, and every one
- * of those dies with the process. What has to outlive them is smaller and answers the question a *later* run
- * asks — which commands this session started, how they ended, and whether anybody has read the result — so it is
- * recorded here, in the session's own log, through the same `recordEvent` every other durable fact uses.
- *
- * Three records, and the third is the reason the first two are worth writing:
- *
- * - `command.started` — written inside the tool call, before the process is spawned far enough to matter.
- * - `command.settled` — written from the worker's exit handler, which is a callback in a process that may by then
- *   be serving a later turn. It carries the tail of the output, because the ring is gone the moment the process
- *   is; the total is recorded with it so the tail can be read as a tail rather than as the whole answer.
- * - `command.collected` — written when the model reads a *settled* command's output. This is the cursor: the
- *   notice repeats until it appears, exactly as `subagent.collected` makes the sub-agent notice repeat.
- *
- * Nothing here is in memory, so a Host that restarts still knows what its sessions started and what nobody has
- * read — which is the whole difference between "the command finished" and "somebody can find out that it did".
+ * - `command.started`, inside the tool call;
+ * - `command.settled`, from the exit handler, with the output tail and total size;
+ * - `command.collected`, when the model reads a settled command's output, which stops the notice.
  */
 export function commandJournal(store: SessionStore, sessionId: string): CommandJournal {
   return {
@@ -104,25 +92,14 @@ const commands = logProjection<CommandState>(
 );
 
 /**
- * Every command this session recorded, folded from its log, oldest first.
- *
- * A map rather than a list because that is how it is read: the notice walks the record to find what settled and
- * was never read, and `job_output` asks for one id when the process that ran it no longer exists. A `settled`
- * for a command this log never saw start is ignored rather than invented — the same rule the sub-agent fold
- * follows, and for the same reason: an id nobody can look up is not a record of work.
- *
- * The map is the caller's own copy; the fold behind it is kept and continued (see `logProjection`).
+ * Every recorded command, folded from the log, oldest first. A `settled` without a `started` is
+ * ignored. Returns a copy; the fold is cached (see `logProjection`).
  */
 export function commandRecords(store: SessionStore, sessionId: string): Map<string, CommandRecord> {
   return new Map(commands.read(store, sessionId).records);
 }
 
-/**
- * One command by id, read from the kept fold without copying the rest.
- *
- * `commandRecords` hands back a copy because its callers walk and keep it; a lookup by id is what `job_output` and
- * `background.poll` do on every call, and copying a long session's whole record to read one entry was the cost.
- */
+/** One command by id from the cached fold, without copying the rest. */
 export function commandRecord(
   store: SessionStore,
   sessionId: string,
@@ -144,13 +121,7 @@ export function hiddenCommandIds(store: SessionStore, sessionId: string): Readon
   return new Set(commands.read(store, sessionId).hidden);
 }
 
-/**
- * The commands this session settled and nobody has read, oldest first.
- *
- * A command that is still running is deliberately absent: it is not a result the model is missing, and listing it
- * would put "here is something that has not happened yet" into every request. What is listed is the exact gap
- * this record exists to close — the work finished, and the turn that started it is over.
- */
+/** Settled commands nobody has read, oldest first. Running commands are absent. */
 export function unsettledCommands(
   store: SessionStore,
   sessionId: string,

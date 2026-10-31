@@ -1,25 +1,13 @@
 import type { SessionStore } from '../storage/sqlite.ts';
 
 /**
- * The moments a schedule named while the Host could not start the run.
+ * The moments a schedule named while the Host could not start the run. A busy Host leaves the task
+ * due; the `task.due` record, written at the scheduled moment, is what tells "the Host was busy"
+ * apart from downtime or edits.
  *
- * A due task waits for the Host rather than for the clock: `canRun` says whether another run is in flight, and a
- * busy Host leaves the task due, which is late rather than lost. What was missing is the *record* of that wait —
- * the row keeps saying "due", the clock re-arms, and the only trace of the delay is a `last_run_at` later than the
- * schedule named, which cannot tell "the Host was busy" apart from "the process was down" or "somebody edited the
- * task". That is what `task.due` is for, and why it is written at the moment the schedule named rather than when
- * the run finally starts.
- *
- * One record per *session and look*: every task that session was owed when the scheduler looked is one delivery
- * rather than one per task, which is the merge the snapshot's §4.5 asks for. Keying on the exact scheduled instant
- * instead would almost never merge anything — two interval tasks armed minutes apart rarely name the same
- * millisecond — while the situation the merge is for ("this session had work due and the Host was busy") is
- * exactly what a look sees. Two sessions owed at the same moment are still two records, because a delivery is per
- * session.
- *
- * The projection below is what "still waiting" means, and it is deliberately computed against the task rows
- * rather than against a second event: a delivery is owed until every task it names has actually run since the
- * moment it was due. Nothing has to remember to settle it.
+ * One record per session per scheduler look, covering every task owed then. A delivery stays owed
+ * until every task it names has run since it was due, computed from the task rows, so nothing has
+ * to settle it.
  */
 export interface TaskDelivery {
   /** The oldest scheduled moment this delivery covers; with the task set, its identity within a session. */
@@ -37,11 +25,8 @@ export const TASK_DELIVERY_REASONS = ['busy', 'closed'] as const;
 export type TaskDeliveryReason = (typeof TASK_DELIVERY_REASONS)[number];
 
 /**
- * Record a delivery, unless the same one is already recorded, and say whether anything was written.
- *
- * Deduplication is by due moment and by the set of tasks in it: a busy Host ticks again and again, and one line
- * per tick would turn "this was late" into noise that buries it. The set matters as well as the moment — a task
- * added to the same instant afterwards is a different delivery, and it is recorded as one.
+ * Record a delivery unless the same moment and task set is already recorded; returns whether
+ * anything was written.
  */
 export function recordTaskDelivery(
   store: SessionStore,
@@ -49,13 +34,8 @@ export function recordTaskDelivery(
   delivery: TaskDelivery,
 ): boolean {
   /**
-   * A task deleted since the tick is not a reason to lose the whole group's record.
-   *
-   * `getTask` throws for an id that is gone, and it was called here — before the "record nothing" guard below. So
-   * one deleted task meant no `task.due` was recorded for *any* task in the group: the desktop's "waiting since"
-   * stayed empty for the tasks that were genuinely owed, and nothing was logged to say why. The caller already
-   * expects this case (a task deleted mid-tick must not take the scheduler down); it simply could not see it. A row
-   * that is gone contributes no revision and no next run, which is exactly what the fallbacks are for.
+   * Look tasks up from the list, so a task deleted since the tick does not lose the whole group's
+   * record.
    */
   const known = new Map(store.listTasks(sessionId).map((task) => [task.id, task]));
   const savedTasks = delivery.tasks.map((task) => {
@@ -99,12 +79,8 @@ export function recordTaskDelivery(
 }
 
 /**
- * The deliveries this session is still waiting for, oldest first.
- *
- * A delivery is owed while at least one task it names has not run since the moment it was due — the row's own
- * `lastRunAt` answers that, so a run that happened (whenever it happened) settles the delivery without anything
- * having to write a second record. A task that was cancelled, or deleted, stops owing: there is nothing left to
- * deliver, and keeping it in the list would make the queue grow forever on a session that changed its mind.
+ * Deliveries this session still owes, oldest first: owed while any named task has not run since the
+ * due moment. Cancelled or deleted tasks stop owing.
  */
 export function pendingTaskDeliveries(store: SessionStore, sessionId: string): TaskDelivery[] {
   const tasks = new Map(store.listTasks(sessionId).map((task) => [task.id, task]));

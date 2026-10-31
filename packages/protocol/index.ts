@@ -38,13 +38,10 @@ export interface ImageAttachment {
   name?: string;
 }
 /**
- * One image as the session database stores it: a content address instead of the bytes.
- *
- * `hash` is the sha256 of the *decoded* bytes, so the same picture attached twice — or attached by a client
- * that padded or wrapped its base64 differently — is one row in `attachment_blobs` rather than two copies of
- * the same megabytes. A message read back from the store never looks like this: the storage layer hydrates
- * every reference before a `Message` leaves it, and a reference it cannot resolve is an error rather than a
- * message with fewer images in it.
+ * One image as the session database stores it: a content address instead of the bytes. `hash` is
+ * the sha256 of the decoded bytes, so re-attaching the same picture is one `attachment_blobs` row.
+ * The storage layer hydrates every reference before a `Message` leaves it; an unresolvable one is
+ * an error.
  */
 export interface ImageReference {
   hash: string;
@@ -85,19 +82,14 @@ export type Message =
       providerState?: ProviderState;
       interrupted?: boolean;
       /**
-       * An answer the runtime is about to replace with another one from the same turn.
-       *
-       * Automatic verification nudges a run that tries to finish without checks, and the model answers again
-       * after the nudge. The first answer is real model output and stays in the transcript the next request is
-       * built from, but showing both leaves the person with two final answers. A transcript renderer hides a
-       * provisional answer once a later answer exists; it still shows one when the run ends before that.
+       * An answer the runtime is about to replace in the same turn (e.g. after a verification
+       * nudge). It stays in the transcript sent to the model; renderers hide it once a later answer
+       * exists.
        */
       provisional?: boolean;
       /**
-       * What the model thought before it answered, kept so a reopened session can still show it.
-       *
-       * Display text is not replayed directly. Capable adapters retain route-scoped native reasoning in
-       * `providerState`, which participates in context sizing and is replayed only to its original route.
+       * The model's reasoning, kept for display in reopened sessions. Never replayed directly;
+       * adapters replay native reasoning from `providerState` only to its original route.
        */
       reasoning?: string;
     }
@@ -112,10 +104,7 @@ export type Message =
       output?: ToolResultOutput;
     };
 export type FileChangeKind = 'create' | 'edit' | 'delete' | 'move' | 'batch';
-/**
- * Which sub-agent produced an effect. It rides on the record itself so every consumer — the change
- * list, the approval card, a deferred task approval — can name the child instead of parsing a string.
- */
+/** Which sub-agent produced an effect, carried on the record so consumers can name the child. */
 export interface SubAgentTag {
   id: string;
   role: SubAgentRole;
@@ -143,26 +132,17 @@ export interface ToolSpec {
   description: string;
   inputSchema: Record<string, unknown>;
   /**
-   * The shape of this tool's results, when they are more than text — a JSON Schema for the value and the name
-   * of the view that draws it.
-   *
-   * Declared here, on the declaration, rather than repeated inside every result: the shape belongs to the tool,
-   * and a per-call copy would put the same schema on the live channel and in the session log once per call made.
-   * The model is deliberately not shown it — `ToolRegistry.specs` builds each request's `ToolSpec` from `name`,
-   * `description` and `inputSchema` alone — because the output shape is for the client that has to lay the result
-   * out, and the model already reads the value through the result's `content`. A tool that declares nothing here
-   * has no structured payload and no renderer name, which is the one meaning absence has (see `ToolResult.output`).
+   * The shape of this tool's results, when they are more than text. Declared once on the tool, not
+   * per result. Never shown to the model (`ToolRegistry.specs` sends only name, description and
+   * input schema). Absent means no structured payload (see `ToolResult.output`).
    */
   output?: ToolOutputContract;
 }
 export interface Usage {
   cachedInputTokens?: number;
   /**
-   * Input tokens the provider wrote into its prompt cache, when it reports that separately.
-   *
-   * `inputTokens` is the total the provider billed, so read and write are *parts* of it, not additions. They
-   * are separated because they cost differently and cache the same prompt differently on the next call: a
-   * total that mixes them cannot answer "is the prompt cache paying for itself?".
+   * Input tokens written into the prompt cache, when reported. Part of `inputTokens`, not an
+   * addition; kept separate because reads and writes cost differently.
    */
   cacheWriteInputTokens?: number;
   inputTokens: number;
@@ -186,41 +166,28 @@ export interface ModelResponse {
   text: string;
   toolCalls: ToolCall[];
   /**
-   * How the turn ended.
-   *
-   * `content-filter` is the endpoint's own policy stopping the turn — OpenAI's `content_filter`, Anthropic's
-   * `refusal`, and the Responses API's `incomplete_details.reason: 'content_filter'`. It is neither of the other
-   * two: it is not an answer (`stop`), and it is not a budget the run can do anything about (`length`). Without
-   * the distinction two protocols described one event as a clean stop and the third described it as a length
-   * truncation, which sent a run that had been refused by policy looking for a smaller task.
+   * How the turn ended. `content-filter` is the endpoint's policy stopping the turn (OpenAI
+   * `content_filter`, Anthropic `refusal`, Responses `incomplete_details.reason`); it is neither a
+   * clean `stop` nor a `length` limit.
    */
   finishReason: 'stop' | 'tool_calls' | 'length' | 'content-filter';
   /**
-   * Set when the provider named the *context window* as the reason the turn ended, rather than the output
-   * limit. Both arrive as `finishReason: 'length'`, and the difference decides whether the run can recover: a
-   * window overflow is answered by compressing the conversation and sending the round again, an output limit
-   * is not.
+   * Set when the provider named the context window, not the output limit, as the cause of a
+   * `length` finish. Only a window overflow is recovered by compressing and re-sending.
    */
   truncation?: 'context-window';
   usage: Usage;
 }
 /**
- * How much reasoning a request is asking to buy.
- *
- * A level rather than a token budget because that is the vocabulary two of the three protocols speak
- * (`reasoning_effort`, `reasoning.effort`); Anthropic only understands a token budget, so a level is
- * translated there by a documented rule (see `packages/providers/effort.ts`). `none` is not "a low budget":
- * it means the request carries no reasoning parameter at all, which is what a policy needs in order to undo
- * an earlier policy's choice.
+ * How much reasoning a request asks for. A level because two protocols speak levels; Anthropic's
+ * token budget is mapped in `packages/providers/effort.ts`. `none` sends no reasoning parameter at
+ * all, so a policy can undo an earlier choice.
  */
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'none';
 /**
- * The protocols this build ships an adapter for.
- *
- * The single declaration: the settings table's `YUANTU_PROTOCOL` enum and the provider registry are both built
- * from it, so "what protocol names exist" cannot drift between the parser, the help text and the factory. A
- * host that registers a further adapter extends the *registry* — the environment path stays these three,
- * because `YUANTU_PROTOCOL` is validated against the table before a factory is ever consulted.
+ * The protocols this build ships an adapter for. The `YUANTU_PROTOCOL` enum and the provider
+ * registry are built from it. Hosts may register more adapters, but the environment path stays
+ * these three.
  */
 export const BUILTIN_PROTOCOLS = ['anthropic', 'openai', 'openai-responses'] as const;
 export type BuiltinProtocol = (typeof BUILTIN_PROTOCOLS)[number];
@@ -234,22 +201,14 @@ export interface ModelRequest {
   signal: AbortSignal;
   onText: (text: string) => void;
   /**
-   * The model's own reasoning, as it streams.
-   *
-   * A channel of its own rather than a flag on `onText`, because the two must never become
-   * interchangeable: `onText` is the answer — it is stored as the answer, replayed as the answer and
-   * counted as the answer. Capable adapters separately retain native reasoning for subsequent requests;
-   * this display channel alone never authorizes replay. A provider with nothing to report never calls this.
+   * The model's reasoning as it streams. A separate channel so it can never be stored or counted as
+   * the answer; it alone never authorizes replay.
    */
   onReasoning?: (text: string) => void;
   onProgress?: (progress: ModelProgress) => void;
   /**
-   * The model to serve *this* request, when it is not the provider's configured one.
-   *
-   * A provider is one configured endpoint; this is the per-request half of "run this step on a different
-   * model", and it is deliberately per request rather than per provider: a run that switches models
-   * mid-conversation must not have to be re-plumbed, and the prompt cache key follows the model that
-   * actually served the request.
+   * The model for this request, when not the provider's configured one. Per request so a run can
+   * switch models mid-conversation; the cache key follows the serving model.
    */
   model?: string;
   /** How much reasoning to buy for this request; omitted means the protocol's own default. */
@@ -260,11 +219,8 @@ export interface ModelRequest {
    */
   cacheKey?: string;
   /**
-   * `none` forbids tool calls while still sending the catalogue.
-   *
-   * The catalogue stays because it is part of the cacheable prefix a summary request replays; the choice is
-   * set only on a retry after a summary answered with a tool call, since changing it can invalidate the
-   * provider's message cache. Omitted means the protocol's own default (`auto`).
+   * `none` forbids tool calls while still sending the catalogue, which is part of the cacheable
+   * prefix. Set only when retrying a summary that answered with a tool call. Omitted means `auto`.
    */
   toolChoice?: 'none';
   /** Disable parallel calls only for a route that dropped required arguments. */
@@ -287,19 +243,19 @@ export interface Approval {
   /** Set when a sub-agent is asking, so the prompt names the child instead of looking like the parent. */
   subagent?: SubAgentTag;
   /**
-   * For a command: what its backend will and will not stop, as data rather than the English sentence in
-   * `description`, so an interface can say it in the reader's language at the moment they decide.
+   * For a command: what its backend will and will not stop, as data so the interface can phrase it
+   * in the reader's language.
    */
   boundary?: Pick<ExecutionPolicy, 'processFiles' | 'network'>;
   /**
-   * What this call asks for beyond its session's policy. `boundary` already describes the escalated call; this
-   * marks that it is one, so `--allow-command` and similar blanket approvals do not grant it.
+   * What this call asks for beyond its session's policy, so blanket approvals like
+   * `--allow-command` do not grant it.
    */
   escalation?: { network: 'unrestricted' };
 }
 /**
- * `timeout` is a person who could have answered and did not; `unavailable` is nobody to ask at all. The model is
- * told different things for the two, so an approver's own deadline must not report `unavailable`.
+ * `timeout`: someone could have answered and did not. `unavailable`: nobody to ask. The model is
+ * told different things, so an approver's own deadline must report `timeout`.
  */
 export type ApprovalDecisionSource =
   'user' | 'policy' | 'launch-options' | 'task-approval' | 'unavailable' | 'timeout';
@@ -307,29 +263,18 @@ export type Approver = ((approval: Approval, signal: AbortSignal) => Promise<boo
   /** The decision just made for this call. Omitted by legacy human approvers. */
   decisionSource?: (approval: Approval) => ApprovalDecisionSource | undefined;
   /**
-   * Why a refusal was made, when the refusal is policy rather than a person.
-   *
-   * `false` alone is read by the registry as "the user said no"; a planning/read-only run refuses without asking
-   * anyone, and the model must hear that distinction so it proposes a plan instead of asking for authorization.
+   * Why a refusal was made, when it is policy rather than a person. Without it `false` reads as
+   * "the user said no", and a read-only run should make the model propose a plan instead.
    */
   decisionReason?: (approval: Approval) => string | undefined;
 };
-/**
- * One choice a question offers.
- *
- * `label` is what an answer refers to, so it is the identity of an option: two options with the same
- * label would make an answer ambiguous, which is why the tool refuses duplicates instead of picking one.
- */
+/** One choice a question offers. `label` identifies the option, so duplicates are refused. */
 export interface QuestionOption {
   label: string;
   description?: string;
   /**
-   * The option the asker would pick, which the interface marks rather than reorders.
-   *
-   * A recommendation is information for a person, not a default that acts: the panel shows it as a badge and the
-   * answer is still whatever the user clicks. It is a field rather than a convention in the label text, because a
-   * suffix like "(recommended)" would be part of the answer the model reads back — and a label is data the model
-   * wrote, so the interface must not be editing it to draw a badge.
+   * The option the asker would pick, shown as a badge without reordering. A field rather than label
+   * text so the interface never edits model-written labels.
    */
   recommended?: boolean;
 }
@@ -346,11 +291,7 @@ export interface QuestionRequest {
   /** Set when a sub-agent is asking, so the prompt names the child instead of looking like the parent. */
   subagent?: SubAgentTag;
   /**
-   * The tool call that asked.
-   *
-   * It rides along for the same reason `Approval.toolCall` does: when the wait ends without an answer, the
-   * client has to withdraw the panel it opened, and the only fact tying that panel to the call is the id the
-   * tool result will carry.
+   * The tool call that asked, so the client can withdraw its panel when the wait ends unanswered.
    */
   callId?: string;
 }
@@ -360,10 +301,8 @@ export interface QuestionAnswer {
   freeText?: string;
 }
 /**
- * Why a question came back without an answer.
- *
- * `timedOut` is redundant with `reason === 'timeout'` on purpose: a reader that only wants the
- * distinction the UI draws (answered vs not) does not have to switch on the reason to find it.
+ * Why a question came back without an answer. `timedOut` duplicates `reason === 'timeout'` for
+ * convenience.
  */
 export interface QuestionOutcome {
   answered: boolean;
@@ -371,10 +310,7 @@ export interface QuestionOutcome {
   timedOut?: boolean;
   reason?: 'timeout' | 'cancelled' | 'unavailable';
 }
-/**
- * Asking a human is not an effect, so unlike an approval it is allowed in a read-only or planning run:
- * a run that may not write may still need a decision before it can plan anything at all.
- */
+/** Asking a human is not an effect, so it is allowed in read-only and planning runs. */
 export type Questioner = (
   request: QuestionRequest,
   signal: AbortSignal,
@@ -382,21 +318,15 @@ export type Questioner = (
 export const TODO_STATUSES = ['pending', 'in_progress', 'completed'] as const;
 export type TodoStatus = (typeof TODO_STATUSES)[number];
 /**
- * One line of the session's own progress list.
- *
- * It is not a task: a task is a durable multi-run object with acceptance checks and triggers, while this is
- * "what am I doing right now" within a run. It never touches the workspace, which is why it is not an
- * effect and carries no permission.
+ * One line of the session's progress list: "what am I doing now" within a run. Not a durable task
+ * and not a workspace effect, so it needs no permission.
  */
 export interface TodoItem {
   id: string;
   content: string;
   status: TodoStatus;
 }
-/**
- * A guard rather than a cast, because the reader is a fold over a log this build may not have written: a
- * malformed payload has to be rejected as data, not trusted as a type.
- */
+/** A guard rather than a cast: the log may come from another build. */
 export function isTodoItem(value: unknown): value is TodoItem {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const item = value as Partial<TodoItem>;
@@ -407,78 +337,50 @@ export function isTodoItem(value: unknown): value is TodoItem {
   );
 }
 /**
- * The session's todo list, as the tool sees it.
- *
- * Reading and writing go through the seam rather than through the store so that the tool stays ignorant of
- * sessions and durability — the same reason `spill` is a callback. Writing is what records the event and
- * announces it to a connected client.
+ * The session's todo list as the tool sees it, so the tool stays ignorant of sessions and storage.
+ * Writing records the event and announces it.
  */
 export interface TodoList {
   read(): TodoItem[];
   write(items: TodoItem[]): TodoItem[];
 }
 /**
- * The files this session has presented as deliverables.
- *
- * Same seam as `TodoList`, for the same reason: the fact belongs in the session's log, and the tool that
- * declares it must not have to know what a session is. Reading is the fold; writing appends the event and
- * announces it, so the log line and the panel update are one accepted call rather than two.
+ * The files this session has presented as deliverables. Same seam as `TodoList`: reading is the
+ * fold, writing appends and announces in one call.
  */
 export interface DeliverableLog {
   read(): import('./deliverables.ts').PresentedFile[];
   write(files: readonly import('./deliverables.ts').PresentedFile[]): void;
 }
 /**
- * The session's goal, and the one way to change it.
- *
- * `write` takes the goal as it now stands, not an intention: the transitions that decide it (the round count,
- * reopening a terminal goal, the blocked floor) live in `packages/protocol/goals.ts`, are applied by whoever
- * owns the state, and the seam's job is only to record the result. Carrying the whole goal rather than a diff
- * is what makes the fold a replacement — the newest event *is* the goal, and a reload needs no replay.
+ * The session's goal and the one way to change it. `write` takes the whole resulting goal;
+ * transitions live in `packages/protocol/goals.ts`. The newest event is the goal, so reloads need
+ * no replay.
  */
 export interface GoalLog {
   read(): import('./goals.ts').Goal | null;
   /**
-   * Record a change. `action` labels it for the log and the client; the two the runtime performs itself are
-   * `create` (a goal that did not exist until now, and whose first round is this run) and `round` (one more run
-   * admitted to an existing goal, which is what its budget counts).
+   * Record a change. The runtime itself performs `create` (new goal, first round is this run) and
+   * `round` (one more run admitted to an existing goal).
    */
   write(action: import('./goals.ts').GoalChangeAction, goal: import('./goals.ts').Goal): void;
   /**
-   * Whether this turn carries the user's own input.
-   *
-   * The seam exposes it because the question belongs to the goal: the goal tools let a model report on the
-   * objective and end it, but `edit`, `pause` and `resume` decide *who is in charge* of it, and a round the
-   * runtime started to continue the goal is not the user's turn (see `HUMAN_ONLY_GOAL_ACTIONS`). It is a
-   * property of the turn rather than of the goal, which is why it is read here rather than stored in the
-   * record: the same goal is `active` in both turns, and only the caller knows which one this is.
+   * Whether this turn carries the user's own input. `edit`, `pause` and `resume` are reserved for
+   * the user (`HUMAN_ONLY_GOAL_ACTIONS`), and only the caller knows whose turn this is.
    */
   human: boolean;
   /**
-   * Whether a completion contract permits this goal to be closed as complete.
-   *
-   * A goal is the model's own statement of what it is trying to achieve, and `complete` was a lifecycle
-   * transition with no evidence behind it: a run could declare an objective achieved and nothing in the runtime
-   * disagreed. When a session also carries a completion contract, that contract is the stronger statement — it
-   * names the criteria and holds the evidence — so the transition consults it first. The seam is optional
-   * because a caller with no completion support simply has no opinion, and a goal that no contract is bound to
-   * keeps its old behaviour rather than being retroactively held to criteria nobody wrote.
-   *
-   * The seam *reads* the current evidence; it never runs checks of its own. A goal tool that executed a set of
-   * unapproved verification commands would be a permission bypass wearing a lifecycle hook's clothes.
+   * Whether a completion contract permits closing this goal as complete. Optional: without a
+   * contract the goal keeps its plain behaviour. It reads current evidence only and never runs
+   * checks itself, which would bypass permissions.
    */
   canComplete?: () => Promise<{ allowed: boolean; reason?: string }>;
 }
 export type RunStatus = 'completed' | 'needs_review' | 'cancelled' | 'limited' | 'failed';
 /**
- * Where a plan sits in the plan -> approve -> execute machine.
- *
- * `planning` is durable on purpose: the row is created before the read-only planning run starts, so a
- * crash mid-plan leaves a visible record with its dead run instead of silently nothing. What that record must
- * *not* do is keep calling itself `planning` forever — the run that would have filled it is gone, and a reader
- * that shows "planning in progress" for a plan nobody is working on is worse than showing nothing. So the
- * convergence that settles an interrupted run moves its unfinished plan to `abandoned`: still a record, no longer
- * a promise. `submitPlan` refuses it for the same reason it refuses any other status.
+ * Where a plan sits in plan -> approve -> execute. `planning` is durable so a crash mid-plan leaves
+ * a record; settling an interrupted run moves its unfinished plan to `abandoned`. `submitPlan`
+ * refuses it.
  */
 export type PlanStatus = 'planning' | 'proposed' | 'approved' | 'rejected' | 'abandoned';
 export interface PlanStep {
@@ -511,9 +413,8 @@ export interface AcceptanceEvidence {
     detail: string;
     durationMs: number;
     /**
-     * Why the check failed, when the checker could say. Absent on success, and absent on every result recorded
-     * before the field existed — which the repair policy reads as "not automatically repairable" rather than
-     * guessing a reason from `detail`.
+     * Why the check failed, when known. Absent on success and on older results, which the repair
+     * policy treats as not automatically repairable.
      */
     failureReason?: CheckFailureReason;
     command?: {
@@ -538,60 +439,36 @@ export interface RunResult {
   usage: Usage;
   acceptance?: AcceptanceEvidence;
   /**
-   * The evidence state of the completion contract this run was judged against, when it carried one.
-   *
-   * Separate from `status` on purpose. `status: 'completed'` says the run ended by itself; it never said the
-   * request was satisfied, and before this field existed nothing in the result could say so. A run with no
-   * contract leaves it unset — or reports `unverified` — rather than borrowing the `completed` word for a claim
-   * no check made.
+   * The completion contract's evidence state for this run, when it carried one. Separate from
+   * `status`: `completed` only means the run ended by itself, not that the request was satisfied.
    */
   completion?: CompletionSummary;
   /** One entry per sub-agent this run delegated to, in the order the tasks were requested. */
   subagents?: SubAgentSummary[];
-  /**
-   * A delegated run's structured report. It is only ever set by a child run (`reportRequired`), which
-   * is how the report reaches the tool result the parent sees.
-   */
+  /** A delegated run's structured report. Only set by a child run (`reportRequired`). */
   report?: SubAgentSummaryReport;
   /**
-   * A delegated run's structured answer, when its task declared its own `schema` instead of the report shape.
-   *
-   * Validated by the same Ajv pass as any other tool argument, because the child submits it through a tool whose
-   * argument schema *is* the caller's schema. Only one of `report` and `data` is ever set: they are two
-   * different promises, and a caller that asked for its own shape should not have to parse the standard one.
+   * A delegated run's answer when its task declared its own `schema`; validated by Ajv like any
+   * tool argument. Only one of `report` and `data` is ever set.
    */
   data?: unknown;
   error?: string;
   /**
-   * Why the run ended, when the reason has a name.
-   *
-   * `error` is for the person reading it; this is for the code that has to do something different about a
-   * failed run — a timeout may be worth retrying, an exhausted budget is not, and a client that has to match
-   * on the message to tell them apart will eventually match the wrong one. Absent means the failure was prose
-   * only, which is honest rather than a default code that overstates what is known.
+   * Why the run ended, when the reason has a name, so code need not match on `error`. Absent when
+   * the failure was prose only.
    */
   code?: FailureCode;
   /**
-   * The HTTP status a failed model request ended on, when it failed as a response at all.
-   *
-   * `code` is what code branches on and is deliberately coarse; this is the number behind it, which is what a
-   * person quotes when they ask whoever runs the endpoint what happened. Named `httpStatus` because `status`
-   * is already this result's own outcome, and one field cannot be two facts.
+   * The HTTP status a failed model request ended on. `status` is already this result's outcome,
+   * hence the name.
    */
   httpStatus?: number;
-  /**
-   * The endpoint's own id for the request that failed, when it sent one.
-   *
-   * The one handle a provider's support can look a call up by. Absent when the endpoint named no request: an id
-   * this runtime invented would look exactly like one that identifies the call.
-   */
+  /** The endpoint's request id for the failed request, when it sent one. */
   requestId?: string;
 }
 /**
- * A sub-agent is a delegated child run with its own session and context.
- *
- * `explore` is read-only by construction (permission-declaring tools are hidden and approvals are
- * refused); `general` inherits the parent run's permissions and therefore still asks for each write.
+ * A delegated child run with its own session and context. `explore` is read-only by construction;
+ * `general` inherits the parent's permissions and still asks for each write.
  */
 export type SubAgentRole = 'explore' | 'general';
 export type SubAgentTaskStatus = RunStatus | 'running' | 'skipped' | 'interrupted';
@@ -601,12 +478,7 @@ export interface SubAgentFinding {
   evidence: string;
   paths?: string[];
 }
-/**
- * A child's structured report.
- *
- * It exists because the parent has to be able to cite, distrust or act on a finding. Prose gives it
- * nothing to point at, and the parent cannot tell a verified fact from a guess the child made.
- */
+/** A child's structured report, so the parent can cite, distrust or act on specific findings. */
 export interface SubAgentSummaryReport {
   summary: string;
   findings: SubAgentFinding[];
@@ -625,15 +497,8 @@ export interface SubAgentSummary {
   toolCalls: number;
   usage: Usage;
   /**
-   * Wall time this child's **ended** turns took, in milliseconds.
-   *
-   * It is the child's active time rather than the wall clock since it was delegated: a child that was
-   * delegated an hour ago and ran for two minutes reports two minutes, which is the number a reader
-   * comparing children is actually looking at. The turn that is still running is not in here — it is
-   * `runningSince`, and whoever renders this adds the elapsed part itself so the number can tick.
-   *
-   * Derived from the child's own session log (`turnTiming`), so it survives a reload and never counts the
-   * time a child spent idle between turns.
+   * Wall time of this child's ended turns in ms, excluding idle time between turns. The running
+   * turn is in `runningSince`. Derived from the child's log (`turnTiming`), so it survives reloads.
    */
   durationMs?: number;
   /** Epoch ms the child's open turn started, or `null` when nothing is running. */

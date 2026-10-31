@@ -3,22 +3,13 @@ import type { AcceptanceEvidence, TaskStepStatus } from './index.ts';
 /**
  * The completion contract: what "this task is done" means, and what evidence says so.
  *
- * `RunStatus` answers "how did the run end" — a run that stops because the model wrote a paragraph ends
- * `completed` whether or not the work exists. This module adds the *other* answer a person actually asks for,
- * "is the request satisfied", as a separate field, so a run can end without anything claiming the goal was met.
- * Keeping the two apart is what makes an unverified answer honest instead of a false pass: an old client that
- * only knows `status` keeps reading it exactly as before, and no code has to guess which meaning a `completed`
- * carried.
+ * Separate from `RunStatus`, which only says how the run ended (`completed` even if the work is
+ * missing). This answers "is the request satisfied", so an unverified answer is never a false pass.
  */
 
 /**
- * Why a check did not pass.
- *
- * It exists so repair is decided structurally. A retry loop that matched on the check's `detail` text would
- * eventually retry an "expected exit code 0, received 1" that happened to be phrased as a permission problem —
- * and would stop retrying a genuine assertion failure whose message happened to contain the word "timeout". The
- * classification is emitted where the checker already knew the semantics, and history without it (every result
- * recorded before this field existed) is treated as *not* automatically repairable.
+ * Why a check did not pass, emitted by the checker so repair decisions never match on `detail`
+ * text. Results without a reason (older records) are not automatically repairable.
  */
 export type CheckFailureReason =
   /** The command finished normally with the wrong exit code, or the content is not what was asserted. */
@@ -37,12 +28,9 @@ export type CheckFailureReason =
   | 'manual-review';
 
 /**
- * What a completion contract currently knows about its own evidence.
- *
- * Four states rather than a boolean, because they are four different things to do next: `verified` is done,
- * `needs_review` is "a person has to look", `limited` is "the repair budget ran out on work that might still be
- * fixable", and `unverified` is "no evidence was ever claimed" — the honest answer for every run that carried no
- * contract at all.
+ * What a completion contract knows about its evidence: `verified` (done), `needs_review` (a person
+ * must look), `limited` (repair budget spent) or `unverified` (no evidence claimed, e.g. no
+ * contract).
  */
 export type CompletionState = 'verified' | 'unverified' | 'needs_review' | 'limited';
 
@@ -53,11 +41,8 @@ export interface CompletionStep {
 }
 
 /**
- * The definition of done a run is judged against.
- *
- * `Acceptance` is deliberately *not* redeclared here: the runtime already has exactly one schema for an
- * executable check, and a second one would drift. This type names the envelope the completion contract adds
- * around it.
+ * The definition of done a run is judged against. Reuses the existing `Acceptance` check schema
+ * rather than redeclaring it.
  */
 export interface CompletionSpec {
   version: 1;
@@ -83,10 +68,8 @@ export interface CompletionSummary {
 }
 
 /**
- * How much repair a run may spend before it stops trying.
- *
- * Deliberately not part of `CompletionSpec`: a contract states what done means, and the budget is the caller's
- * decision about how much model work that is worth. The model has no tool that writes either field.
+ * How much repair a run may spend. Kept out of `CompletionSpec` because the budget is the caller's
+ * choice; the model cannot write either.
  */
 export interface CompletionRepairPolicy {
   maxRepairRounds: number;
@@ -95,18 +78,15 @@ export interface CompletionRepairPolicy {
 }
 
 /**
- * How a desktop request asks to be verified rather than merely answered.
- *
- * Exactly one source: a contract stated with the request, or the session's recorded contract to continue. A plain
- * chat turn omits this, which is what keeps "the turn ended" distinct from "the task was accepted". The carrier
- * checks only the envelope; the Host normalizes the body with the same validator every other source goes through.
+ * How a desktop request asks to be verified: a new contract, or the session's recorded one to
+ * continue. Omitted by plain chat turns. The Host normalizes the body with the shared validator.
  */
 export type RunVerification =
   | { completion: CompletionSpec; repairPolicy?: CompletionRepairPolicy }
   | { resumeCompletionId: string; repairPolicy?: CompletionRepairPolicy };
 /**
- * The checks an approved plan's execution is judged against. The steps are the approved ones and cannot be
- * restated here; a person adds what "done" means for them, and the range of files the evidence covers.
+ * Checks an approved plan's execution is judged against: the approved steps plus what "done" means
+ * and the files the evidence covers.
  */
 export interface PlanVerification {
   acceptance: import('./index.ts').Acceptance[];
@@ -122,10 +102,8 @@ export const COMPLETION_REPAIR_DEFAULTS: CompletionRepairPolicy = {
 };
 
 /**
- * Ceilings a caller may raise a budget to, and no further.
- *
- * They are constants here rather than in the core policy module so that a CLI parsing `--completion-spec` and a
- * host validating an RPC parameter reject the same numbers: two copies of "10" is one copy too many.
+ * Ceilings a caller may raise a budget to. Here so the CLI and the RPC host reject the same
+ * numbers.
  */
 export const COMPLETION_REPAIR_CEILINGS = {
   maxRepairRounds: 10,
@@ -134,10 +112,7 @@ export const COMPLETION_REPAIR_CEILINGS = {
 } as const;
 
 /**
- * Bounds on a contract body.
- *
- * These are the numbers the normalizer enforces. They are stated once, next to the type, because the spec is
- * also persisted verbatim in the session log: an unbounded objective would be an unbounded log record.
+ * Bounds on a contract body, enforced by the normalizer. The spec is persisted verbatim in the log.
  */
 export const COMPLETION_LIMITS = {
   objectiveChars: 4000,
@@ -155,12 +130,9 @@ export const COMPLETION_LIMITS = {
 } as const;
 
 /**
- * The durable completion contract a session is currently working against.
- *
- * One record per contract, folded from `completion.updated` events. `originRunId` and `latestRunId` are separate
- * because a contract outlives the run that created it: a repair, a resume and a goal continuation are all the
- * same contract in new runs, and a reader that could not tell them apart could not say whether a `verified`
- * verdict belongs to the code it is looking at.
+ * The durable completion contract a session works against, folded from `completion.updated`.
+ * `originRunId` and `latestRunId` differ because repairs, resumes and goal continuations reuse the
+ * contract in new runs.
  */
 export interface CompletionRecord {
   version: 1;
@@ -184,11 +156,9 @@ export interface CompletionRecord {
   planHash?: string;
   goalObjective?: string;
   /**
-   * The before-images of the contract's `forbidden-path` + `unchanged` checks, taken by the run that created it.
-   *
-   * They belong to the contract, not to a run: a resume compares against these rather than re-sampling, because a
-   * re-sample would treat the failed run's edits as the new "before". Absent for a contract with no such checks and
-   * for contracts recorded before this field existed.
+   * Before-images for the contract's `forbidden-path` + `unchanged` checks, taken by the creating
+   * run. A resume compares against these rather than re-sampling, which would treat the failed
+   * run's edits as the baseline.
    */
   baselines?: Record<string, CompletionPathBaseline>;
 }
@@ -223,7 +193,7 @@ export const CHECK_FAILURE_REASONS: readonly CheckFailureReason[] = [
 
 /** Whether a failure the checker classified may be handed back to the model as repairable work. */
 export function isRepairableFailure(reason: CheckFailureReason | undefined): boolean {
-  // A missing reason is an old result, from a build that did not classify; it is not a licence to retry.
+  // A missing reason is an old, unclassified result; it is not a licence to retry.
   return reason === 'assertion-failed';
 }
 

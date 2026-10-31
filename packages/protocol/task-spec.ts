@@ -65,12 +65,8 @@ export function normalizeAcceptanceCheck(check: unknown, ids: Set<string>): Acce
   }
   if (kind === 'file-exact' || kind === 'file-contains') {
     /**
-     * `maxBytes` is rebuilt here like every other optional field on this check.
-     *
-     * The branch used to return a literal with only `id`, `kind`, `path` and `expected`, so a byte limit an
-     * author set was dropped on the way in: the check silently compared against the 1 MB default, and the
-     * consumer's forward of the field could never be anything but undefined. The sibling branches rebuild every
-     * optional field, which is what made this one read as a deliberate omission rather than a mistake.
+     * Rebuild `maxBytes` like every other optional field, or an author's limit falls back to the 1
+     * MB default.
      */
     if (
       value.maxBytes !== undefined &&
@@ -140,8 +136,7 @@ export function normalizeAcceptanceCheck(check: unknown, ids: Set<string>): Acce
 }
 /** Validate a persisted acceptance list (empty allowed) including each executable check. */
 export function validateAcceptance(input: unknown): Acceptance[] {
-  // The cap is the verifier's own number, not a second one: a task that could be stored but never verified was
-  // storable here and refused there, and every run of it failed with a message about the work.
+  // The verifier's own cap, so a stored task can always be verified.
   if (!Array.isArray(input) || input.length > MAX_CHECKS)
     throw new Error(`Invalid task acceptance: at most ${MAX_CHECKS} checks`);
   const ids = new Set<string>();
@@ -180,13 +175,9 @@ export function normalizeTaskDraft(input: unknown): TaskDraft {
   return { title, description, steps, acceptance };
 }
 /**
- * The default steps and acceptance line a draft starts from, per language.
- *
- * Generated rather than translated, and the difference matters: a dictionary entry is looked up when something is
- * *rendered*, and these strings are never rendered — they are written into the fields a person then edits
- * (`renderer-tasks.ts` puts them in `input.value`, which the DOM walker does not visit). So the language has to be
- * chosen at the moment they are written, which is why the caller passes one. Chinese is the fallback for a caller
- * that names none, because that is the wording every client before this has received.
+ * Default steps and acceptance line for a new draft, per language. Generated, not translated: they
+ * are written into editable fields and never rendered through the dictionary. Chinese is the
+ * fallback.
  */
 const DRAFT_TEXT: Record<Language, { steps: readonly string[]; acceptance: string }> = {
   'zh-CN': {

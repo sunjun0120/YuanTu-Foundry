@@ -1,50 +1,24 @@
 import type { Message } from '../../protocol/index.ts';
 import { estimateMessageTokens } from './budget.ts';
 /**
- * When this conversation should be compressed, how much of it to keep verbatim, and how hard to try again.
- *
- * Three numbers, and they are the whole policy. They used to be two separate ideas — a character ceiling and a
- * "does this request fit" check — which meant compression happened at the model's limit rather than before it,
- * and the part that was kept was whatever happened to start at the previous user turn.
- *
- * The defaults are the ones DeepSeek Harness resolves for a routed model, restated here as one object:
- * compress at 80% of the window, but never with less than 64K of headroom (15% of a window too small for that)
- * on top of the output this request already reserved; keep the newest 16% of the message budget verbatim; after a compression that did not get
- * the conversation under the threshold, try once more.
- *
- * The output reservation is subtracted first because it is not available to messages: a request that fills the
- * window with context has no room to answer, so "the window" is not the number messages may use. Headroom is
- * subtracted on top of it because a compression that lands exactly at the ceiling has not bought anything —
- * the next request would need another one immediately.
+ * When to compress, how much to keep verbatim, and how hard to retry. Defaults match DeepSeek
+ * Harness: compress at 80% of the window, with at least 64K of headroom (15% on small windows) on
+ * top of the request's output reservation; keep the newest 16% of the message budget verbatim;
+ * retry once if still over the threshold. The output reservation comes off first because messages
+ * cannot use it.
  */
 export const COMPACTION_DEFAULTS = {
   /** Share of the window at which compression starts. */
   thresholdRatio: 0.8,
   /** Room kept free beyond the request's own output reservation, at most. */
   headroomTokens: 65_536,
-  /**
-   * The same room as a share of the window, which is what it is on a window too small for the cap.
-   *
-   * A fixed 64K was a large window's number applied to every window: on 128K with a 32K answer it put the
-   * threshold at a quarter of the window, so the conversation was summarised every few turns, and on 64K it left
-   * no room at all, so nothing was compressed until the endpoint refused a request. Scaling it keeps the same
-   * "a compression must buy at least this much" promise in proportion to what the window can hold.
-   */
+  /** Headroom as a share of the window, used on windows too small for the fixed cap. */
   headroomRatio: 0.15,
   /** Share of the message budget kept verbatim at the tail. */
   retainRatio: 0.16,
-  /**
-   * How many further compressions one over-threshold round may trigger.
-   *
-   * One, because a compression that did not help is usually a compression with no boundary left; a second
-   * attempt is worth paying for, a third is a loop.
-   */
+  /** Further compressions one over-threshold round may trigger; a third attempt would be a loop. */
   compactionRetries: 1,
-  /**
-   * How many times a provider-confirmed overflow may compress and re-send the round.
-   *
-   * One: the same request that was refused cannot be made to fit twice by the same decision.
-   */
+  /** How many times a provider-confirmed overflow may compress and re-send the round. */
   maxOverflowRetries: 1,
 } as const;
 export interface CompactionSpec {
@@ -61,11 +35,8 @@ export interface CompactionSpec {
   maxOverflowRetries: number;
 }
 /**
- * Scale the policy into concrete budgets for one route's window.
- *
- * A window that leaves no message budget, or no pressure budget, is a configuration failure rather than a
- * runtime condition: it means the request reserves everything the endpoint allows. It is thrown rather than
- * clamped because clamping would silently compress a conversation into nothing on every round.
+ * Scale the policy into budgets for one route's window. A window leaving no message or pressure
+ * budget is a configuration error and throws rather than clamping.
  */
 export function resolveCompactionSpec(input: {
   contextWindow: number;
@@ -121,24 +92,12 @@ export function resolveCompactionSpec(input: {
   };
 }
 /**
- * Where the verbatim tail starts: the newest messages worth `retainTokens`, snapped to a cut.
+ * Where the verbatim tail starts: walk back from the end until the newest messages reach
+ * `retainTokens`, then snap to a cut (`cuts` follow complete tool-call groups). With no cut before
+ * that point, the newest earlier cut wins; with none at all, `undefined`.
  *
- * Walking from the end and stopping once the estimate reaches the budget is what makes the retained part the
- * *newest* conversation rather than "everything after some earlier user turn": a long tool call near the end
- * used to drag its whole turn into the tail, which is how a compaction could leave a conversation that still
- * did not fit.
- *
- * `cuts` are positions only reachable after a complete tool-call/result group, so a tool result never survives
- * its call. When no cut is at or before the point the budget reached, the newest cut that is still before it
- * wins; when there is none, the caller's own boundary rule applies (`undefined`).
- *
- * `factor` is the session's learned correction for the route this round is on, and it belongs here for the same
- * reason it belongs in the request estimate: `retainTokens` is a share of a window measured in the tokens the
- * *endpoint* bills, so a tail sized in the estimator's own units is the wrong size exactly when the estimator is
- * wrong — which is the state the correction describes. A correction above one therefore keeps fewer messages, and
- * that is the honest answer rather than a bug: the same budget buys less conversation when each message costs
- * more. Without it, a route whose real tokenizer is three times the heuristic kept a verbatim tail three times
- * the policy's size, which is the size that then has to fit the window the compaction was called to clear.
+ * `factor` is the route's learned correction, since `retainTokens` is in billed tokens: a heavier
+ * tokenizer keeps fewer messages.
  */
 export function retentionStart(
   history: readonly Message[],
@@ -149,19 +108,15 @@ export function retentionStart(
 ): number | undefined {
   if (retainTokens <= 0) {
     /**
-     * Nothing is kept verbatim: compact everything the history allows, which is what an overflow recovery
-     * wants. The newest cut *is* the end of the history, so this keeps strictly less than any positive budget —
-     * and the round still has the message it is about to send, because `contextTail` prepends the user turn a
-     * cut would otherwise have removed.
+     * Nothing kept verbatim: compact as much as the history allows. `contextTail` still prepends
+     * the user turn.
      */
     return [...cuts].reverse().find((cut) => cut > covered);
   }
   let accumulated = 0;
   let reached = history.length;
   for (let index = history.length - 1; index > covered; index--) {
-    // Per message, not per request: `estimateInputTokens` on a one-message request would add the request's own
-    // 256-token protocol margin to every message, which is most of a small message (see
-    // `estimateMessageTokens`).
+    // Per message, without the request's 256-token margin (see `estimateMessageTokens`).
     accumulated += estimateMessageTokens(history[index]!, factor);
     if (accumulated >= retainTokens) {
       reached = index;

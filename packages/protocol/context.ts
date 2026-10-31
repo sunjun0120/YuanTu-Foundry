@@ -5,21 +5,15 @@ export const RUNTIME_CONTEXT_TAG = 'runtime-context';
 /** The wrapper a compaction summary is written in (`packages/core/context/context.ts` writes it). */
 export const COMPACTION_SUMMARY_TAG = 'compacted-summary';
 /**
- * Whether a message is a runtime snapshot rather than something a person said.
- *
- * The wrapper is the runtime's, so the tag lives here — with the readers that have to agree about it: the
- * desktop's transcript (what to draw), the storage layer (which message may name a session) and the title path
- * (whether a session has been asked anything yet). Each of them used to answer by matching text of its own.
+ * Whether a message is a runtime snapshot rather than something a person said. Shared by the
+ * desktop transcript, the storage layer and the title path.
  */
 export function isRuntimeContext(content: string): boolean {
   return content.startsWith(`<${RUNTIME_CONTEXT_TAG} `);
 }
 /**
- * Whether a message is machine-written context of any kind, rather than somebody's words.
- *
- * Both wrappers say "this is not a person talking", which is the whole answer a reader needs: a runtime
- * snapshot is bookkeeping the model must see, and a compaction summary is the conversation compressed. Neither
- * is a request, so neither may name a session.
+ * Whether a message is machine-written context (runtime snapshot or compaction summary). Neither is
+ * a request, so neither may name a session.
  */
 export function isMachineContext(content: string): boolean {
   return isRuntimeContext(content) || content.startsWith(`<${COMPACTION_SUMMARY_TAG}>`);
@@ -44,9 +38,8 @@ export function contextTail(history: Message[], covered: number): Message[] {
         break;
       }
   }
-  // The current model is request state rather than historical prose. Keep its latest announcement
-  // available even when this very request compacts it, including provider-overflow recovery retries.
-  // Do this before budgeting so the retained snapshot is counted in the request's size.
+  // The current model is request state, so keep its latest announcement even when this request
+  // compacts it (including overflow retries). Done before budgeting so it is counted.
   if (covered) {
     const model = history.findLast(
       (message) =>
@@ -59,18 +52,11 @@ export function contextTail(history: Message[], covered: number): Message[] {
   return tail;
 }
 /**
- * One recorded surface replacement: which part of the transcript it covers, and what replaced it.
+ * One recorded surface replacement: which part of the transcript it covers and what replaced it.
+ * This event is the only record of a compaction, so the surface is a fold of the log.
  *
- * This is the *only* record of what a compaction did. It used to be a row in its own table, which meant the
- * question "what did the model see?" had two answers — the row and the log — and the row was the one readers
- * trusted, so a compaction history could not be replayed, compared or branched: each new summary overwrote
- * the previous one and only the last cut survived. As an event it is ordered and permanent, so the surface
- * is a fold of the log like every other derived view.
- *
- * `startSeq`/`endSeq` are log positions of the covered messages, not counts. A count says "the first N
- * messages" and silently re-points if the transcript ever changes under it; a range says which *records* were
- * replaced and can be checked against them. `coveredMessages` is still carried because the tail rule needs a
- * count, and having both is what lets the two be compared instead of assumed to agree.
+ * `startSeq`/`endSeq` are log positions, which can be checked against the records;
+ * `coveredMessages` is the count the tail rule cuts at, kept so the two can be compared.
  */
 export interface SurfaceOp {
   /** 1-based position in this session's compaction history. Each summary subsumes the one before it. */
@@ -86,23 +72,15 @@ export interface SurfaceOp {
   /** What the summary request that produced it cost. */
   usage?: Usage;
   /**
-   * The protocol and model that answered the summary, and the output budget that request was given.
-   *
-   * The request's *envelope* — the system prompt and tool catalogue it replayed — is recorded per round as
-   * `context.envelope`, so these fields are what complete the picture: a reader can say which prompt, which
-   * adapter, which model and which budget produced the summary standing in for the conversation. `protocol` is
-   * this runtime's word for the provider (the wire adapter that answered). Absent for a record written by a build
-   * that did not keep them, which is the only honest reading of silence here.
+   * The protocol, model and output budget of the summary request. The request envelope itself is
+   * recorded as `context.envelope`. Absent on records from older builds.
    */
   protocol?: string;
   model?: string;
   maxTokens?: number;
   /**
-   * The model's answer exactly as it arrived, present only when storing it changed something.
-   *
-   * `summary` is what the next request carries; this is what came back before the wrapper the transcript shows
-   * was taken off it. Silence is therefore a fact rather than a gap: the stored summary is the model's own text,
-   * verbatim. A record that kept both would be carrying the same paragraph twice to say nothing new.
+   * The model's raw answer, present only when storing changed it; absent means `summary` is
+   * verbatim.
    */
   rawOutput?: string;
   /** Characters the surface cost before the op (summary + tail), and after it. */
@@ -127,11 +105,8 @@ export function surfaceOf(ops: readonly SurfaceOp[]): Surface | null {
     : null;
 }
 /**
- * The surface as of one generation: what a reader (or a branch) that stopped there would see.
- *
- * Later ops are not applied, so the messages they covered are still part of the tail. That is the point —
- * "what did the model see when the conversation was last compacted" has an answer that does not depend on
- * how many compactions happened afterwards.
+ * The surface as of one generation, ignoring later ops, so what the model saw at that compaction
+ * does not depend on later ones.
  */
 export function surfaceAt(ops: readonly SurfaceOp[], generation: number): Surface | null {
   const op = ops.find((entry) => entry.generation === generation);
@@ -140,28 +115,14 @@ export function surfaceAt(ops: readonly SurfaceOp[], generation: number): Surfac
     : null;
 }
 /**
- * What one round of one run asked the model to read: the *envelope*, as opposed to the conversation.
+ * What one round of a run asked the model to read: the system prompt and tool catalogue, as opposed
+ * to the conversation. Recorded so a past round can be audited after `AGENTS.md`, memory or skills
+ * changed.
  *
- * The durable log's headline property is "model-visible ⇒ recorded", and the transcript half of it was already
- * true — every message the model was given is an event. The envelope half was not. The system prompt and the tool
- * catalogue were request fields and nothing else (`run.started` carries `{runId, ownerPid}`), so a session
- * reopened after the workspace's `AGENTS.md`, memory or skills had changed could not answer the only question
- * worth asking about a past round: what was this request actually made of? The compaction summary *was* in the
- * log, and the prompt it was produced under was not, which is exactly why a summary could not be audited against
- * the request that produced it.
- *
- * Three decisions make the record worth keeping:
- *
- * 1. **Identity is a digest.** `systemHash`/`toolsHash` are what a reader compares to answer "was this the same
- *    prompt as that round?" — cheaply, and without the text being carried twice.
- * 2. **The text is carried once per distinct prompt per run.** A round whose system prompt is unchanged records
- *    the identity and nothing else, so a hundred-round run on one prompt costs one copy of it; a prompt that
- *    changed — a new goal, an approved plan, a fresh compaction summary — arrives with its own copy. The reader
- *    in `foldContextEnvelopes` puts the two halves back together.
- * 3. **The cap is stated and the truncation is flagged.** `systemBytes` is the prompt's true size and
- *    `systemTruncated` says the copy is a prefix of it, so a shortened record can never be mistaken for the whole
- *    prompt — the failure the tool path's `[output truncated]` marker exists to prevent, and one this record must
- *    not reintroduce for the one artifact a reader has no other copy of.
+ * 1. Identity is a digest: `systemHash`/`toolsHash` answer "same prompt as that round?".
+ * 2. The text is carried once per distinct prompt per run; `foldContextEnvelopes` fills in the
+ *    rest.
+ * 3. The cap is explicit: `systemBytes` is the true size and `systemTruncated` flags a prefix.
  */
 export interface ContextEnvelope {
   /** The run that sent this round. Needed because `round` counts from zero again in every run. */
@@ -184,29 +145,17 @@ export interface ContextEnvelope {
   toolsBytes: number;
   toolsCount: number;
   /**
-   * The catalogue itself, present on the record that carries it — the same one-copy rule as the prompt.
-   *
-   * It is carried rather than only digested because the catalogue is what a *replayed* request needs to be byte
-   * identical to the round it replays: manual compaction compresses a session outside any run, and without the
-   * exact schemas its summary request would share no prefix with the conversation it is summarising, which is the
-   * cache hit the request's whole shape exists for. Recording it is what lets that path use the real envelope
-   * instead of an empty one.
+   * The catalogue, under the same one-copy rule as the prompt. Carried in full so manual compaction
+   * can replay byte-identical tool schemas and keep the cache prefix.
    */
   tools?: ToolSpec[];
 }
 /** How much of a system prompt one record keeps. See decision 3 above, and `envelopeEvent` for the policy. */
 export const ENVELOPE_SYSTEM_CHARS = 32 * 1024;
 /**
- * Every round's envelope in a log, oldest first, with an omitted prompt filled in from the record that carries it.
- *
- * The fill-in is the reader's half of decision 2: a record without `system` means "the same prompt as the last
- * record that named this hash", so the text is looked up by hash rather than repeated. A record whose text never
- * appears anywhere is left as it is — identity without content is a real state (an older build's log, a record a
- * cap truncated), and inventing text for it would be worse than reporting the gap by omission.
- *
- * Damaged identity is refused rather than skipped, the way `foldPendingInputs` refuses a `queued` record with no
- * id: an envelope record that cannot say what it was is not a smaller fact, it is a corrupt one, and quietly
- * dropping it would leave an audit that looks complete and is not.
+ * Every round's envelope, oldest first, with an omitted prompt filled in by hash from the record
+ * that carries it. Text that never appears stays absent. Records with damaged identity are refused
+ * as corrupt, not skipped.
  */
 export function foldContextEnvelopes(
   events: readonly { type: string; data: Record<string, unknown> }[],

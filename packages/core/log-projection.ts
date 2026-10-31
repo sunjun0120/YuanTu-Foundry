@@ -2,16 +2,9 @@ import type { SessionEvent } from '../storage/events.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 
 /**
- * A fold over a session's log, kept per store and continued from the last seq it saw.
- *
- * Several readers answer a question about the whole log on every call — the background panel asks for its jobs and
- * its delivery state every refresh, the unread-command notice is built for every request — and folding the whole
- * history each time made every one of those reads cost the session's age rather than what changed since the last
- * one. The log is append-only (only deleting the session removes rows), so a fold up to a seq stays true and only
- * the tail has to be read.
- *
- * `firstSeq` guards the one way that can stop holding: a log that is no longer the one folded — the session
- * deleted, the database replaced under the same store — starts at a different seq, and the fold starts over.
+ * A fold over a session's log, cached per store and continued from the last seq seen, so frequent
+ * readers pay for what changed rather than the session's age. Valid because the log is append-only;
+ * `firstSeq` detects a replaced log and restarts the fold.
  */
 interface Projection<T> {
   firstSeq: number;

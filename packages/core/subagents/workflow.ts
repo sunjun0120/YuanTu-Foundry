@@ -1,32 +1,15 @@
 /**
- * `workflow`: a script that orchestrates sub-agents.
+ * `workflow`: a script that orchestrates sub-agents within one tool call. The script is an async
+ * function body; `agent('...')` runs a sub-agent and resolves to its report, `parallel`/`pipeline`
+ * fan out, and `return` is the answer. This saves a model round per step for multi-step delegation.
  *
- * Delegation as it exists is one call per child: `delegate_task({tasks:[…]})` fans out, `collect_subagents`
- * reads back. That is enough for "run these four investigations", and it is not enough for the shape the model
- * actually reaches for when the work has *steps*: sweep, then use what came back to decide what to look at
- * next, then write one answer from the pieces. Written as tool calls that shape costs a model round per step,
- * each round re-reading the whole transcript — and the branching has to be re-derived from prose every time.
- *
- * A workflow is that shape written down once. The script is the body of an async function; `agent('…')` runs a
- * sub-agent and resolves to what it reported, `parallel`/`pipeline` express the fan-out, and `return` is the
- * answer. The whole orchestration happens inside one tool call.
- *
- * Four decisions worth stating, because each one is a place this could have gone wrong:
- *
- * 1. **A script is not a second way to run agents.** `agent()` goes through the same coordinator, the same
- *    per-run admission count and the same concurrency semaphore as `delegate_task`, so a loop in a script cannot
- *    buy more children than the caps allow. The workflow tool adds no budget of its own.
- * 2. **It uses the same process runner as `run_code`.** Isolation and termination are one question — a script that
- *    loops forever must be stopped by the call's deadline exactly like a program, and two runners would be two
- *    answers to it. Only the injected RPC surface differs; direct effects depend on the selected OS backend.
- * 3. **A failed `agent()` throws inside the script.** The script's own `try`/`catch` (or a combinator) decides
- *    what to do about it, which is what makes `parallel`'s "a failing item becomes null" a *choice* the script
- *    makes rather than a behaviour hidden in the host.
- * 4. **Misuse is loud.** An unknown hook, a non-string prompt, an option this host does not implement, or one
- *    child too many all come back as an error that kills the script. This is deliberately not the same as the
- *    `run_code` tool's catalog check: here the names and options
- *    come from a *script* a model wrote against a documented API, and a script written for a newer host must
- *    fail rather than quietly skip the part this host does not have.
+ * 1. `agent()` goes through the same coordinator, admission count and semaphore as `delegate_task`;
+ *    no extra budget.
+ * 2. It uses the same process runner as `run_code`, so the call's deadline stops a runaway script.
+ *    Direct effects depend on the OS backend.
+ * 3. A failed `agent()` throws inside the script, which decides how to handle it.
+ * 4. Misuse (unknown hook, bad prompt, unsupported option, one child too many) kills the script, so
+ *    a script written for a newer host fails loudly.
  */
 import { startCodeProcess } from '../../tools/code-process.ts';
 import { errorText, runLevelFailure, summarise } from '../../tools/run-code.ts';
@@ -36,11 +19,8 @@ import type { SubAgentAnswer } from './delegation.ts';
 
 export const WORKFLOW = 'workflow';
 /**
- * What one workflow may do, however its script is written.
- *
- * The agent count is the important one: a workflow is a *program*, so "how many children can this create" cannot
- * be answered by reading the call — only by running it. The cap is enforced on the first call that would exceed
- * it, and the script dies there rather than being allowed to finish with a truncated fan-out.
+ * What one workflow may do. The agent cap is enforced on the first call that exceeds it, killing
+ * the script rather than truncating the fan-out.
  */
 export const WORKFLOW_CEILINGS = {
   maxAgents: 24,
@@ -51,23 +31,17 @@ export const WORKFLOW_CEILINGS = {
   maxTraceEntries: 40,
   maxTraceText: 160,
   /**
-   * How long a finished workflow waits for the sub-agents it had already started.
-   *
-   * Stopping the script is not stopping the children: a deadline used to `terminate()` the worker and hand the
-   * caller its answer while the children the script had started kept running — their own runs, their own
-   * sessions, their own spend — with nothing left that would ever collect what they said. The wait is what makes
-   * "the workflow was stopped" mean the work stopped too, and it is bounded because the caller must not be held
-   * open by a child that ignores its own cancellation: a child is an ordinary run with its own stall watchdog,
-   * tool wall clocks and request deadlines, so one that outlives this bound is already being stopped by something
-   * else. The parent run's own `settle()` is the final join, and it runs before the run can end.
+   * How long a finished workflow waits for the sub-agents it started, so stopping the workflow
+   * stops their work too. Bounded because children have their own watchdogs; the parent run's
+   * `settle()` is the final join.
    */
   teardownMs: 30_000,
 } as const;
 /** What one `agent()` call resolves to, as the workflow's result reports it. */
 export interface WorkflowDeps {
   /**
-   * Runs one sub-agent to completion. The coordinator supplies this, so the caps, the concurrency slot and the
-   * events a workflow child produces are the same ones a `delegate_task` child produces.
+   * Runs one sub-agent to completion; supplied by the coordinator so caps and events match
+   * `delegate_task`.
    */
   runAgent: (
     prompt: string,
@@ -75,19 +49,13 @@ export interface WorkflowDeps {
     signal: AbortSignal,
   ) => Promise<SubAgentAnswer>;
   /**
-   * The run's own per-run sub-agent total, when it is lower than the workflow ceiling.
-   *
-   * `agent()` is admitted against the same per-run count as `delegate_task`, so a script told it may start 24
-   * children on a run that may start 8 failed at the ninth with a limit it was never shown. The description and
-   * the script-side check use the smaller number, and the coordinator still enforces what is actually left.
+   * The run's own per-run sub-agent total, when lower than the workflow ceiling, so the script is
+   * told the real limit. The coordinator still enforces what is left.
    */
   maxAgents?: number;
   /**
-   * The deployment's default tool budget, applied when a call states no `timeoutMs`.
-   *
-   * The registry exempts `workflow` from that default so a caller can ask for a longer bound or none (`0`), and the
-   * tool owns its bound instead. Without this the exemption and the tool's own silence added up to no bound at all:
-   * a script stuck in a loop held the run open until somebody pressed Stop, which an unattended run never gets.
+   * The deployment's default tool budget, applied when a call states no `timeoutMs`. The registry
+   * exempts `workflow` from that default, so the tool applies it itself.
    */
   defaultTimeoutMs?: () => number | undefined;
   /** Tests only: see `CodeWorkerData.exposeProcessForTests`. The coordinator never sets it. */
@@ -156,14 +124,8 @@ export function workflowTool(deps: WorkflowDeps): Tool {
       const code = String(args.code);
       const name = typeof args.name === 'string' ? args.name.trim() : '';
       /**
-       * How long this call may run, when the caller says.
-       *
-       * The registry used to bound every workflow at the default tool budget, which is a **stopwatch on the script**
-       * — and a script's length is set by its children's work, not by the call. A four-way investigation whose
-       * children each take four minutes is a legitimate workflow that a ten-minute stopwatch kills with its
-       * children, losing exactly the reports the parent asked for. That is the failure this tool is for, so the
-       * budget is now the caller's to state: `timeoutMs` bounds the whole script, `0` means no deadline at all, and
-       * omitting it leaves the deployment's default in place.
+       * How long this call may run: `timeoutMs` bounds the whole script, `0` means no deadline,
+       * omitted uses the deployment default. A script's length is set by its children's work.
        */
       const requestedTimeout = args.timeoutMs;
       if (
@@ -184,11 +146,8 @@ export function workflowTool(deps: WorkflowDeps): Tool {
           args: args.args ?? null,
           ...(deps.exposeProcessForTests ? { exposeProcessForTests: true } : {}),
           /**
-           * The ceilings travel into the script so its own checks can be synchronous.
-           *
-           * A refusal that arrives as a rejected promise is invisible to a script that forgot to `await`; a throw
-           * is not. The host below re-checks every one of them, and that is where the authority is: only the host
-           * knows how many children the *run* has left.
+           * Ceilings travel into the script so its checks can throw synchronously; the host
+           * re-checks every one and is the authority.
            */
           limits: {
             maxAgents,
@@ -204,18 +163,9 @@ export function workflowTool(deps: WorkflowDeps): Tool {
       let currentPhase: string | null = null;
       const started = performance.now();
       /**
-       * This call's own cancellation, composed with the run's.
-       *
-       * Until it existed, a workflow's deadline stopped the *script* and nothing else. `finish` terminated the
-       * worker and answered the caller, while the children the script had already started — which were handed
-       * `context.signal`, the one signal nobody was going to abort until the whole run ended — kept working:
-       * spending tokens, writing to their sessions, and holding the run's concurrency slots for a call that had
-       * already reported itself stopped. The same hole covered a script that returned without awaiting its last
-       * `agent()`: its answer could not reach anybody, and it ran anyway.
-       *
-       * Children are started with both signals, so either one stops them: the run's own cancellation, and this
-       * call being over. `AbortSignal.any` rather than passing this one alone, because a child must still stop
-       * when the user presses Stop.
+       * This call's own cancellation, composed with the run's. Children get both signals
+       * (`AbortSignal.any`), so a deadline or an unawaited final `agent()` stops them, and Stop
+       * still does too.
        */
       const call = new AbortController();
       const childSignal = AbortSignal.any([context.signal, call.signal]);
@@ -234,12 +184,8 @@ export function workflowTool(deps: WorkflowDeps): Tool {
           context.signal.removeEventListener('abort', abort);
           if (deadline !== undefined) clearTimeout(deadline);
           /**
-           * The children stop with the call, and the caller hears about it only once they have.
-           *
-           * `settle` is separate from `finish` because the wait is asynchronous: `finish` returns immediately —
-           * it is called from inside a handler that may itself be one of the promises being waited for, and
-           * blocking on that would deadlock the two. A call with nothing in flight settles on the spot, which is
-           * the ordinary case.
+           * Children stop with the call, and the caller hears only once they have. `settle` is
+           * separate from `finish` because `finish` may be called from a handler being waited on.
            */
           call.abort(error instanceof Error ? error : new Error('the workflow call is over'));
           const unwinding = [...inFlight];
@@ -268,11 +214,8 @@ export function workflowTool(deps: WorkflowDeps): Tool {
         const abort = () => finish(context.signal.reason ?? new Error('workflow was cancelled'));
         context.signal.addEventListener('abort', abort, { once: true });
         /**
-         * The caller's deadline, when one was asked for and is not zero.
-         *
-         * `0` is the statement "no deadline", which is why it is tested rather than treated as a falsy value: the
-         * two are different requests and a workflow that fans out over real work is exactly the case that asks for
-         * the second. The timer is unref'd so a pending workflow budget cannot keep a finished process alive.
+         * The caller's deadline, unless `0` ("no deadline"). Unref'd so it cannot keep a finished
+         * process alive.
          */
         const deadline =
           timeoutMs === undefined || timeoutMs === 0
@@ -315,8 +258,7 @@ export function workflowTool(deps: WorkflowDeps): Tool {
             );
           const model = typeof options.model === 'string' ? options.model.trim() : '';
           const schema = options.schema as Record<string, unknown> | undefined;
-          // Counted before the call rather than after: a `parallel` of twenty agents must not be able to pass the
-          // cap twenty times before any of them has finished.
+          // Count before the call, so a `parallel` cannot pass the cap many times at once.
           if (calls.length >= maxAgents)
             return misuse(
               message.id,
@@ -350,13 +292,7 @@ export function workflowTool(deps: WorkflowDeps): Tool {
               return reply(message.id, { ok: false, content: call.error });
             }
             if (schema) {
-              /**
-               * A schema was asked for, so an answer that is not that object is a failure, not a fallback.
-               *
-               * A child that stopped without submitting one (its own round limit, a cancelled run) would
-               * otherwise reach the script as prose it never asked for and cannot use — and the script would have
-               * to guess whether the shape it declared was honoured.
-               */
+              /** A schema was requested, so an answer that is not that object is a failure. */
               if (result.data === undefined)
                 return reply(message.id, {
                   ok: false,
@@ -376,8 +312,8 @@ export function workflowTool(deps: WorkflowDeps): Tool {
               'unknown',
             );
             if (runLevelFailure(error, context.signal)) {
-              // A deferred approval, a cleanup failure or cancellation is the *run* speaking. Letting the script
-              // catch that and carry on is the one thing an unattended run must not be able to do.
+              // Deferred approvals, cleanup failures and cancellation are the run speaking; the
+              // script must not catch them.
               finish(error);
               return;
             }
@@ -407,8 +343,7 @@ export function workflowTool(deps: WorkflowDeps): Tool {
         worker.on('message', (message: WorkerMessage | CallRequest) => {
           if (settled) return;
           if (message.type === 'call') {
-            // Tracked so `finish` can wait for it: a handler still awaiting a child is exactly what must not
-            // outlive the call it belongs to.
+            // Tracked so `finish` can wait for handlers still awaiting a child.
             const running = handleHook(message);
             inFlight.add(running);
             void running.finally(() => inFlight.delete(running)).catch((error) => finish(error));
@@ -425,17 +360,9 @@ export function workflowTool(deps: WorkflowDeps): Tool {
   };
 }
 /**
- * The script's answer, what it printed, and which sub-agents it ran.
- *
- * Per-call lines are shown for the calls that did *not* complete, always, and for every call only when the script
- * itself failed. A workflow whose children all answered needs no inventory of them — the answers are in the
- * returned value, and the model wrote the calls — but a workflow that failed, or that quietly caught a failing
- * child, is exactly the case where "which step, and what did it say" is the whole question.
- *
- * "Did not complete" includes a call that was still running when the script returned, which is what a script that
- * does not `await` its `agent(...)` produces. Its `status` is still undefined at that point, and the filter used to
- * require a status — so the one call whose outcome nobody knows was dropped from both the count and the list, and a
- * run whose child later failed was reported as a clean success. `agentLine` already renders exactly this state.
+ * The script's answer, output and sub-agent calls. Per-call lines are shown for calls that did not
+ * complete (including ones still running when the script returned), and for all calls when the
+ * script failed.
  */
 function workflowResult(
   message: WorkerMessage,

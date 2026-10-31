@@ -1,17 +1,7 @@
 /**
- * The system prompt as **named, ordered sections** instead of one concatenation.
- *
- * Naming the sections answers three questions an assembled string cannot:
- *
- * 1. **Where does a new fragment go?** A section carries its stage and its own `order`, so the answer is a number
- *    at the registration site.
- * 2. **Who wrote this line?** A {@link PromptTrace} names every section, its position, and what it contributed, so
- *    "the prompt says something I did not expect" is answerable without bisecting the code.
- * 3. **What can override what?** A child agent shares its parent's composition but must not inherit the parent's
- *    *role*. {@link PromptSection.replaces} is that statement, and the trace records that it happened.
- *
- * Shadowing works **within a single assembly**, which is what a delegated child needs; there is no registry that
- * lets a section apply to a whole agent subtree.
+ * The system prompt as named, ordered sections, so a new fragment's position is a number, every
+ * line's source is traceable (`PromptTrace`), and overrides are explicit
+ * (`PromptSection.replaces`). Shadowing works within a single assembly.
  */
 
 /** Where a section belongs in the assembled prompt. Declared as a closed set so the order has one owner. */
@@ -31,11 +21,8 @@ export const PROMPT_STAGES = [
 export type PromptStage = (typeof PROMPT_STAGES)[number];
 
 /**
- * The display order of the stages, which is also the assembly order.
- *
- * Identity first because a later stage may restate it ("you are read-only"); history last because a notice about
- * an earlier attempt reads as an aside rather than as the frame. The order of the stages is a decision; the order
- * *within* a stage is not — that is what `order` on each section is for.
+ * The stage order, which is also assembly order: identity first, history last. Order within a stage
+ * comes from each section's `order`.
  */
 export const PROMPT_STAGE_ORDER: Readonly<Record<PromptStage, number>> = Object.freeze({
   identity: 0,
@@ -46,16 +33,9 @@ export const PROMPT_STAGE_ORDER: Readonly<Record<PromptStage, number>> = Object.
 });
 
 /**
- * One section of the prompt.
- *
- * `content` is returned rather than stored because every fragment here is a function of run state — whether the
- * run may write, which workspace it is in, what the previous attempt did. It is called once per assembly and its
- * result decides whether the section exists at all: whitespace-only content is dropped, which is how a fragment
- * that does not apply stops being an empty paragraph in the middle of the prompt.
- *
- * `replaces`, when given, names sections this one overrides. It is a claim rather than a mechanism: assembly
- * drops the named sections and records the replacement in the trace, so a shadowed section that turns out to
- * have been load-bearing is visible instead of silently gone.
+ * One section of the prompt. `content` is a function of run state, called once per assembly;
+ * whitespace-only content drops the section. `replaces` names sections this one overrides, recorded
+ * in the trace.
  */
 export interface PromptSection {
   /** Stable identity, used in the trace and as the target of `replaces`. Unique per assembly. */
@@ -94,21 +74,13 @@ export function definePromptSection(section: PromptSection): PromptSection {
 }
 
 /**
- * Assemble one prompt from its sections.
+ * Assemble one prompt from its sections:
  *
- * The rules, in the order they apply, because each one can hide a section from the next:
- *
- * 1. **Only a section that contributes text can replace another.** An empty section is *absent*, and an absent
- *    section must not suppress the one it names — otherwise the very act of registering a slot "so the trace can
- *    report it" would take the section away. This rule was added after that failure was observed rather than
- *    reasoned about: every agent with no persona of its own was silently losing its deployment's.
- * 2. **Shadowing then wins** for what a contributing replacement names, wherever it sits. Two sections claiming
- *    the same name is a programming error rather than a precedence puzzle, so it throws: with duplicates, "which
- *    one shadowed it" has no answer and the trace would be a lie.
- * 3. **Empty sections are dropped.** A fragment that returns nothing does not leave a blank line behind, which is
- *    what lets a caller register every section unconditionally and let the run state decide.
- * 4. **Order is total.** Stage order, then `order`, then name. Nothing depends on registration sequence, so moving
- *    a registration in the source cannot move the paragraph in the prompt.
+ * 1. Only a section that contributes text can replace another; an empty one must not suppress what
+ *    it names.
+ * 2. Shadowing then wins; two sections claiming the same name throw.
+ * 3. Empty sections are dropped.
+ * 4. Order is total: stage, then `order`, then name, independent of registration sequence.
  */
 export function assemblePrompt(sections: readonly PromptSection[]): PromptAssembly {
   const byName = new Map<string, PromptSection>();
@@ -117,12 +89,7 @@ export function assemblePrompt(sections: readonly PromptSection[]): PromptAssemb
       throw new Error(`Prompt section "${section.name}" is registered twice in one assembly`);
     byName.set(section.name, section);
   }
-  /**
-   * Content is read once per section.
-   *
-   * A fragment is a function of run state — it may read the filesystem or the store — so calling it twice could
-   * see two different states and make the shadowing decision disagree with the text that was kept.
-   */
+  /** Read content once per section, so shadowing and the kept text see the same state. */
   const content = new Map<string, string>();
   for (const section of sections) content.set(section.name, section.content()?.trim() ?? '');
   const contributes = (name: string): boolean => (content.get(name) ?? '').length > 0;
@@ -130,13 +97,8 @@ export function assemblePrompt(sections: readonly PromptSection[]): PromptAssemb
   const shadowedBy = new Map<string, string>();
   for (const section of sections) {
     /**
-     * Rule 1: only a section that contributes text can take another's place.
-     *
-     * A section that returns nothing is *absent*, and an absent section must not suppress the one it names. The
-     * personas make this concrete: `persona:agent` is registered unconditionally so the trace can answer "which
-     * persona was in effect", and if merely declaring the replacement were enough then every agent without a
-     * persona of its own would silently lose its deployment's — a failure that shortens the prompt and says
-     * nothing, which is the kind this project refuses.
+     * Rule 1: an empty section (e.g. `persona:agent` with no persona) must not suppress the one it
+     * names.
      */
     if (!contributes(section.name)) continue;
     for (const target of section.replaces ?? []) {

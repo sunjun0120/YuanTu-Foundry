@@ -9,18 +9,10 @@ import type { WorkspaceManager } from '../../workspaces/manager.ts';
 import { assignedChildren, type AssignedChild } from '../subagents/jobs.ts';
 
 /**
- * The control surface for resident children: `send_message` and the durable record it keeps.
- *
- * A residency is the one delegation shape where a child outlives the turn that started it, which is what makes a
- * follow-up possible at all. Two rules make the asking honest, and both are enforced below rather than described:
- * the acceptance is written down *before* the hand-off is attempted, so an entry with no matching `handed` is
- * exactly "queued and never delivered"; and the waiting and background paths share one settlement, so "collect it
- * later" cannot quietly mean "lose the result".
- *
- * A child this process never started is *rebuilt* from the parent's own log rather than refused: its session,
- * transcript and delegation descriptor are all on disk, so a resumed turn is a continuation — rebuilt from the
- * *delegation's own* descriptor, because a child whose task named a persona or a model must not come back as
- * somebody else, and a host that cannot serve that model says so instead of answering on another one.
+ * The control surface for resident children: `send_message` and its durable record. Acceptance is
+ * written before the hand-off, so `queued` without `handed` means never delivered; waiting and
+ * background paths share one settlement. A child this process never started is rebuilt from the
+ * parent's log, using the delegation's own descriptor (persona, model).
  */
 export interface ResidentToolOptions {
   store: SessionStore;
@@ -32,11 +24,8 @@ export interface ResidentToolOptions {
   /** Resolves the provider a child was delegated to, or `undefined` when this host cannot serve it. */
   resolveProviderFor?: ((model: string) => Provider | undefined) | undefined;
   /**
-   * Resolves and validates the directory a cold-resumed child was bound to.
-   *
-   * A residency is process memory; the binding is durable. A child resumed after a restart must execute in the
-   * directory its delegation named, not in the parent's, and a binding that is gone or no longer describes that
-   * directory must refuse the turn rather than silently fall back.
+   * Resolves and validates a cold-resumed child's binding, so it runs in its delegated directory; a
+   * missing or mismatched binding refuses the turn.
    */
   workspaceManager?: Pick<WorkspaceManager, 'resolve' | 'validate'> | undefined;
   /** The run's own frames: a finished follow-up turn is announced through this. */
@@ -72,16 +61,8 @@ export class ResidentTurnSettlements {
 }
 
 /**
- * Waits for a turn unless the caller's own cancellation arrives first.
- *
- * The distinction this exists for is between **stopping the wait** and **stopping the turn**. A caller that is
- * merely waiting — `send_message` on a child that was started by somebody else — owns the wait and nothing
- * else: its cancellation must end its own patience, not the child's work, because the child's turn was asked
- * for by a different caller that is still entitled to the answer. Only a turn this call *started* has its
- * signal tied to the call (see `ChildActivation.run`).
- *
- * The listener is removed in the `finally` so a wait that ended for any other reason leaves nothing behind;
- * the abort branch's promise never settles afterwards, which is deliberate — nothing is waiting on it.
+ * Waits for a turn unless the caller's cancellation arrives first. Cancelling stops the wait, not
+ * the turn, which may belong to another caller. The listener is removed in `finally`.
  */
 async function waitUnlessCancelled<T>(value: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) throw signal.reason;
@@ -103,35 +84,14 @@ async function waitUnlessCancelled<T>(value: Promise<T>, signal: AbortSignal): P
 export function createResidentMessageTool(options: ResidentToolOptions): Tool {
   const { store, parentSessionId, depth, residency, childTurns, statistics, usage } = options;
   /**
-   * The children this session delegated to, as the parent's own log remembers them.
-   *
-   * A residency lives in memory, so after a restart every child is "gone" — while its session, its
-   * transcript and the fact that it was delegated are all still on disk. That is the whole reason the
-   * assignment is recorded as a durable event, and this is where it is read back.
+   * The children this session delegated to, read from the parent's log so they survive restarts.
    */
   const loggedChildren = (): AssignedChild[] => assignedChildren(store, parentSessionId);
   /**
-   * Loads a child that this process never started.
-   *
-   * The turn runner is rebuilt from what the log knows (identity, persona, model, objective) plus the
-   * child's own durable session; its transcript is what makes the resumed turn a *continuation* rather
-   * than a fresh start.
-   *
-   * Rebuilt means *the delegation's own descriptor*, not a default one: a child whose task named a persona
-   * or a model would otherwise come back as somebody else — the deployment's persona, the parent's model —
-   * and nothing about the resumed turn would look wrong. A host that cannot serve the model this child was
-   * delegated to says so instead of quietly answering on another one.
-   *
-   * The model is passed on as the *task's* model and not only as the resolved provider, because those are two
-   * different statements: the provider is where the request goes, while the model is the identity the child's
-   * turn runs under — its `modelInfo`, which stamps every user turn it writes and is what a reader of the
-   * child's own session sees. Having only the first gave a resumed child that reached the right endpoint while
-   * its transcript still said it was the parent's model.
-   *
-   * Nothing about spending is restored, because there was never a grant to restore: a child is bounded the
-   * way its parent is — its own rounds, its own window, its own wall clock — and what a parent shares with
-   * its children is the slots they occupy, not an allowance. The tokens a child has used are read from its
-   * own statistics, which are durable already.
+   * Loads a child this process never started, rebuilt from the delegation's descriptor (identity,
+   * persona, model, objective) plus its durable session, so the turn is a continuation. The model
+   * is passed as the task's model too, so the child's transcript names the right model. Nothing
+   * about spending is restored; there is no grant.
    */
   const resume = async (childSessionId: string, signal: AbortSignal) => {
     const logged = loggedChildren().findLast((entry) => entry.childSessionId === childSessionId);
@@ -143,12 +103,8 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
       );
     const childSession = store.get(childSessionId);
     /**
-     * The binding is what makes the resumed child the same *workspace* as the one that was delegated.
-     *
-     * Without it, `createChildTurns` receives no `binding`, and the host's `childTools` factory falls back to
-     * the parent's directory — a resumed isolated child would read and write the delegator's tree, journal its
-     * changes against the parent, and never export its worktree result. The manager also validates the row, so
-     * a directory that is gone or belongs to another repository refuses the resume instead of falling back.
+     * Resolve and validate the child's binding so a resumed isolated child works in, journals
+     * against and exports from its own worktree, never the delegator's.
      */
     const binding = options.workspaceManager
       ? options.workspaceManager.resolve(childSessionId)
@@ -220,26 +176,15 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
         const message = String(args.message);
         const wait = args.wait !== false;
         /**
-         * The role this child was delegated with, taken from the delegation's own record.
-         *
-         * It used to be the literal `general` here, which made every follow-up announce itself as a general
-         * child whatever the delegation had said — and a child delegated as `explore` is a read-only reader, so
-         * the finished record, the settlement notice and the card all reported a role the child never had.
-         * `general` remains only as the fallback for a delegation recorded before the field existed.
-         *
-         * Read from the log, never from the message: `send_message` carries a question, and a follow-up that
-         * could name its own role would be a way to ask a read-only child to come back writable.
+         * The role from the delegation's own record (`general` only for records predating the
+         * field). Never from the message, so a follow-up cannot make a read-only child writable.
          */
         const role =
           loggedChildren().findLast((entry) => entry.childSessionId === activation.childSessionId)
             ?.role ?? 'general';
         /**
-         * The acceptance is written down *before* the hand-off is attempted.
-         *
-         * That order is the whole point of the inbox: the parent has accepted the message (and, with
-         * `wait: false`, is about to be told so), so the record of that acceptance must not depend on the
-         * hand-off succeeding. An entry with no matching `handed` is what `collect_subagents` reports back
-         * as "queued and never delivered" after a crash in between.
+         * Record acceptance before attempting the hand-off; `queued` without `handed` is what
+         * `collect_subagents` reports as undelivered.
          */
         const messageId = `msg-${activation.id}-${Date.now().toString(36)}-${options.nextMessageId()}`;
         store.recordEvent(parentSessionId, 'subagent.message.queued', {
@@ -249,11 +194,8 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
           message: redactSecrets(message).slice(0, 2000),
         });
         /**
-         * One place that turns a finished turn into what the parent and the log both learn.
-         *
-         * Shared by the waiting and the background path on purpose: a hand-off that is not waited for must
-         * produce exactly the same durable outcome (`subagent.finished` → the settlement notice) as one
-         * that is, or "continue your own work and collect it later" would quietly mean "lose the result".
+         * Turns a finished turn into what the parent and the log learn, shared by waiting and
+         * background paths so both produce the same durable outcome.
          */
         const settle = (outcome: Awaited<ReturnType<typeof activation.run>>): void => {
           // A correction only observes a turn. Its initiating delegation or message owns accounting and events.
@@ -280,32 +222,16 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
               (usage.cacheWriteInputTokens ?? 0) + outcome.usage.cacheWriteInputTokens;
         };
         /**
-         * The hand-off is taken with `wait: false` even when this call *will* wait.
-         *
-         * `deliver`'s own waiting is unconditional — it resolves when the turn does — and that is exactly what
-         * this tool cannot use: the wait has to end when the call is cancelled, while the turn keeps running.
-         * Handing back the turn's promise is the half of the contract that is needed here, so the wait is done
-         * below, where the call's signal is in hand.
+         * Always hand off with `wait: false`; this call waits below so its own cancellation can end
+         * the wait without stopping the turn.
          */
         const delivery = await activation.deliver(message, { wait: false, id: messageId });
-        // A child that is idle has no turn to fold into: the message becomes a turn of its own. The
-        // promise is kept for the background path, where nothing awaits it here. A correction whose turn
-        // promise is not visible would be the one case with no outcome to report, which the waiting path
-        // below refuses to pretend about.
-        //
-        // Only a waiting call ties its own cancellation to that new turn. A `wait: false` hand-off returns as
-        // soon as the message is in the queue, and the call is then over: its signal must not be able to stop
-        // work that was deliberately handed off. The run's own end still stops it, through the delegation's
-        // signal rather than through this call.
+        // An idle child has no turn to fold into, so the message becomes a new turn. Only a waiting
+        // call ties its cancellation to that turn; a `wait: false` hand-off must not be stoppable
+        // by the finished call (the run's end still stops it).
         let turn = delivery.done;
         if (!delivery.delivered) {
-          /**
-           * A new turn belongs to the run that is asking for it, not to the run that created the activation.
-           *
-           * A resident child survives its parent run; the turn closure it kept still points at the old run's
-           * emitter. Rebinding before the turn starts is what makes the new run receive its deltas, tool
-           * frames and progress, instead of having them filtered as another run's events.
-           */
+          /** Rebind to the asking run's emitter before the turn starts. */
           activation.setEmit(options.emit);
           turn = activation.run(message, false, wait ? signal : undefined);
         }
@@ -319,13 +245,8 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
         if (settledTurn && !delivery.delivered)
           options.trackTurn?.(settledTurn, () => activation.interrupt());
         /**
-         * The hand-off is recorded only if it actually happened.
-         *
-         * `run` is async, so a turn it refuses (a disposed activation) shows up as a rejected promise
-         * *after* this point. Asking the activation whether it is running is the synchronous fact that
-         * says the turn began, and a message that never got that far stays `queued` with no `handed` —
-         * which is precisely the state `collect_subagents` reports as "send it again". Writing `handed`
-         * unconditionally would turn a failed hand-off into a claim that the child has it.
+         * Record `handed` only if the turn actually began; otherwise the message stays `queued` for
+         * `collect_subagents` to report.
          */
         const handed = delivery.delivered || activation.snapshot().status === 'running';
         if (handed)
@@ -336,9 +257,8 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
             how: delivery.delivered ? 'correction' : 'turn',
           });
         if (!wait) {
-          // The outcome is recorded when it lands, not when it is asked for: the parent's next request
-          // (or `collect_subagents`) is where it will read it, and a run that ends first stops the child
-          // like any other background sub-agent.
+          // The outcome is recorded when it lands; a run that ends first stops the child like any
+          // background sub-agent.
           if (!handed)
             return {
               isError: true,
@@ -354,18 +274,15 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
               'Its answer is not in this result — read it with collect_subagents (or job_output on the child session) when it lands.',
           };
         }
-        // The wait is the call's, the turn may not be: a correction folded into a turn somebody else started
-        // keeps running when this call is cancelled, and only the waiting ends.
+        // Cancelling stops only this call's wait, not a turn someone else started.
         const outcome = settledTurn ? await waitUnlessCancelled(settledTurn, signal) : undefined;
         if (!outcome)
-          // Unreachable in practice (a delivered message always belongs to a turn whose promise the
-          // residency holds), and said out loud rather than dressed up as an answer if it ever happens.
+          // Unreachable in practice; say so if it ever happens.
           return {
             isError: true,
             content: `Message ${messageId} reached ${activation.childSessionId}, but no live turn is collecting its answer; send it again if you need one.`,
           };
-        // The follow-up's answer is in this tool result, so the parent has read it: recording delivery
-        // here keeps the settlement notice from announcing a result the parent is looking at.
+        // The answer is in this tool result, so record it as collected.
         store.recordEvent(parentSessionId, 'subagent.collected', {
           ids: [activation.id, activation.childSessionId],
         });

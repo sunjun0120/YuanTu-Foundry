@@ -1,17 +1,9 @@
 import type { Message } from '../../protocol/index.ts';
 /**
- * What a forked child inherits from its parent.
- *
- * A fork copies the parent's transcript into a new child session, and the only hard part is that a
- * transcript is not a list of independent items: a tool result means nothing without the assistant call it
- * answers, and a conversation that begins with a tool result is corrupt rather than merely short. So the
- * budget trims from the oldest end and then moves the cut forward to the first user turn. Before budgeting,
- * an incomplete trailing tool batch is removed: a fork is often requested while the parent's batch is still
- * executing, and the child must not inherit calls whose results have not been recorded yet.
- *
- * The budget is measured in characters of JSON, which is what the transcript costs the child: base64 images
- * and provider continuation state are counted at their real size, because they are exactly what makes an
- * unbounded copy dangerous.
+ * What a forked child inherits from its parent. The budget trims from the oldest end, then moves
+ * the cut forward to the first user turn so no orphaned tool result leads. An incomplete trailing
+ * tool batch is removed first. Measured in JSON characters, so images and provider state count at
+ * real size.
  */
 export interface ForkBudget {
   /** Characters of transcript the child starts with. */
@@ -31,10 +23,8 @@ function messageSize(message: Message): number {
   return JSON.stringify(message).length;
 }
 /**
- * The suffix of `messages` that fits the budget.
- *
- * An empty seed is a legitimate answer — a single message larger than the whole budget leaves nothing that
- * can be copied — and the caller reports it rather than pretending the child inherited a conversation.
+ * The suffix of `messages` that fits the budget. An empty seed is legitimate and reported by the
+ * caller.
  */
 export function forkSeed(messages: readonly Message[], budget: ForkBudget): ForkSeed {
   const sizes = messages.map(messageSize);

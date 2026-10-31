@@ -1,21 +1,13 @@
 import { createHash } from 'node:crypto';
 
 /**
- * Whether a tool result taught the goal loop anything new.
+ * Whether a tool result taught the goal loop anything new, so a round that repeats itself stops the
+ * loop.
  *
- * The goal driver stops a request's automatic rounds when a round did no substantive work, and "substantive" used to
- * mean "a (call, output) pair this request had not seen". Output is a poor key for that: a search whose hits include
- * the growing transcript, a command that prints its own duration, or a status line with a clock in it is new every
- * time, so a round that repeated itself looked busy forever.
- *
- * Two rules instead:
- *
- * - **A query is new only when the workspace may have changed since it was last asked.** Read-only tools answer
- *   about the files, so the same call against the same files is the same answer whatever its bytes say. The
- *   workspace version moves whenever a result reports a file change.
- * - **Anything else is new when its output differs once the noise is taken out**: durations and timestamps.
- *
- * A result that changed a file is always progress.
+ * - A query is new only if the workspace may have changed since it was last asked (the workspace
+ *   version moves whenever a result reports a file change).
+ * - Anything else is new when its output differs after masking durations and timestamps.
+ * - A result that changed a file is always progress.
  */
 const QUERY_TOOLS = new Set([
   'read_file',

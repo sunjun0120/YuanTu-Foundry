@@ -134,12 +134,9 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   /**
-   * Set while a scheduled moment this Host was not free to start is still owed.
-   *
-   * Computed at read time rather than stored, and only by the surfaces that can see the session's log
-   * (`task.list` / `task.get`): the record is a `task.due` event, the answer changes the moment the run happens,
-   * and a copy of it on the row would be a second truth about the same fact. `since` is the moment the schedule
-   * named — the oldest one this task is owed for — and `reason` is why it could not start then.
+   * Set while a scheduled moment the Host could not start is still owed. Computed at read time from
+   * the session log's `task.due` events (`task.list` / `task.get`), never stored. `since` is the
+   * oldest owed moment.
    */
   waiting?: { since: string; reason: string };
 }

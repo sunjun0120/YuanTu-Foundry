@@ -19,13 +19,8 @@ function object(value: unknown): value is Record<string, unknown> {
 const MAX_MATCH_KEYS = 16;
 const MAX_PATTERN_LENGTH = 1024;
 /**
- * What an `allow` pattern may never let through, wherever the wildcard sits.
- *
- * `allow run_command "npm test*"` is meant to approve test runs, and a wildcard that also matched
- * `npm test; curl … | sh` would turn one convenience rule into blanket command approval. The same goes for
- * paths: `allow write_file "src/*"` must not reach `src/../.git/hooks/pre-commit`. So a value carrying a shell
- * control character or a `..` segment is simply not something an allow pattern can match — it falls through to
- * the ordinary approval instead.
+ * Values an `allow` pattern may never match: shell control characters or a `..` segment. Such calls
+ * fall through to ordinary approval, so `npm test*` cannot approve `npm test; curl ... | sh`.
  */
 const UNSAFE_FOR_ALLOW = /[;&|`$<>(){}\r\n]|(^|[\\/])\.\.([\\/]|$)/;
 /** The path form a deny/ask pattern is also compared against, so `.\src\secret` cannot dodge `src/secret*`. */
@@ -36,9 +31,8 @@ function normalizedPath(value: string): string {
     .replace(/^(\.\/)+/, '');
 }
 /**
- * Arguments longer than this are never compared character by character: a pattern on `write_file`'s `content`
- * would otherwise cost a scan of the whole file per rule. Such a value never satisfies an `allow` pattern and
- * always satisfies a `deny`/`ask` one — the uncertain answer is the one that asks.
+ * Values longer than this are never matched: they never satisfy `allow` and always satisfy
+ * `deny`/`ask`.
  */
 const MAX_MATCHED_VALUE = 64 * 1024;
 /** One glob element: a literal character, `?` (one character) or `*` (any run). */
@@ -58,10 +52,8 @@ function parseGlob(pattern: string, fold: boolean): GlobToken[] {
   return tokens;
 }
 /**
- * Greedy wildcard matching with a single backtrack point.
- *
- * Unlike a regular expression built from the glob, this cannot backtrack catastrophically: the last `*` seen is
- * the only resume point, so the work is bounded by pattern length × value length, which the limits above cap.
+ * Greedy wildcard matching with a single backtrack point, bounded by pattern length x value length
+ * (no catastrophic backtracking).
  */
 function globMatches(tokens: readonly GlobToken[], value: string): boolean {
   let t = 0;
@@ -183,13 +175,9 @@ export class PermissionPolicy implements PermissionPolicyView {
     );
   }
   /**
-   * True when no call of this tool could ever be approved under this policy, which is what makes hiding it
-   * from the model safe rather than merely quiet.
-   *
-   * Only a `deny` rule that matches by kind or by name *and does not pin the arguments* counts: a rule that
-   * pins arguments denies exactly those calls. `allow` and `ask` decide one call at a time, so neither says
-   * a tool is unusable. A tool that asks for no approval is never denied here — the policy is not consulted
-   * for it at all — so a rule naming such a tool does not hide it either.
+   * True when no call of this tool could ever be approved, which makes hiding it from the model
+   * safe. Only a kind or name `deny` without argument pins counts. Tools needing no approval are
+   * never denied here.
    */
   deniesEveryCall(tool: { name: string; permission?: Approval['kind'] }): boolean {
     if (!tool.permission) return false;

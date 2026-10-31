@@ -1,22 +1,15 @@
 import type { ToolCall } from '../protocol/index.ts';
 /**
- * Which calls may overlap their siblings, and how many may do it at once.
- *
- * Sibling calls in one assistant message are independent as far as the model is concerned — it asked for all
- * of them at once — but they are not independent as far as the workspace is concerned. Which calls may
- * overlap is therefore the *tool's* statement (`Tool.isConcurrencySafe`), and this module is the part that
- * turns those statements into an order of dispatch without knowing anything about tools.
+ * Which sibling calls may overlap, and how many at once. Overlap is the tool's statement
+ * (`Tool.isConcurrencySafe`); this module turns it into a dispatch order without knowing about
+ * tools.
  */
 export type ExecutionMode = 'parallel' | 'exclusive';
 /**
- * Consecutive parallel-safe calls form one group; every exclusive call is a group of one and therefore an
- * ordering barrier. Groups run in model order, so a write between two reads still happens between them:
+ * Consecutive parallel-safe calls form one group; each exclusive call is a group of one and an
+ * ordering barrier. Groups run in model order:
  *
- *   [read(A), read(B), write(A), read(C)]  →  [read(A), read(B)], [write(A)], [read(C)]
- *
- * Grouping is by adjacency rather than by partitioning all the calls, because reordering a call past another
- * call the model wrote between them would be a change to what the model asked for. A barrier is not a penalty
- * the loop invented; it is the model's own order, preserved.
+ *   [read(A), read(B), write(A), read(C)]  ->  [read(A), read(B)], [write(A)], [read(C)]
  */
 export function groupToolCalls(
   calls: readonly ToolCall[],
@@ -32,33 +25,19 @@ export function groupToolCalls(
   }
   return groups;
 }
-/**
- * What happened to one item, in input order.
- *
- * `skipped` is not a failure: it is "this one was never started", which is the honest answer for a call the
- * loop decided not to dispatch (a steer arrived, the run was cancelled). A caller that conflated it with
- * `rejected` would report an effect that never happened.
- */
+/** What happened to one item, in input order. `skipped` means never started, not failed. */
 export type BoundedOutcome<T> =
   | { status: 'fulfilled'; value: T }
   | { status: 'rejected'; reason: unknown }
   | { status: 'skipped' };
 /**
- * Runs items with at most `limit` in flight, starting them in order and starting another whenever one
- * settles — a rolling pool, not fixed windows.
+ * Runs items with at most `limit` in flight, as a rolling pool.
  *
- * Two properties are the whole point:
+ * - Quiescence: every started item is awaited before returning, even after a rejection or a stop.
+ * - Order: outcomes are positional.
  *
- * - **Quiescence.** Every started item is awaited before this returns, including when one of them rejects or
- *   when `shouldStop` starts refusing new starts. A scheduler that returned early would leave a tool running
- *   while the loop that owns it moved on.
- * - **Order.** Outcomes come back positionally, so a fast call that finished first cannot jump ahead of a
- *   slow sibling in the caller's bookkeeping.
- *
- * `start` is invoked synchronously in start order, which is what makes the first `limit` items begin in model
- * order; `shouldStop` is consulted immediately before every start, never after, so a stop is never reported
- * for a call that did begin. It is told the index it is about to start, so a caller can let an item through that
- * is already under way elsewhere (an early start being adopted) while refusing the rest.
+ * `start` runs synchronously in order. `shouldStop` is checked just before each start (with the
+ * index), so a stop is never reported for a call that began.
  */
 export async function runBounded<T, R>(
   items: readonly T[],

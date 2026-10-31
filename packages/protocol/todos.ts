@@ -19,13 +19,8 @@ export interface TodoMove {
   to: number;
 }
 /**
- * What one `todo_write` did to the list it replaced.
- *
- * The model replaces the whole checklist on every call, so "the current list" is never the interesting
- * question on its own: a plan that is being followed changes item by item — something is added, something is
- * dropped, an item is reworded or completed — and a reader who only sees the new list has to diff two versions
- * in their head. This is that diff, computed once, in one place, so the panel, the CLI and any future carrier
- * describe a plan change the same way.
+ * What one `todo_write` did to the list it replaced, computed once so every carrier describes plan
+ * changes the same way.
  */
 export interface TodoChange {
   added: TodoLine[];
@@ -39,22 +34,8 @@ const line = (todo: TodoItem): TodoLine => ({
   status: todo.status,
 });
 /**
- * The longest common subsequence of two id lists, as a set.
- *
- * Used for `moved`, and the reason is worth stating: comparing positions directly reports a move for every
- * item *after* a deletion, which is noise — deleting item 2 of 10 did not move items 3–10, it shortened the
- * list. Items that keep their order relative to each other are therefore stable, and only the ones that do not
- * are moves. That is the minimal set a reader can act on, at the cost of describing a swap as one move rather
- * than two.
- */
-/**
- * The position of each surviving item *among the surviving items*, keyed by id.
- *
- * Comparing raw list indices reports a move for everything after a deletion — deleting item 2 of 10 did not
- * move items 3–10, it shortened the list — so positions are counted with the added and removed items taken
- * out. What is left is a reordering, reported for every item whose place in it changed: a swap is "both
- * moved", which is what a reader sees, rather than a minimal set that would have to pick one of the two and
- * stay silent about the other.
+ * Each surviving item's position among the surviving items, so a deletion does not report every
+ * later item as moved. A swap reports both items.
  */
 function ranks(ids: string[], present: Set<string>): Map<string, number> {
   const ranks = new Map<string, number>();
@@ -63,11 +44,8 @@ function ranks(ids: string[], present: Set<string>): Map<string, number> {
   return ranks;
 }
 /**
- * What changed between two versions of the checklist.
- *
- * In the list world an item is its `id`, so an id that survives is the same line of the plan however its text
- * or status changed; a reworded item is an update rather than a removal plus an addition. Order is stable and
- * meaningful for a reader: additions and updates come back in the new list's order, removals in the old one's.
+ * What changed between two checklist versions. An item is its `id`, so rewording is an update.
+ * Additions and updates follow the new order, removals the old.
  */
 export function todoDiff(previous: TodoItem[], next: TodoItem[]): TodoChange {
   const before = new Map(previous.map((todo) => [todo.id, todo]));
@@ -113,14 +91,7 @@ export function isEmptyTodoChange(change: TodoChange): boolean {
     !change.added.length && !change.removed.length && !change.updated.length && !change.moved.length
   );
 }
-/**
- * The change as one line, or `null` when the write changed nothing.
- *
- * Deliberately counts-only: this is the notice a carrier prints next to the checklist, and the checklist
- * itself is one line below it. The empty result is not an empty string, because "the plan changed in no way"
- * and "there is nothing to say" have to be distinguishable by a caller that only prints when there is
- * something to print.
- */
+/** The change as one counts-only line, or `null` when nothing changed. */
 export function describeTodoChange(change: TodoChange): string | null {
   if (isEmptyTodoChange(change)) return null;
   const parts: string[] = [];

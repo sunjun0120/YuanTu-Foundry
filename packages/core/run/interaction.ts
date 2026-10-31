@@ -10,25 +10,13 @@ import type { RunQueue } from './queue.ts';
 import type { RunEmit } from './emit.ts';
 
 /**
- * The two seams a run offers a person: approving an effect, and asking a question.
+ * The two seams a run offers a person: approving an effect and asking a question. The host decides;
+ * this module records each request and answer in the session log, so "asked but never answered"
+ * only means the run was interrupted while waiting.
  *
- * Both are adapters rather than policy. The decision belongs to the host — the desktop dialog, the CLI prompt —
- * and what this module owns is the *record*: each request and each answer is written to the session log, in
- * order, so "asked but never answered" keeps exactly one meaning (the run was interrupted while waiting) and a
- * reopened session can still say who allowed what.
- *
- * Three rules live here because they are the same in both adapters:
- *
- * - **A read-only run refuses effects without asking.** Every workspace mutation in the registry declares a
- *   permission, so refusing the approval refuses the effect; a 120-second prompt for an operation that cannot be
- *   allowed would only waste the person's time. The refusal is still recorded as an answer, so it is not confused
- *   with an interruption.
- * - **A wait that was cut short is not a refusal.** A denied approval and a stopped run both arrive as `false`,
- *   and the difference is only visible in the signals: a person who refuses a write does not abort the call, so an
- *   aborted call signal means the wait was *cut short*. Recording both as "denied" would tell a later reader that
- *   someone looked at this file and refused it, which they never did.
- * - **A host that cannot ask still runs.** Asking is not an effect, so a missing questioner answers
- *   `unavailable` to the model instead of failing the call.
+ * - A read-only run refuses effects without asking, and records the refusal as an answer.
+ * - A wait cut short (aborted signal) is recorded as cancelled, not denied.
+ * - A host that cannot ask still runs; the model is told `unavailable`.
  */
 
 export interface RunInteractionOptions {
@@ -36,13 +24,7 @@ export interface RunInteractionOptions {
   sessionId: string;
   queue: RunQueue;
   emit: RunEmit;
-  /**
-   * Whether this run may change anything, as a getter.
-   *
-   * A getter rather than a boolean because the run's own loop can tighten it mid-run — a child that turns out to
-   * need writes is admitted through delegation rather than by flipping this — and because the approval path must
-   * read the value in force *when the call arrives*, not the one that was in force when the adapter was built.
-   */
+  /** Whether this run may change anything, as a getter read when each call arrives. */
   isReadOnly: () => boolean;
   approve?: Approver | undefined;
   question?: Questioner | undefined;
@@ -52,10 +34,8 @@ export interface RunInteraction {
   approve: Approver;
   ask: Questioner;
   /**
-   * Wall time this run has spent waiting on a person, so far.
-   *
-   * Overlapping waits (two parallel calls each asking) are counted once: what is measured is how long the run
-   * was held by somebody else, not how many prompts were open. A wait still open counts up to now.
+   * Wall time spent waiting on a person so far; overlapping waits count once, an open wait counts
+   * up to now.
    */
   humanWaitMs: () => number;
 }
@@ -63,11 +43,8 @@ export interface RunInteraction {
 export function createRunInteraction(options: RunInteractionOptions): RunInteraction {
   const { store, sessionId, queue, emit } = options;
   /**
-   * Commands a person already allowed in this run, keyed by command and cwd.
-   *
-   * Automatic verification re-runs the command the model just used; asking for the same approval twice makes one
-   * fix cost two clicks. The reuse is narrow: only a `run_command` this run's approval produced, and only for the
-   * `acceptance:` request that repeats the same command in the same cwd. A different command still asks.
+   * Commands already approved in this run, keyed by command and cwd, so automatic verification
+   * re-running the same `run_command` in the same cwd does not ask twice.
    */
   const approvedCommands = new Set<string>();
   /** Approvals this run refused without asking a person, so the registry can report policy rather than "user no". */
@@ -102,15 +79,9 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
       });
       return true;
     }
-    /**
-     * The planning phase is read-only, and that is enforced here rather than only by hiding tools:
-     * every workspace mutation in the registry declares a permission, so refusing the approval
-     * refuses the effect. The model is not asked, because a 120s approval prompt for an operation
-     * that cannot be allowed would only waste the user's time.
-     */
+    /** Read-only (planning) runs refuse every permissioned effect here without prompting. */
     if (options.isReadOnly()) {
-      // A planning run refuses every mutation, and that refusal is an answer: it is recorded as one so that
-      // "asked but never answered" keeps exactly one meaning — the run was interrupted while waiting.
+      // Record the refusal as an answer.
       readOnlyRefusals.add(approval);
       store.recordEvent(sessionId, 'approval.required', { approval });
       store.recordEvent(sessionId, 'approval.decided', {
@@ -135,14 +106,7 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
       const allowed = await waitingOnPerson(async () =>
         options.approve?.(approval, AbortSignal.any([approvalSignal, steering])),
       );
-      /**
-       * Why the wait ended, which is not the same question as what the answer was.
-       *
-       * A denied approval and a stopped run both arrive here as `false`, and the difference is only visible in
-       * the signals: a person who refuses a write does not abort the call, so an aborted call signal means the
-       * wait was *cut short* rather than answered. Recording both as "denied" would tell a reader later that
-       * someone looked at this file and refused it, which they never did.
-       */
+      /** Why the wait ended: an aborted signal means it was cut short, not refused. */
       const cancelled = steering.aborted || approvalSignal.aborted;
       const reason = cancelled
         ? 'cancelled'
@@ -153,8 +117,7 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
         reason,
       } as const;
       if (decision.allow && command) approvedCommands.add(command);
-      // The decision is durable, not just live: after a reload the transcript shows a file that was written,
-      // and this is the only record that says a person allowed it.
+      // Durable: the only record that a person allowed this effect.
       store.recordEvent(sessionId, 'approval.decided', decision);
       emit('approval.decided', decision);
       return decision.allow;
@@ -172,10 +135,8 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
   };
   const ask: Questioner = async (request: QuestionRequest, questionSignal) => {
     /**
-     * Asking is not a mutation, so this is the one seam that a read-only or planning run keeps: the
-     * model may need a decision before it can plan anything, and refusing to ask would only make it
-     * guess. A host with no questioner answers "unavailable" rather than throwing, so the tool result
-     * still tells the model what to do next.
+     * Asking is not a mutation, so read-only and planning runs keep it. Without a questioner the
+     * answer is `unavailable`.
      */
     if (!options.question) return { answered: false, answers: [], reason: 'unavailable' };
     const steering = queue.steering.signal;
@@ -202,14 +163,9 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
   };
   approve.decisionReason = (approval) => (readOnlyRefusals.has(approval) ? 'read-only' : undefined);
   /**
-   * Why the refusal happened, as the layer that decided it can say.
-   *
-   * The registry reads this instead of calling every `false` "the user said no": a permission preset that denied
-   * the call without asking anybody is a policy decision, and telling the model (and the person reading the tool
-   * card) that a human refused it would be a false account of what happened. The inner approver owns the answer
-   * when there is one — the host records `policy`, `launch-options`, `task-approval` or `user` at the moment it
-   * decides — and this wrapper adds only the case it decides itself: a read-only refusal, which its own record
-   * already writes down as `read-only` in `decisionReason`.
+   * Why a refusal happened, so a policy denial is not reported as a human refusal. The inner
+   * approver's source (`policy`, `launch-options`, `task-approval`, `user`) is used when present;
+   * this wrapper adds only its own read-only refusals.
    */
   approve.decisionSource = (approval) =>
     readOnlyRefusals.has(approval) ? 'policy' : options.approve?.decisionSource?.(approval);

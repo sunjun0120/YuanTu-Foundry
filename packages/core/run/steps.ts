@@ -13,26 +13,17 @@ export interface RunStepsOptions {
 }
 
 /**
- * The step the log currently has open, its timing, and the one way it ever closes.
- *
- * Every exit from the round loop goes through `end`, so the log holds exactly one `step.finished` per
- * `step.started` — including the exits that throw, which is the whole point. A step left open is how a reader
- * tells a run that was cut off from one that ended, so a stray open step is a false report of a crash, and the
- * number is kept here because the classification of a throw needs the step it happened in after the loop's own
- * variable is out of scope.
+ * The step the log has open, its timing, and the one way it closes. Every exit from the round loop
+ * goes through `end`, so each `step.started` gets exactly one `step.finished`; an open step means a
+ * crash.
  */
 export class RunSteps {
   private readonly options: RunStepsOptions;
   /** The step the log has open, or `null` between steps. */
   open: number | null = null;
   /**
-   * When the open step began, and when its first visible text arrived.
-   *
-   * Two facts about the *step* rather than about the request, because that is what the numbers beside them
-   * mean: a round that re-sent a refused request is still one step, so its wall time and its first-token
-   * latency are measured from where the step opened and its first token survives the retry. `null` outside a
-   * step — before the first one opens, and again once its timing has been closed — so no figure can be
-   * accrued twice or against a step that assembled no answer.
+   * When the open step began and when its first visible text arrived, measured per step (retries
+   * included). `null` outside a step so nothing is accrued twice.
    */
   private startedAt: number | null = null;
   private firstTokenAt: number | null = null;
@@ -42,9 +33,8 @@ export class RunSteps {
   }
 
   /**
-   * Open a step, before the round does anything at all, so a step that dies while its request is still being
-   * built is a step the log names. A run cancelled before its first step opens none, which is the honest
-   * answer: no work had begun.
+   * Open a step before the round does anything, so a step that dies while building its request is
+   * still named.
    */
   begin(step: number): void {
     const { store, sessionId, runId } = this.options;
@@ -65,12 +55,8 @@ export class RunSteps {
   }
 
   /**
-   * Close the open step's spans, at the moment its answer was assembled.
-   *
-   * This is the `assistant/message` side of the boundary: `begin` opened the step, this closes what the step
-   * spent, and `end` closes the boundary itself. Only a reported output count makes a step a decode sample,
-   * which is why a round that answered with no tokens contributes a throughput of nothing rather than a share of
-   * its wall time.
+   * Close the open step's spans when its answer is assembled. Only a reported output count makes it
+   * a decode sample.
    */
   commitTiming(response: ModelResponse): void {
     if (this.startedAt === null) return;

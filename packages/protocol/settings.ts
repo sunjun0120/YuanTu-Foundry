@@ -10,45 +10,25 @@ import {
 } from './cache-modes.ts';
 
 /**
- * The settings this process owns: their defaults, their environment names, and what a mistyped name does.
+ * The settings this process owns: their defaults, environment names, and validation. This module is
+ * the single owner of every default so entry points and help text cannot drift apart.
  *
- * The defaults used to live wherever they were needed — `200` rounds and `1_000_000` tokens in the kernel,
- * again in the Host, `10_000_000` context characters in both, `120_000` ms timeouts in four places, and the
- * same numbers written out a fifth time in the CLI help text. Nothing compared them, so the help text could
- * say `default: 200` while the kernel used something else, and a new entry point could quietly pick its own
- * default. This module is the single owner: one table, one resolver, and one place that decides what a number
- * is allowed to be.
- *
- * The second half is the louder half. `YUANTU_MODELS` (a typo for `YUANTU_MODEL`) used to be ignored in
- * silence — the run simply used a different model than the operator asked for, which is the kind of failure
- * that only shows up much later. `environmentProblems` reports every `YUANTU_*` key this build does not know,
- * with the closest name it does know, and the entry points refuse to start on it.
- *
- * Keys used only by tests are listed too: the check is only honest if it knows about *every* key the project
- * sets, including the ones it sets for itself.
+ * `environmentProblems` reports every unknown `YUANTU_*` key with the closest known name, and entry
+ * points refuse to start on it. Test-only keys are listed too, so the check knows every key the
+ * project sets.
  */
 export interface RunDefaults {
   maxContextChars: number;
   /**
-   * The model's context window, when one has been declared.
-   *
-   * Deliberately without a default. A window is a fact about somebody else's endpoint: 1,000,000 for every
-   * protocol meant a gateway serving 128k was measured against a number nobody had checked, and the run that
-   * failed was blamed on the conversation. App entry points resolve metadata or a local application budget; an embedder that
-   * leaves the window absent still asks the kernel to run without token-window checks.
+   * The model's context window, when declared. Deliberately no default: the window is a fact about
+   * the endpoint. Entry points resolve it from metadata or a local budget; when absent, the kernel
+   * runs without token-window checks.
    */
   maxContextTokens?: number;
   maxOutputTokens: number;
   /**
-   * A run's *optional* wall-clock limit for one main model request, and only when an operator asks for one.
-   *
-   * There is deliberately no default: a model that keeps streaming is making progress, and cutting it off at
-   * an arbitrary two minutes turns a slow answer into a failed run. What protects a run from a *stalled*
-   * endpoint is the stream idle timeout, which is a different question and has its own number (`ProviderConfig`
-   * `streamIdleTimeoutMs`, default 300000).
-   *
-   * It used to be a limit with a default that only the summary request read, which is how `RunDefaults` came
-   * to own one number with two meanings and why the main request's timeout looked configured but never fired.
+   * Optional wall-clock limit for one main model request; no default, since a streaming model is
+   * making progress. Stalled endpoints are caught by `ProviderConfig.streamIdleTimeoutMs` instead.
    */
   requestTimeoutMs?: number;
   /**
@@ -60,106 +40,57 @@ export interface RunDefaults {
   /** How long the endpoint may take to send its response headers; the provider reads its connection's value. */
   responseHeadersTimeoutMs: number;
   /**
-   * How many times a round's model request may be re-sent after a failure the retry policy calls transient
-   * (`packages/protocol/retry.ts`).
-   *
-   * The count is per round, not per run, and the attempt is recorded before the wait, so the number of
-   * attempts already made for a round is a fact in the log rather than a field in this process. That is what
-   * makes it survive a restart: a host that dies mid-backoff does not come back with a fresh allowance.
-   *
-   * `0` means "never re-send": the first failure ends the run, which is what an operator wants when a request
-   * is expensive, or when they would rather see the failure than the bill.
+   * Re-sends allowed per round after a transient failure (`packages/protocol/retry.ts`). Attempts
+   * are recorded before the wait, so a restarted host does not get a fresh allowance. `0` means
+   * never re-send.
    */
   maxModelRetries: number;
   /** How many times an attempt that produced no bytes may be re-sent, beyond `maxModelRetries`. `0` is off. */
   zeroByteRetries: number;
   /**
-   * Model time a run may spend investigating before it is nudged to start editing.
-   *
-   * The nudge ("stop widening the search") fires at half this value and the tool withdrawal at the value itself.
-   * Raised from 120 s after the first measured batch: the median first edit of a run that edited naturally was
-   * 70 s, the ninetieth percentile 100 s and the latest 125 s, so 120 s cut the tail of normal work rather than
-   * a runaway.
+   * Model time a run may spend investigating before it is pushed to edit: a nudge at half this
+   * value, tool withdrawal at the full value.
    */
   investigationMs: number;
   questionTimeoutMs: number;
   /**
-   * A run's total budget: rounds, wall-clock milliseconds less the time spent waiting on a person, and model
-   * tokens (output plus the input not served from the provider's prompt cache, every round). `0` turns that one
-   * off.
+   * A run's total budget: rounds, wall-clock time excluding waits on a person, and model tokens
+   * (output plus uncached input). `0` turns one off. A backstop against runaway runs, not a task
+   * size; reaching it ends the run `limited` at a round boundary.
    *
-   * A backstop rather than a size for the task. The round loop deliberately has no round count of its own (see
-   * `packages/core/agent.ts`), and the goal's budget only counts the rounds a goal asked for; nothing bounded an
-   * ordinary run that kept calling tools — a background wake or an unattended task with nobody to press Stop
-   * could spend for as long as the endpoint answered. The defaults are generous enough that interactive work
-   * does not meet them. The token count is cumulative, but cached reads are left out of it: counting them made
-   * it grow with rounds × context, so a long task with a large conversation met it after a hundred-odd rounds
-   * of ordinary work. It is the cap on what a runaway run can bill, not a measure of work done; a provider
-   * that reports no cache figure is counted in full. A run that reaches one ends `limited`, at a round
-   * boundary, with every finished tool result already recorded.
-   *
-   * Rounds are off by default (`0`), and that is the same decision the loop's comment records: a default of 256
-   * rounds used to cut long migrations off half-way, which is why it was removed, and a long task that keeps
-   * changing the project is exactly the run a round count gets wrong. The wall clock and the tokens bound a
-   * runaway without guessing how many steps a task needs; the round count stays available to an operator who wants
-   * one (`tests/failure-codes.test.ts` holds the 300-round run that must still finish).
+   * Cached reads are excluded so long conversations do not hit the token cap from re-reading
+   * context. Rounds are off by default because a round count cuts long tasks short;
+   * `tests/failure-codes.test.ts` holds the 300-round run that must still finish.
    */
   maxRunRounds: number;
   maxRunMs: number;
   maxRunTokens: number;
   /**
-   * How many sibling tool calls from one assistant message may be in flight at once.
-   *
-   * Only calls whose tool promises it (`Tool.isConcurrencySafe`) are ever overlapped, so this bounds a
-   * scheduling decision rather than a count of effects; `1` is strictly serial execution and is what an
-   * operator wants when a workspace cannot take two readers at once.
+   * Sibling tool calls from one assistant message that may run at once. Only
+   * `Tool.isConcurrencySafe` calls overlap; `1` is strictly serial.
    */
   maxParallelToolCalls: number;
-  /**
-   * How long one runtime invariant check may take before it is reported as a violation.
-   *
-   * A check is user-supplied code running inside the run, so it needs the same bound as every other seam in
-   * this runtime: a promise that holds must not hang the process that is verifying it.
-   */
+  /** How long one runtime invariant check may take before it counts as a violation. */
   invariantTimeoutMs: number;
   /**
-   * How long one *external* hook command may run.
-   *
-   * An order of magnitude above the in-process tool-hook budget (5s) on purpose: an external hook pays
-   * process startup before it does anything, and the things people hang off these events — a formatter, a
-   * linter, a policy script that calls an API — routinely take seconds. Five seconds aborts a Node script
-   * before it has finished parsing its arguments, which reads to the operator as "my hook is broken" rather
-   * than "the budget is too small". It stays well under the 30s `close` budget so a hung hook cannot hold a
-   * run open indefinitely.
+   * How long one external hook command may run. Well above the in-process tool-hook budget (5s)
+   * because external hooks pay process startup, and well below the 30s `close` budget.
    */
   hookTimeoutMs: number;
   /**
-   * Characters of the parent's transcript a forked sub-agent starts with.
-   *
-   * A fork is only useful if it inherits the conversation, and it is only safe if that copy is bounded: a
-   * long session carries base64 images and provider continuation state, and a child whose whole context is
-   * spent on its parent's history has nothing left to think with. The copy takes the most recent messages and
-   * drops the oldest, so what is lost is what the child is least likely to need.
+   * Characters of the parent's transcript a forked sub-agent starts with. The newest messages are
+   * kept so the child still has room to work.
    */
   forkTranscriptChars: number;
   /** Messages a forked sub-agent starts with, so a very long conversation of tiny messages is bounded too. */
   forkTranscriptMessages: number;
-  /**
-   * How many of the newest tool results are never shortened.
-   *
-   * Shortening is a projection of the transcript, not an edit to it, so this is about what the model can still
-   * read without a second call rather than about what survives. The newest results are the ones the model is
-   * reasoning over right now.
-   */
+  /** How many of the newest tool results are never shortened. Shortening is a view, not an edit. */
   toolResultKeepRecent: number;
   /** Characters a shortened tool result keeps, split between its head and its tail. */
   toolResultShrinkTokens: number;
   /**
-   * Code points a tool result may reach before its middle is dropped.
-   *
-   * Below the 24,000-character bound every tool result is produced with, which is what gives this pass a range
-   * in which it can fire at all. Code points rather than bytes because the cut is a character cut: a byte budget
-   * would spend three times as much on one script as on another (see `packages/core/context/prune.ts`).
+   * Code points a tool result may reach before its middle is dropped. Below the 24,000-character
+   * production bound so it can fire; see `packages/core/context/prune.ts`.
    */
   toolResultPruneThresholdChars: number;
   /** Code points a pruned result keeps at its head, where a log says what it was doing. */
@@ -167,11 +98,8 @@ export interface RunDefaults {
   /** Code points a pruned result keeps at its tail, where a log says how it ended. */
   toolResultPruneTailChars: number;
   /**
-   * Share of the window at which old tool results are shortened.
-   *
-   * This is the "in good time" part: waiting until a request does not fit means shortening under pressure and
-   * re-sending a request that already failed its budget check. A percentage rather than a token count keeps it
-   * meaningful across window sizes.
+   * Share of the window at which old tool results are shortened, so shortening happens before a
+   * request no longer fits.
    */
   contextShrinkPercent: number;
 }
@@ -181,53 +109,32 @@ export interface RunDefaults {
  */
 export const RUN_DEFAULTS = Object.freeze({
   /**
-   * What a run is bounded by, and what it deliberately is not.
-   *
-   * Not rounds: the model decides when it is done, and a fixed number of rounds is a guess about how much work
-   * a task is — wrong in both directions. Not a cumulative token allowance either: an allowance counts the same
-   * conversation again every round, so it runs out in proportion to rounds × context rather than to work done,
-   * and a long task fails for having talked a lot. What limits spend is the provider's own quota plus the
-   * operator's choice of model; what limits a single request is the window below; what limits the rounds nobody
-   * asked for is the goal that asked for them (`GOAL_DEFAULTS.maxGoalRounds`).
+   * Per-request bound. There is no round cap or cumulative token allowance here; the run-total
+   * backstops are `maxRunRounds`/`maxRunMs`/`maxRunTokens`, and goal rounds are counted by
+   * `GOAL_DEFAULTS.maxGoalRounds`.
    */
   maxContextChars: 10_000_000,
   maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
   summaryTimeoutMs: 120_000,
   streamIdleTimeoutMs: 300_000,
   /**
-   * The same default as `streamIdleTimeoutMs`, so a connection that names neither behaves exactly as it did when
-   * one number bounded both waits. The provider reads its *connection's* value; this is the run-level default and
-   * the single place the bound is validated.
+   * Same as `streamIdleTimeoutMs`, so a connection naming neither waits the same for both. The
+   * provider reads its connection's value; this is the run-level default.
    */
   responseHeadersTimeoutMs: 300_000,
-  /**
-   * Five, which is the same allowance the LLM layer's own retry policy resolves to by default. A round that
-   * has failed five times is usually failing for a reason re-sending cannot fix, and each attempt is a bill
-   * for the same answer.
-   */
+  /** Matches the LLM layer's default retry policy. */
   maxModelRetries: 5,
-  /**
-   * Off unless asked for. A failure that produced no bytes is cheap to re-send, but it is also still a failure:
-   * the endpoint may have received the request and billed for it (which is why the record says "re-sent", not
-   * "free"). The evaluation asks for one; the product does not.
-   */
+  /** Off by default: a zero-byte failure may still have been billed. The evaluation enables one. */
   zeroByteRetries: 0,
-  /**
-   * 240 s, and the nudge at 120 s. The first version hard-coded 120 s / 60 s, which the measured batch showed was
-   * inside the range of ordinary work rather than past it: every one of its fourteen hand-offs was triggered by
-   * this clock, at the fifth to twelfth round, never by the round count.
-   */
+  /** 240 s, with the nudge at 120 s. */
   investigationMs: 240_000,
   questionTimeoutMs: 120_000,
   maxRunRounds: 0,
   maxRunMs: 2 * 60 * 60 * 1000,
   maxRunTokens: 20_000_000,
   /**
-   * Eight: the tools that opt in are local file, git and session reads, and a model exploring a codebase asks
-   * for several at once — five to eight reads or searches in one message is common, and with four the second
-   * half waited for the first. Writes, commands and anything carrying a permission stay exclusive whatever this
-   * says, so going wider only overlaps more reads; past eight the cost is disk and handle contention on one
-   * machine. An operator with a reason to overlap more (or less) sets `YUANTU_MAX_PARALLEL_TOOLS`.
+   * Only reads opt in to overlap; writes, commands and permissioned tools stay exclusive. Override
+   * with `YUANTU_MAX_PARALLEL_TOOLS`.
    */
   maxParallelToolCalls: 8,
   invariantTimeoutMs: 5_000,
@@ -237,13 +144,8 @@ export const RUN_DEFAULTS = Object.freeze({
   toolResultKeepRecent: 6,
   toolResultShrinkTokens: 400,
   /**
-   * Just below the 24,000-character bound every tool result is produced with, so this pass has a range in which
-   * it can fire at all — a threshold above that bound would be a setting that can never do anything.
-   *
-   * The head keeps most of the budget because the two ends of a build log or a diff are not equally useful: the
-   * top says what the command was and what it started doing, the bottom says how it ended, and the middle is the
-   * part nobody reads twice. The three numbers satisfy `head + marker + tail <= threshold`, which is the
-   * invariant that makes one pass land inside the budget instead of near it (`assertPrunePolicy`).
+   * Just below the 24,000-character production bound so this pass can fire. The head gets most of
+   * the budget. `head + marker + tail <= threshold` must hold (`assertPrunePolicy`).
    */
   toolResultPruneThresholdChars: 20_000,
   toolResultPruneHeadChars: 12_000,
@@ -256,30 +158,19 @@ export interface EnvironmentSpec {
   range?: readonly [number, number];
   description: string;
   /**
-   * A rule the four kinds cannot express, returning what is wrong with the value or nothing.
-   *
-   * `YUANTU_PROMPT_CACHE` is why this exists. It grew from a boolean into four words, and its older spellings
-   * still have to be accepted — which an `enum` cannot do, because the table compares against literals. Declaring
-   * it `string` instead would have been the quiet failure this whole table exists to prevent: the environment
-   * check would stop noticing a typo in it, so `YUANTU_PROMPT_CACHE=maybe` would start a run instead of failing
-   * one. The rule lives here, beside the value it validates, so "what is legal" still has exactly one owner.
+   * A rule the four kinds cannot express; returns what is wrong with the value, or nothing. Exists
+   * for `YUANTU_PROMPT_CACHE`, whose older spellings an `enum` cannot accept.
    */
   validate?: (value: string) => string | undefined;
   /**
-   * What to write in a value column when the four kinds cannot say it.
-   *
-   * `string` is the honest answer for a setting whose shape is "some text", and a useless one for a setting whose
-   * text has to be one of four words: the settings page would label `YUANTU_PROMPT_CACHE` as `string` while
-   * refusing everything except the modes. `settingShape` prefers this when a setting has it, so the value column,
-   * the README table and the CLI's `env` all print the vocabulary rather than the type.
+   * The value shape to display when the kind cannot say it (e.g. the four cache modes instead of
+   * `string`). Used by `settingShape`.
    */
   shape?: string;
 }
 /**
- * Every setting an operator may set, and the shape it has to have.
- *
- * `kind` is what makes this typed rather than a list of names: `enum` and `boolean` values are validated
- * here instead of at five call sites, and `range` is the bound the setters used to repeat.
+ * Every setting an operator may set and its shape. `enum`, `boolean` and `range` are validated
+ * here, not at call sites.
  */
 export const ENVIRONMENT = {
   YUANTU_API_KEY: { kind: 'string', description: '模型 API 密钥' },
@@ -287,8 +178,7 @@ export const ENVIRONMENT = {
   YUANTU_MODEL: { kind: 'string', description: '模型 ID' },
   YUANTU_PROTOCOL: {
     kind: 'enum',
-    // `BUILTIN_PROTOCOLS` rather than three literals: the parser, the help text and the provider registry
-    // all answer "which protocol names exist", and a second copy is how the retry range drifted before.
+    // `BUILTIN_PROTOCOLS` so the parser, help text and provider registry share one list.
     values: BUILTIN_PROTOCOLS,
     description: '协议适配器',
   },
@@ -307,10 +197,8 @@ export const ENVIRONMENT = {
   },
   YUANTU_PROMPT_CACHE: {
     kind: 'string',
-    // The four modes and the spellings the older boolean accepted. A `string` kind rather than an `enum` because
-    // the aliases have to be translated before the value is compared, so the rule is `validate` below rather than
-    // a literal list — and it lives in the table, not in the adapter, so the environment check still refuses a
-    // typo at startup instead of letting it through as an opaque string.
+    // A `string` kind with `validate`, because older boolean spellings must be translated before
+    // comparing. Kept in the table so typos are still refused at startup.
     validate: (value) =>
       promptCacheMode(value)
         ? undefined
@@ -324,11 +212,8 @@ export const ENVIRONMENT = {
     description: '流式空闲超时（毫秒）',
   },
   /**
-   * Time to the response headers, separate from the stream's own idle clock.
-   *
-   * Not set means "the same as the idle timeout", which is what a connection used to get: the one number bounded
-   * both waits. A reasoning model's first byte can be a minute away while its stream is healthy, so an operator
-   * (and the evaluation harness) can give the wait for headers its own budget.
+   * Time to response headers, separate from the stream idle clock. Unset means the same as the idle
+   * timeout.
    */
   YUANTU_RESPONSE_HEADERS_TIMEOUT_MS: {
     kind: 'number',
@@ -341,11 +226,8 @@ export const ENVIRONMENT = {
     description: '每个 step 边界重发模型请求的次数上限（0 = 不重试）',
   },
   /**
-   * How long a run may investigate before it is asked to start editing, and (at twice the warning point) before
-   * search and other investigation tools are withdrawn for a targeted read or an edit.
-   *
-   * One number rather than two: the warning is half of it, so the pair cannot be configured into a state where
-   * the "you are taking long" notice arrives after the tools were already taken away.
+   * How long a run may investigate before it is asked to edit; tools are withdrawn at this value
+   * and the warning fires at half, so the two cannot be misordered.
    */
   YUANTU_INVESTIGATION_MS: {
     kind: 'number',
@@ -353,12 +235,8 @@ export const ENVIRONMENT = {
     description: '调查到动手的时间阈值（毫秒；提醒取一半，工具轮数阈值 12/20 不变）',
   },
   /**
-   * How many times an attempt that produced no bytes at all may be sent again, beyond the retry allowance above.
-   *
-   * A separate allowance rather than a larger `YUANTU_MAX_RETRIES`, because the two are not the same bargain:
-   * a normal retry is spent on any transient failure, including one that already streamed part of an answer,
-   * while this one only applies when the connection produced nothing to duplicate. Zero is the product default —
-   * the evaluation is what asks for one re-send.
+   * Re-sends for attempts that produced no bytes, beyond `YUANTU_MAX_RETRIES`. Separate because
+   * normal retries also cover partial streams. Product default is zero.
    */
   YUANTU_ZERO_BYTE_RETRIES: {
     kind: 'number',
@@ -372,12 +250,8 @@ export const ENVIRONMENT = {
   },
   YUANTU_MAX_OUTPUT_TOKENS: { kind: 'number', range: [1, 10_000_000], description: '单次输出上限' },
   /**
-   * The windows of the endpoint's *other* models, as JSON: `{"<model id>": {"contextWindow": n}}`.
-   *
-   * Written by the desktop (the model rows of an endpoint group) and read where a run resolves a route's
-   * window, because one declaration answers for one model and a pre-step policy can re-aim a round at another.
-   * The shape is checked by the reader rather than here: it is a map of records, not one of the scalar kinds
-   * this table declares.
+   * Context windows of the endpoint's other models, as JSON `{"<model id>": {"contextWindow": n}}`.
+   * Written by the desktop; the reader checks the shape.
    */
   YUANTU_MODEL_CAPACITIES: {
     kind: 'string',
@@ -447,11 +321,8 @@ export const ENVIRONMENT = {
     values: ['denied', 'unrestricted'],
     description: '命令网络权限；不支持所需隔离时拒绝执行',
   },
-  // Internal, and registered for the same reason the test keys below are: the check has to know every YUANTU_*
-  // name the project itself uses. This one never reaches a user's environment — the Windows launcher is handed
-  // its per-command payload (command line, cwd, environment block) in this variable instead of in the
-  // PowerShell script text, because a script whose text changes per command is re-scanned by the platform on
-  // every command, which measured 2.1s against 0.43s for a script whose text never changes.
+  // Internal: carries the Windows launcher's per-command payload, so the PowerShell script text
+  // stays constant and is not re-scanned per command.
   YUANTU_SANDBOX_SPEC: { kind: 'string', description: '（内部）沙箱启动器的单次命令载荷' },
   YUANTU_SANDBOX_TEST_LAUNCH_PAUSE_MS: {
     kind: 'string',
@@ -522,8 +393,7 @@ export const ENVIRONMENT = {
   },
   YUANTU_MEMORY_DIR: { kind: 'string', description: '用户级记忆目录' },
   /**
-   * Whether runs use saved memories. `read` keeps the reminder and the reading tools but changes nothing on disk;
-   * `off` is a run with no memory at all, for an evaluation that must not depend on what this machine remembers.
+   * Whether runs use saved memories. `read` reads without writing; `off` disables memory entirely.
    */
   YUANTU_MEMORY: {
     kind: 'enum',
@@ -532,10 +402,8 @@ export const ENVIRONMENT = {
       '记忆开关：on 读写（默认）；read 只注入和读取，不保存、不删除、不记使用时间；off 不注入、不提供记忆工具',
   },
   /**
-   * The project whose workspace memories this process reads and writes, when it works somewhere else.
-   *
-   * The subprocess sub-agent provider sets it: its child runs in a scratch workspace that has no `.yuantu`, and
-   * without this it would see none of the project's memories.
+   * The project whose workspace memories to use when working elsewhere. Set by the subprocess
+   * sub-agent provider, whose scratch workspace has no `.yuantu`.
    */
   YUANTU_MEMORY_ROOT: {
     kind: 'string',
@@ -545,11 +413,8 @@ export const ENVIRONMENT = {
   YUANTU_KNOWLEDGE_DB: { kind: 'string', description: '知识库数据库路径' },
   YUANTU_REPO_MAP: { kind: 'enum', values: ['on', 'off'], description: '是否注入结构大纲' },
   /**
-   * The fast search backend's switch.
-   *
-   * `0` removes it; `1` (or unset) leaves it in place, where it still refuses to run without a verified asset.
-   * A setting rather than an internal constant because a deployment that has decided never to ship a search
-   * binary should not have to look for one on every literal search.
+   * The fast search backend's switch. `0` removes it; `1` or unset keeps it (it still needs a
+   * verified asset).
    */
   YUANTU_SEARCH_RG: {
     kind: 'enum',
@@ -575,12 +440,9 @@ export const ENVIRONMENT = {
       '已移除的隔离工作区保留天数；超过后在 Host 启动时彻底清除（不可再恢复）。缺省不清除',
   },
   /**
-   * Where a write-capable sub-agent executes.
-   *
-   * `auto` is the product default: a read-only child shares the delegator's directory, because a copy of a tree it
-   * cannot change buys nothing, and anything that may write gets its own worktree so two children cannot overwrite
-   * each other. `shared` is the pre-isolation behaviour kept deliberately available — it offers no isolation at all,
-   * which is why the interface must say so rather than showing it as isolated.
+   * Where a write-capable sub-agent executes. `auto` shares the directory for read-only children
+   * and gives writers their own worktree. `shared` offers no isolation, and the interface must say
+   * so.
    */
   YUANTU_SUBAGENT_WORKSPACE: {
     kind: 'enum',
@@ -602,13 +464,8 @@ export const ENVIRONMENT = {
   YUANTU_PACKAGED: { kind: 'boolean', description: '是否为安装包运行' },
   YUANTU_WORKFLOWS: { kind: 'boolean', description: '是否启用持久任务调度' },
   /**
-   * Whether the Host spends one small model call naming a session before its first reply.
-   *
-   * On by default, because a named session is what makes the session list usable. It is a switch rather than an
-   * unconditional behaviour because that call is an **extra request to the configured endpoint**: a fixture that
-   * scripts one response per request sees it, a metered endpoint bills it, and an endpoint that is already down
-   * pays a timeout for it before the run the user actually asked for starts. Turning it off leaves every session
-   * on its first-message fallback title, which is what a deployment with no spare call wants.
+   * Whether the Host spends one small model call to name a session before its first reply. A switch
+   * because it is an extra request to the endpoint; off leaves the first-message fallback title.
    */
   YUANTU_SESSION_TITLES: {
     kind: 'boolean',
@@ -620,11 +477,9 @@ export const ENVIRONMENT = {
     description: '调度器两次查看之间的最长间隔（到期时刻会直接唤醒它；这里是上限与兜底）',
   },
   /**
-   * How many *different* sessions one Host may run at the same time.
-   *
-   * A session is still strictly serial; this bounds the Host as a whole, so a long run in one session no longer
-   * holds back another session's scheduled task or background wake. Exclusive operations (undo, plan execution,
-   * workspace import, compaction) still wait for the whole Host to be idle. `1` restores the old global serial Host.
+   * How many different sessions one Host may run at once; each session stays serial. Exclusive
+   * operations (undo, plan execution, workspace import, compaction) wait for the whole Host. `1` is
+   * fully serial.
    */
   YUANTU_HOST_MAX_RUNS: {
     kind: 'number',
@@ -649,24 +504,15 @@ export const ENVIRONMENT = {
 } as const satisfies Record<string, EnvironmentSpec>;
 export type EnvironmentKey = keyof typeof ENVIRONMENT;
 /**
- * The one parser for `YUANTU_PROMPT_CACHE`, and the one list of what it accepts.
- *
- * It lives here rather than in the provider layer because the setting's own value is not the whole answer: `auto`
- * has to be resolved against the route before anything can be sent, and that resolution is a second owner of the
- * same vocabulary. Keeping the parse and the vocabulary together is what stops "which modes exist" from being
- * answered twice.
+ * The one parser for `YUANTU_PROMPT_CACHE` and its vocabulary. Kept beside the protocol because
+ * `auto` must also be resolved against the route.
  */
 export function promptCacheMode(value: unknown): PromptCacheMode | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   const text = String(value).trim().toLowerCase();
   /**
-   * `Object.hasOwn`, because the alias table is a plain object and this lookup used to be a bare subscript.
-   *
-   * That put `Object.prototype` in the chain, and lower-casing does not remove the two names that are already
-   * lower case: `constructor` resolved to the `Object` function and `__proto__` to an object, both truthy. The
-   * environment check that exists to refuse a misspelling therefore *admitted* one, and handed a function to code
-   * that expects a mode — `cacheFields` compares it and falls into a branch no in-domain value can reach.
-   * `Object.hasOwn` answers about the table, which is the only thing that was ever meant.
+   * `Object.hasOwn`, so names like `constructor` or `__proto__` do not resolve through the
+   * prototype.
    */
   const alias = Object.hasOwn(PROMPT_CACHE_ALIASES, text)
     ? (PROMPT_CACHE_ALIASES as Record<string, PromptCacheMode | undefined>)[text]
@@ -680,19 +526,9 @@ export function defaultPromptCacheMode(protocol: string): PromptCacheMode {
   return 'off';
 }
 /**
- * The four model runtime limits, under the name the settings UI gives each one.
- *
- * One setting has two ends — the variable an operator exports and the field of a saved model row in the
- * desktop's settings file — and they had drifted into three different ranges: `apps/desktop/model-settings.ts`
- * accepted a context window in `[1024, 2_000_000]`, `apps/desktop/settings-contract.ts` wrote those numbers
- * again, and `ENVIRONMENT` above accepts `[1, 100_000_000]`. The visible symptom was the worst kind: a value
- * the CLI honoured was *silently ignored* by the desktop, which fell back to "no window declared" with nothing
- * on screen to say so. The range lives in `ENVIRONMENT` and nowhere else; this map is how the desktop's env
- * reader, its settings contract and its form bounds all find it.
- *
- * The keys are strings and the fields are identifiers because the two ends are named differently on purpose:
- * `YUANTU_MAX_CONTEXT_TOKENS` is an operator-facing name, `maxContextTokens` is a JSON field and an input's
- * `data-field`.
+ * The four model runtime limits, keyed by environment name with the matching settings field. The
+ * range lives only in `ENVIRONMENT`; the desktop's env reader, settings contract and form bounds
+ * read it through here.
  */
 export const MODEL_LIMIT_KEYS = {
   maxContextTokens: 'YUANTU_MAX_CONTEXT_TOKENS',
@@ -706,17 +542,12 @@ export function modelLimitRange(field: ModelLimitField): readonly [number, numbe
   return ENVIRONMENT[MODEL_LIMIT_KEYS[field]].range;
 }
 /**
- * How a person writes a value of this kind, in the words the parser actually enforces.
- *
- * Three readers ask this question — the CLI's `env` command, the generated settings table in the README, and the
- * desktop's settings page — and the first two had already grown their own copy that had to agree word for word.
- * The strings are ASCII on purpose: they are a shape rather than a sentence, so they read the same in every
- * language the interface is written in.
+ * How a person writes a value of this kind, as the parser enforces it. Shared by the CLI `env`
+ * command, the README table and the desktop settings page. ASCII on purpose: a shape, not a
+ * sentence.
  */
 export function settingShape(spec: EnvironmentSpec): string {
-  // A setting that carries its own vocabulary says so: "string" is what the parser accepts in the abstract, and
-  // the four words it actually accepts are what a person needs. Declared by the setting because only the setting
-  // knows -- the kinds cannot express "one of these, or the two spellings the last version used".
+  // A setting with its own vocabulary declares it.
   if (spec.shape) return spec.shape;
   if (spec.kind === 'enum') return spec.values!.join(' / ');
   if (spec.kind === 'number') return `${spec.range![0]}–${spec.range![1]}`;
@@ -724,16 +555,9 @@ export function settingShape(spec: EnvironmentSpec): string {
   return 'string';
 }
 /**
- * Whether a setting's *value* is a credential, so it may only be reported as present or absent.
- *
- * The rule is shared rather than copied because the two readers that show values — the CLI's `env` command and
- * the desktop's settings page — must agree about which ones are secrets; a copy is how one of them starts
- * printing a key. Matching on the name is deliberately blunt: a false positive costs a person one `echo`, and a
- * false negative prints an API key into scrollback or into whatever collects a terminal's output.
- *
- * The `_MS` / `_TOKENS` exemption is what keeps the rule about credentials rather than about the word "token":
- * `YUANTU_MAX_RUN_TOKENS` and `YUANTU_TOOL_TIMEOUT_MS` are budgets and durations, and a rule
- * that hid them would be hiding the numbers an operator came to look at.
+ * Whether a setting's value is a credential, so it is only reported as present or absent. Shared by
+ * the CLI `env` command and the desktop settings page. Name matching is deliberately broad; `_MS`
+ * and `_TOKENS` are exempt because those are budgets and durations.
  */
 export function isCredentialSetting(name: string): boolean {
   return /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(name) && !/_(MS|TOKENS)$/.test(name);
@@ -753,8 +577,7 @@ function closest(key: string): string | undefined {
 }
 function invalidValue(key: EnvironmentKey, value: string): string | undefined {
   const spec: EnvironmentSpec = ENVIRONMENT[key];
-  // The custom rule first: it is the one that knows about this setting's own vocabulary, including the spellings
-  // an earlier shape accepted.
+  // The custom rule knows this setting's vocabulary, so it goes first.
   if (spec.validate) return spec.validate(value);
   if (spec.kind === 'boolean') {
     const parsed = value.trim().toLowerCase();
@@ -775,12 +598,8 @@ function invalidValue(key: EnvironmentKey, value: string): string | undefined {
   return undefined;
 }
 /**
- * The typed value of one setting, or `undefined` when it is not set.
- *
- * This is the only reader there is: `environmentProblems` asks it what is wrong with a value and every
- * consumer of a setting goes through it, so a rule cannot exist in two places and drift. An empty value
- * counts as "not set" rather than as an invalid number, because `VAR=` in a script means exactly that and
- * every reader here has always treated it that way.
+ * The typed value of one setting, or `undefined` when unset. The only reader, so rules cannot
+ * drift. An empty value counts as unset.
  */
 export function parseSetting(
   env: NodeJS.ProcessEnv,
@@ -796,9 +615,8 @@ export function parseSetting(
   return raw;
 }
 /**
- * Everything wrong with an environment: keys this build does not know, and known keys whose value cannot be
- * used. Returned rather than thrown so a caller can show all of them at once — an operator who mistyped two
- * names should not have to fix them one restart at a time.
+ * Everything wrong with an environment: unknown keys and unusable values. Returned, not thrown, so
+ * all are shown at once.
  */
 export function environmentProblems(env: NodeJS.ProcessEnv = process.env): EnvironmentProblem[] {
   const problems: EnvironmentProblem[] = [];
@@ -826,15 +644,6 @@ export function assertEnvironment(env: NodeJS.ProcessEnv = process.env): void {
     `Invalid environment configuration:\n${problems.map((entry) => `  - ${entry.key}: ${entry.problem}`).join('\n')}`,
   );
 }
-/**
- * A run's limits with the shared defaults applied and every bound checked in one place.
- *
- * Every number here bounds *one request* (its window, its output cap, its timeout) or *the run's shape* (its
- * parallel tool calls, its stream idle timeout). None of them is a cumulative allowance, which is why there is
- * nothing to validate against `maxContextTokens`: a second window's worth of requests is not an overspend, it
- * is a longer conversation. The run's *round* count is not here either, because a run has no round cap: the
- * rounds nobody asked for are counted by the goal that asked for them.
- */
 /** Limits for which `0` is a deliberate policy: none kept, never retried, or that budget turned off. */
 const ZERO_ALLOWED = new Set([
   'toolResultKeepRecent',
@@ -882,13 +691,11 @@ export function resolveRunLimits(options: Partial<RunDefaults> = {}): RunDefault
     contextShrinkPercent: options.contextShrinkPercent ?? RUN_DEFAULTS.contextShrinkPercent,
   };
   /**
-   * Every limit is at least one, because zero of a round, a message count or a timeout is a misconfiguration
-   * rather than a choice. Two exceptions, both of which are policies an operator may hold deliberately:
-   * shortening every old result is what "smallest possible context" means (`toolResultKeepRecent`), and
-   * `maxModelRetries: 0` says a failed request is a failed run — never re-send it.
+   * Every limit must be at least one, except those in `ZERO_ALLOWED`, where `0` is a deliberate
+   * policy.
    */
   for (const [name, value] of Object.entries(resolved)) {
-    // `requestTimeoutMs` is absent unless an operator asked for one, and an absent limit is not a bad value.
+    // An absent limit (e.g. `requestTimeoutMs`) is not a bad value.
     if (value === undefined) continue;
     const floor = ZERO_ALLOWED.has(name) ? 0 : 1;
     if (!Number.isSafeInteger(value) || value < floor) throw new Error(`Invalid ${name}`);

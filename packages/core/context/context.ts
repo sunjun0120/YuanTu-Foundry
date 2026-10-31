@@ -34,22 +34,10 @@ export async function prepareContext(input: {
   summaryTimeoutMs: number;
   onSummaryRetry?: (details: Record<string, unknown>) => void;
   /**
-   * How to name the request a summary request is, when the caller caches prompts at all.
-   *
-   * A cache key has to describe the request that carries it, and the summary request is composed *here* — the
-   * caller's system prompt, the caller's tool catalogue, and the summary instruction as the last message — so the
-   * key cannot be a value the caller computed before the call. It is a function for that reason, and it is handed
-   * the request's own system prompt and catalogue, so a caller whose provider files entries by key
-   * (`promptCacheEnabled`) gets a key per request rather than one per round.
-   *
-   * The summary is a *message* (`summarySnapshot`), so compaction no longer moves the prefix: a summary request
-   * replays the prefix of the round it follows and the round after it sends the same one, which is what makes the
-   * key worth computing at all. What still makes it per-request is the prompt itself — approving a plan changes
-   * the catalogue mid-run, and a key taken once per run would then name two prefixes.
-   *
-   * Returning `undefined` is allowed and is a refusal rather than an omission: a caller replaying a *recorded*
-   * request names the key only while the request still matches the record, because a key for a prompt that is not
-   * the one behind it points the provider at somebody else's conversation.
+   * Names a summary request for caching, when the caller caches prompts. A function because the
+   * summary request is composed here from the caller's system prompt and catalogue, which can
+   * change mid-run (e.g. plan approval). Returning `undefined` refuses a key, e.g. when a replayed
+   * request no longer matches its record.
    */
   cacheKeyFor?: (system: string, tools: readonly ToolSpec[]) => string | undefined;
   calibration?: TokenCalibration;
@@ -58,26 +46,19 @@ export async function prepareContext(input: {
   /** Share of the window at which old tool results are shortened. Absent means only when the request cannot fit. */
   shrinkPercent?: number;
   /**
-   * Absent means oversized old results are left whole.
-   *
-   * Unlike `shrink`, mounting this needs nothing from the host — no spill target and no calibrated measure — so
-   * its absence is a deployment's choice rather than a missing capability.
+   * Absent means oversized old results are left whole. Needs nothing from the host, unlike
+   * `shrink`.
    */
   prune?: PruneSeam;
   /**
-   * Share of the window at which oversized old results start losing their middle.
-   *
-   * Absent means the same reading `shrinkPercent` has: the operator set no "in good time" point, so the pass
-   * runs only when the request cannot fit as it stands.
+   * Share of the window at which oversized old results lose their middle. Absent means prune only
+   * when the request cannot fit.
    */
   prunePercent?: number;
   /**
-   * The run this call is compacting for, when there is one.
-   *
-   * Compaction rewrites what the model sees, so it goes through the session's write lease: `claimCompaction`
-   * is taken before the first summary request (so the run does not pay for a summary it would be refused at
-   * the write) and `applyCompaction` re-checks the same rule when the op is recorded. Absent for a
-   * store-level caller that holds no lease — there is then no competing writer to exclude.
+   * The run this call compacts for. Compaction goes through the session's write lease:
+   * `claimCompaction` before the first summary request, re-checked by `applyCompaction`. Absent for
+   * store-level callers with no lease.
    */
   runId?: string;
   onUsage: (response: ModelResponse) => void;
@@ -89,65 +70,42 @@ export async function prepareContext(input: {
   ) => void;
   forceCompact?: boolean;
   /**
-   * Skip a compaction the *threshold* alone would start, because a recent attempt failed.
-   *
-   * Only the early trigger is deferred: a request that no longer fits is still compressed, because sending it as
-   * it stands is the one thing known not to work. Without this a failing summary was retried — and paid for, and
-   * waited on for up to `summaryTimeoutMs` — on every round the conversation stayed above the threshold.
+   * Skip a threshold-triggered compaction because a recent attempt failed. A request that no longer
+   * fits is still compressed.
    */
   deferThresholdCompaction?: boolean;
   /**
-   * How many compressions this call has already paid for, when the convergence retry re-enters.
-   *
-   * Internal: it exists so the retry can call this same function again — re-reading the surface it just
-   * recorded — instead of carrying a remembered view of the conversation through the loop.
+   * Compressions already paid for in this call, so the convergence retry can re-enter and re-read
+   * the surface.
    */
   compactionAttempt?: number;
   /**
-   * What a compaction that cannot be performed means to this caller.
-   *
-   * `'throw'` is the default and is what a caller that asked for a compression on purpose wants: a person clicked
-   * compact, the compaction did not happen, and the honest answer is a failure with the reason. A run wants
-   * `'send'` instead: the run's estimate is a heuristic, the endpoint is the authority on whether the request
-   * fits, and a compression that could not be produced is not a reason to abandon a request the endpoint may
-   * still accept — see `PreparedContext.compactionProblem`, and `recoverFromOverflow` in the agent loop, which
-   * handles the case where the endpoint *does* refuse.
+   * What an unperformable compaction means. `'throw'` (default) suits an explicit compact request.
+   * A run uses `'send'`: the estimate is a heuristic and the endpoint decides whether the request
+   * fits (see `PreparedContext.compactionProblem` and `recoverFromOverflow`).
    */
   compactionFailure?: 'throw' | 'send';
   /**
-   * The model this round aims at, when the caller knows it.
-   *
-   * Recorded with the compaction the round produces, because a summary is a model answer: which model produced it
-   * is part of what the record has to say for the summary to be reconstructible rather than merely present.
+   * The model this round aims at, recorded with the compaction so the summary is reconstructible.
    */
   model?: string;
   /**
-   * The adapter that answers this round — `anthropic`, `openai`, `openai-responses` — when the caller knows it.
-   *
-   * This runtime's word for the provider, and the other half of the route: a model name does not say which wire
-   * protocol a summary came back over, so a record that names one without the other answers "what produced this?"
-   * with half a sentence. Named `protocol` rather than `provider` because `provider` in this call is the adapter
-   * *object* the summary is requested from.
+   * The wire adapter for this round (`anthropic`, `openai`, `openai-responses`), recorded with the
+   * model. Named `protocol` because `provider` here is the adapter object.
    */
   protocol?: string;
 }): Promise<PreparedContext> {
   const { store, sessionId, limit } = input;
   /**
-   * The correction this session has learned for this route, in the two shapes the decisions below need.
-   *
-   * `factors()` is the per-part weights, for a whole request whose parts `measureRequest` will blend them over;
-   * `messageWeight()` is the one weight that applies when nothing else is in the measure — a per-message cost, a
-   * message-only budget. Keeping both here means no caller has to decide which of the three weights "the
-   * correction" is.
+   * This route's learned correction: `factors()` are per-part weights for `measureRequest`;
+   * `messageWeight()` is the single weight for message-only measures.
    */
   const factors = () => input.calibration?.parts;
   const messageWeight = () => input.calibration?.factor ?? 1;
   const history = store.messages(sessionId);
   /**
-   * The surface the log's last compaction defines, not a row: the summary that stands in for the covered
-   * messages, and the count the tail is cut at. Everything below derives from it, so a session whose
-   * compaction was recorded by an older build (or by another process) compacts cumulatively from exactly
-   * where that build left off.
+   * The surface the log's last compaction defines: the summary and the tail cut point. Compaction
+   * continues cumulatively from it, whoever recorded it.
    */
   const surface = store.contextSurface(sessionId);
   const previouslyCovered = surface?.coveredMessages ?? 0;
@@ -155,19 +113,13 @@ export async function prepareContext(input: {
   let covered = previouslyCovered;
   let summary = previousSummary;
   /**
-   * The last batch's answer as it arrived, when storing it changed something.
-   *
-   * A multi-batch compaction merges the conversation in pieces, so the stored summary is the *final* answer; the
-   * raw text kept here is that same answer, unnormalised. The pieces before it are already folded into it, and
-   * they are not separately reconstructible from any record — which is a fact about compaction rather than about
-   * this field.
+   * The last batch's raw answer, when storing changed it. Earlier batches are already folded into
+   * it.
    */
   let rawOutput: string | undefined;
   /**
-   * How the request is *sized*, which is now the same shape as how it is sent: a constant system prompt, the tool
-   * catalogue, and the messages with the running summary in front of them. The summary used to be counted as part
-   * of the system prompt, and moving it cost nothing here — the same bytes are counted either way — but every
-   * budget decision below has to look at the messages it actually sends.
+   * Sized in the same shape it is sent: constant system prompt, tool catalogue, then messages with
+   * the running summary in front.
    */
   // The catalogue does not change during one assembly, and it was serialised again for every size asked.
   const toolChars = JSON.stringify(input.tools).length;
@@ -186,17 +138,10 @@ export async function prepareContext(input: {
   const toolResults = projectToolResults(store, sessionId, history, covered, input.runId);
   const current = toolResults.messages;
   /**
-   * The policy this round compresses under, when a window is known.
-   *
-   * The request's own output reservation and the headroom come out of the window first — what is left is what
-   * messages may use — and the threshold sits inside that. `autoCompactTokens` survives as an operator's
-   * explicit threshold: it replaces the computed one rather than acting as a second, independent ceiling, so
-   * there is exactly one number that says when compression starts.
-   *
-   * A window that cannot carry the reservation plus the headroom is reported rather than thrown: that pair is a
-   * configuration mistake (a 128K window with a 256K output cap), and the honest response is to compress only
-   * when the request stops fitting — loudly, in `policyProblem` — instead of failing a run the endpoint would
-   * still answer. This is the trade DeepSeek Harness makes for the same condition.
+   * The compression policy for this round, when a window is known. Output reservation and headroom
+   * come off the window first; `autoCompactTokens`, if set, replaces the computed threshold. A
+   * window too small for the reservation is reported in `policyProblem` rather than thrown, and
+   * compression then waits until the request stops fitting.
    */
   let spec: ReturnType<typeof resolveCompactionSpec> | undefined;
   let policyProblem: string | undefined;
@@ -226,33 +171,19 @@ export async function prepareContext(input: {
     spec !== undefined && forecast.inputTokens >= spec.thresholdTokens;
   const summaryOutputBudget = () =>
     Math.min(input.maxOutputTokens, Math.max(64, Math.floor(limit / 8)));
-  /**
-   * The least output room a summary request must leave to be worth sending.
-   *
-   * Reserve up to 1024 tokens for reasoning and useful summary text before selecting a batch. A smaller
-   * explicit output cap remains authoritative. This does not change the model's compaction headroom policy.
-   */
-  // Reserve a useful body plus reasoning allowance before choosing a batch. Respect a smaller
-  // operator output cap, but never let a greedy batch squeeze a 1024-token allowance down to 77.
+  // Reserve room for a useful summary plus reasoning (up to 1024 tokens) before choosing a batch. A
+  // smaller operator output cap still wins.
   const SUMMARY_MIN_OUTPUT_TOKENS = Math.min(1024, summaryOutputBudget());
   /**
-   * Whether one summary batch can be sent.
-   *
-   * Measured as the request that will actually be made: the main system prompt, the same tool schemas in the
-   * same order, the verbatim batch and the instruction — every part of the prefix the summary request replays.
-   * Measuring it against a small standalone prompt would admit a batch that the real request cannot send, and
-   * the real request now carries the whole tool catalogue.
-   *
-   * What it is measured *against* is the model's window, not the round's own ceiling. The round's output
-   * reserve is the answer's budget for the request the user is waiting on; applying it here would ask a
-   * summary batch to leave room for an answer nobody asked this request to give, and with the tool schemas
-   * now in the request that reserve is most of a small window — no batch would ever fit one again.
+   * Whether one summary batch can be sent, measured as the real request (main system prompt, the
+   * same tool schemas, the batch and the instruction) against the model's window, not the round's
+   * output reserve.
    */
   const fitsSummary = (transcript: Message[]): boolean => {
     const predicted = forecastRequest({
       system: input.system,
-      // The caller hands over a transcript that already carries the running summary (`summaryTranscript`).
-      // Wrapping it again here priced a request nobody sends and refused batches that would have fitted.
+      // The transcript already carries the running summary (`summaryTranscript`); do not wrap it
+      // again.
       messages: transcript,
       tools: input.tools,
       maxOutputTokens: summaryOutputBudget(),
@@ -265,10 +196,7 @@ export async function prepareContext(input: {
   const summaryCharsFit = (transcript: Message[]): boolean =>
     input.system.length + toolChars + contextMessageSize(transcript) <= limit;
   /**
-   * Shorten old tool results, and say how much that bought.
-   *
-   * Only ever applied to a *copy*: the stored transcript keeps every character, and the session log stays the
-   * one place the conversation is recorded. What the model sees is a view of it.
+   * Shorten old tool results on a copy and report the saving; the stored transcript is untouched.
    */
   const shorten = (
     messages: Message[],
@@ -284,12 +212,8 @@ export async function prepareContext(input: {
     return { messages: outcome.messages, shortened: outcome.shortened, freed: outcome.freedChars };
   };
   /**
-   * Drop the middle of oversized old tool results, and say how much that bought.
-   *
-   * Runs after shortening rather than instead of it, because the two answer different failures: a result whose
-   * full text is worth keeping somewhere is shortened, and one that is merely too long to keep reading is pruned.
-   * A result shortening already replaced carries its marker and no longer has a 200,000-character middle, so the
-   * second pass leaves it alone without needing to know the first ran.
+   * Drop the middle of oversized old tool results and report the saving. Runs after shortening;
+   * already shortened results are too small to be pruned.
    */
   const prune = (messages: Message[]): PruneOutcome => {
     if (!input.prune) return { messages, pruned: 0, prunedChars: 0 };
@@ -310,15 +234,9 @@ export async function prepareContext(input: {
   /** What the summary requests of this call cost, so a checkpoint records it instead of the cost vanishing. */
   const compactionUsage: Usage = { inputTokens: 0, outputTokens: 0 };
   /**
-   * Whether this call is inside a compaction it announced, and whether it has announced how that ended.
-   *
-   * `compactionStarted` is what makes a failure reportable: the two refusals that happen before a summary
-   * request is ever made — a tail with nothing left to compress, a window the conversation cannot fit — are
-   * verdicts *about* the request rather than compactions that failed, and reporting them as failures would name
-   * a compression that never began. `compactionSettled` is the other half of the pair: an announced compaction
-   * ends exactly once, as a success or as a failure, and the paths that give up are reachable more than once in
-   * one call (the batch loop can refuse at several points) while the hand-off to a retry has already reported
-   * its own success.
+   * `compactionStarted` is set once a summary is actually attempted, so refusals before that are
+   * not reported as failed compactions. `compactionSettled` ensures an announced compaction ends
+   * exactly once.
    */
   let compactionStarted = false;
   let compactionSettled = false;
@@ -333,37 +251,20 @@ export async function prepareContext(input: {
     input.onCompaction(state, coveredMessages, usage, reason);
   };
   /**
-   * The compaction did not happen: throw, or hand back the request as it stands.
-   *
-   * Everything this returns is the *uncompacted* view — the conversation as it would be sent without a summary —
-   * and that is deliberately not a silent degradation: `compactionProblem` carries the reason, which the run
-   * reports, and the endpoint is left to say whether the request really does not fit. The store is untouched on
-   * every path that reaches here (the surface is written after all of this), except the convergence retry, whose
-   * recursive call re-reads what the first attempt recorded and so returns a view of *that* surface.
+   * The compaction did not happen: throw, or return the uncompacted request with
+   * `compactionProblem` set. The store is untouched on these paths, except after a convergence
+   * retry, which returns its own surface.
    */
   const abandonCompaction = (failure: Error): PreparedContext => {
     /**
-     * The surface this call started from, put back before anything is decided on it.
-     *
-     * A multi-batch compaction merges the conversation in pieces and replaces the running summary after each
-     * one, so giving up after the second batch used to hand back a view built from the summary it had just
-     * refused: the model was given a summary of messages that were all still in the request behind it, each of
-     * them twice, while the version the session actually has was nowhere in it. Nothing is written to the store
-     * on any of these paths, so the view has to describe what the store holds — the summary this call began
-     * with, the tail it covers from, and a forecast recomputed for the two together (the summary is part of the
-     * request, so restoring a different one is a different size).
+     * Restore the surface this call started from: nothing was written, so the view must match the
+     * store's summary, tail and a recomputed forecast.
      */
     summary = previousSummary;
     rawOutput = undefined;
     const restored = forecastOf(visible);
     settleCompaction('failed', previouslyCovered, compactionUsage, failure.message);
-    /**
-     * The operator's own character cap is not an estimate about the endpoint.
-     *
-     * `--max-context-chars` is a number somebody configured deliberately, so a request over it is refused whatever
-     * the caller prefers; the token estimate is a heuristic about somebody else's window, which is the part that
-     * is sent and left to the endpoint to judge.
-     */
+    /** The operator's `--max-context-chars` cap is a hard limit, unlike the token estimate. */
     if (!charsFit(visible) || (input.compactionFailure ?? 'throw') === 'throw') throw failure;
     return {
       system: input.system,
@@ -379,30 +280,18 @@ export async function prepareContext(input: {
     };
   };
   /**
-   * The shared summary deadline ran out.
-   *
-   * Not a run cancellation, and not a compaction: a summary that took too long is exactly the failure a caller
-   * that chose `compactionFailure: 'send'` wants to answer by sending the request without one. A run the caller
-   * cancelled is the opposite — the request must *not* go out — so the two are separated here rather than at the
-   * `AbortSignal.any` that cannot tell them apart.
+   * The shared summary deadline ran out. Separated from a user cancellation, which must never send
+   * the request.
    */
   const summaryDeadline = (): PreparedContext => {
     if (input.signal.aborted) throw input.signal.reason;
     return abandonCompaction(new Error('Context summary timeout; history was preserved'));
   };
+  // Shorten first (no model request, keeps the conversation's shape); compress only if that is not
+  // enough.
   /**
-   * Make the conversation smaller before deciding whether it has to be compressed.
-   *
-   * Shortening comes first because it is the cheaper answer to the same problem: it costs no model request, it
-   * touches only text the model has already read, and it keeps the conversation's shape. Compression is what
-   * remains when shortening is not enough.
-   */
-  /**
-   * Whether the request fits as it stands, asked at most once per state of the conversation.
-   *
-   * The question is asked twice below — once to decide whether shortening is worth trying, once to decide whether
-   * to compress — and it used to be computed twice with identical inputs. Each ask serialises every tool schema and
-   * walks the conversation, so the answer is remembered here and dropped when shortening replaces either input.
+   * Whether the request fits as it stands, memoised per conversation state since each check
+   * serialises every tool schema.
    */
   let fitsAsIs: boolean | undefined;
   const fitsOnce = (): boolean => (fitsAsIs ??= fits(visible, forecast));
@@ -420,12 +309,8 @@ export async function prepareContext(input: {
     }
   }
   /**
-   * Drop the middle of what shortening could not help with.
-   *
-   * Asked under the same condition as shortening and for the same reason — this is work worth doing in good time
-   * rather than under the pressure of a request that already failed its budget check — but gated on the answer
-   * *after* shortening, so the two passes never both rewrite the same message and a conversation that shortening
-   * already brought back under the window pays for nothing here.
+   * Prune what shortening could not help, under the same condition, but gated on the
+   * post-shortening fit so the passes never rewrite the same message.
    */
   if (
     input.prune &&
@@ -443,13 +328,8 @@ export async function prepareContext(input: {
   toolResults.remember(visible);
   const fitsNow = fitsOnce();
   /**
-   * Compress when the conversation reaches the threshold, when the request no longer fits, or when a person
-   * asked.
-   *
-   * The threshold is the difference from "does it fit": it fires while the request would still be accepted, so
-   * the compression happens on the side of the wall where the summary request itself still fits. Reaching the
-   * window is the second trigger, not the only one — a conversation that grew past the threshold in one step
-   * (a huge tool result) must be compressed even though the threshold check was never seen.
+   * Compress at the threshold (while the summary request still fits), when the request no longer
+   * fits (e.g. after one huge tool result), or on request.
    */
   const compacting =
     input.forceCompact === true ||
@@ -469,25 +349,16 @@ export async function prepareContext(input: {
     };
   }
   /**
-   * Why the current turn cannot proceed: it does not fit the model's window, and there is nothing left to
-   * compress at.
-   *
-   * This one message is deliberately about the request rather than about the conversation's size in general —
-   * it is what the operator can act on — and it is the same verdict the run reports when the request is refused
-   * before it is ever sent.
+   * The turn cannot proceed: it exceeds the window and there is nothing left to compress. Same
+   * verdict as a pre-send refusal.
    */
   const turnFailure = () =>
     new ContextLimitError(
       'Current turn exceeds context budget; start a new session with a smaller task',
     );
   /**
-   * A forced compression needs something that was already answered or executed.
-   *
-   * A fresh session can hold a prompt plus the runtime's machine-written announcements (the skills catalogue is
-   * written as a user-role message). There is no completed turn to summarize there, but the extra user-role
-   * message made the boundary scan find one and spend a summary request whose failure then displaced the
-   * provider's own refusal in the reported error. The turn has nowhere to compact at, and saying so is the
-   * answer the caller already expects.
+   * A forced compression needs a completed turn. A fresh session with only a prompt and runtime
+   * announcements has nothing to summarize, so report that directly.
    */
   if (
     input.forceCompact &&
@@ -496,20 +367,13 @@ export async function prepareContext(input: {
     return abandonCompaction(turnFailure());
   const cuts = contextBoundaries(history);
   /**
-   * How much of the newest conversation stays verbatim.
-   *
-   * The policy's share of the message budget — or nothing at all when a person asked for a compression or an
-   * overflow recovery forced one: those want the smallest conversation that can be sent, not a
-   * policy-shaped one. Without a window there is no policy, and the older rule (keep from the last user turn)
-   * still applies, because a run that declared no window is not measured against one.
+   * How much of the newest conversation stays verbatim: the policy's share, or nothing for a forced
+   * compression. Without a window, keep from the last user turn.
    */
   const retainTokens = input.forceCompact ? 0 : (spec?.retainTokens ?? 0);
   /**
-   * The budget is a share of a window, so it is spent in the tokens the endpoint bills rather than in the
-   * estimator's own units: the tail is measured with this session's learned correction for this route
-   * (`messageWeight()` — the tail is made of messages, so that is the weight it is priced with), which is what
-   * keeps "16% of the message budget, verbatim" the same statement about the request the provider receives
-   * whether the route's tokenizer runs heavy or light.
+   * Measured with this route's `messageWeight()` so the retained share is in the endpoint's billed
+   * tokens.
    */
   const retained =
     spec === undefined
@@ -532,8 +396,8 @@ export async function prepareContext(input: {
   if (!input.forceCompact && retained === undefined)
     while (boundary >= covered && history[boundary]?.role !== 'user') boundary--;
   const overhead = input.system.length + toolChars;
-  // Boundary selection is synchronous and precedes every summary/calibration update. Reuse a
-  // boundary's view and prediction here; after summarizing, forecast the changed request anew.
+  // Boundary selection runs before any summary or calibration update, so its views and forecasts
+  // can be reused here; after summarizing, forecast anew.
   const boundaryViews = new Map<number, { messages: Message[]; forecast?: RequestForecast }>();
   const boundaryView = (cut: number) => {
     let view = boundaryViews.get(cut);
@@ -552,10 +416,9 @@ export async function prepareContext(input: {
     overhead + contextMessageSize(boundaryView(boundary).messages) > limit ||
     !fits(boundaryView(boundary).messages, boundaryForecast(boundary))
   ) {
-    // A single long task can compact completed tool steps too. Keep its original
-    // user request and prefer retaining the newest complete step when possible.
-    // A later cut keeps a shorter tail, so "this tail fits" holds on a suffix of the candidates: the first one
-    // is found by bisection rather than by measuring every tail on the way (see `./boundary-search.ts`).
+    // A long single task may compact completed tool steps too; keep the original user request and
+    // the newest complete step where possible. Fitting tails are found by bisection
+    // (`./boundary-search.ts`).
     const candidates = cuts.filter((cut) => cut > covered && cut > 0);
     const first = firstHolding(
       candidates.length,
@@ -570,9 +433,8 @@ export async function prepareContext(input: {
   const tail = boundaryView(boundary).messages;
   const tailForecast = boundaryForecast(boundary);
   if (!fits(tail, tailForecast)) {
-    // Compression is not always the last word: a tail can still be over the ceiling while every message in it
-    // is recent. Shortening what is eligible is strictly better than failing a run that has already paid for
-    // this conversation.
+    // A tail of all-recent messages can still be over the ceiling; shortening it beats failing the
+    // run.
     const applied = shorten(tail);
     if (applied.shortened) {
       shortened += applied.shortened;
@@ -594,10 +456,7 @@ export async function prepareContext(input: {
       }
     }
     /**
-     * The same last word for a tail that shortening could not bring under — either because no result was
-     * shortenworthy or because the spill that shortening needs was unavailable. Pruning asks nothing of the
-     * host, so a run that already paid for this conversation gets one more chance to send it rather than
-     * failing on a tail whose bulk is a middle nobody will read.
+     * Last resort for a tail shortening could not fix: prune, which needs nothing from the host.
      */
     const dropped = prune(tail);
     if (dropped.pruned) {
@@ -619,36 +478,23 @@ export async function prepareContext(input: {
         };
       }
     }
-    // The verdict is this tail's: after a compression the remaining messages are what has to fit, and saying
-    // anything else would send the reader to compress a conversation that is already as small as it gets.
+    // The verdict concerns the remaining tail, which is already as small as it gets.
     return abandonCompaction(new ContextLimitError(WINDOW_EXHAUSTED));
   }
   /**
-   * The compaction lock, taken before the first summary request.
-   *
-   * A compaction is the one write that rewrites what the model sees, so it is the one write that must not race
-   * another writer: the lock is the session's own write lease (`SessionStore.claimCompaction`), taken here so
-   * the run does not spend a summary request it would be refused at the write. Both halves of the rule live in
-   * the store; this is only where the acquire happens.
+   * The compaction lock (`SessionStore.claimCompaction`), taken before the first summary request so
+   * no request is spent on a write that would be refused.
    */
   store.claimCompaction(sessionId, input.runId);
   /**
-   * Whether this invocation has handed its lock to its own retry.
-   *
-   * The retry re-enters `prepareContext`, and the first thing that function does — synchronously, before any
-   * `await` — is take the lock again at the claim above. That happens *before* this invocation's `finally`
-   * runs, because `return f()` finishes `f`'s synchronous prologue and only then processes the return; so the
-   * unconditional release below used to clear the claim the retry had just made, and the retry went on to spend
-   * two summary requests with no lock at all. The guarantee the lock exists for — this is the one write that
-   * must not race another writer — therefore did not hold on the most expensive path. The retry releases it in
-   * its own `finally`, so this one has to stay out of the way.
+   * Whether the lock was handed to this call's own retry. The retry re-claims synchronously before
+   * this call's `finally` runs, so this call must not release it.
    */
   let handedOff = false;
   try {
     compactionStarted = true;
     input.onCompaction('started');
-    // Summarize complete old user turns in bounded batches. Persist only after every
-    // batch succeeds, so cancellation and errors cannot silently discard history.
+    // Summarize complete old turns in bounded batches; persist only after every batch succeeds.
     let summaryCacheKnown = true;
     const summarySignal = AbortSignal.any([
       input.signal,
@@ -656,28 +502,21 @@ export async function prepareContext(input: {
     ]);
     let retriesLeft = 1;
     /**
-     * Set after a summary answered with a tool call instead of text: the catalogue rides along only to share the
-     * cache prefix, so a model that reaches for it is asked once more with tool calls forbidden.
+     * Set after a summary answered with a tool call: retry once with tool calls forbidden (the
+     * catalogue is sent only for the cache prefix).
      */
     let forbidTools = false;
     while (covered < boundary) {
       input.signal.throwIfAborted();
       let end = covered;
       let batch: Message[] = [];
-      // `cuts` is ascending and unique (`contextBoundaries`), so these are every cut in range, in order. A longer
-      // batch never fits where a shorter one did not, so the batch ends at the last cut of a fitting prefix, found
-      // by bisection: each probe serialises one candidate batch, and a walk serialised every one of them.
+      // `cuts` is ascending and unique, and a longer batch never fits where a shorter one did not,
+      // so the batch end is found by bisection.
       const range = cuts.filter((candidate) => candidate > covered && candidate <= boundary);
       const last = lastHolding(range.length, (index) => {
         /**
-         * The batch, exactly as the main request would send it.
-         *
-         * No rewriting, and that is the point rather than an omission: an image replaced by a note, an opaque
-         * continuation item dropped, a field forgotten — each one is a byte the summary request no longer shares
-         * with the request whose cache it is trying to read, and the cache prefix ends at the first difference.
-         * The summary is written from the preserved transcript, so a batch that silently loses "there was a
-         * screenshot" would describe a different conversation; the instruction asks for the picture to be
-         * mentioned rather than reproduced, which the verbatim batch makes possible instead of impossible.
+         * The batch exactly as the main request sends it: any rewrite would break the shared cache
+         * prefix and describe a different conversation.
          */
         const transcript = summaryTranscript(history.slice(covered, range[index]!), summary);
         return summaryCharsFit(transcript) && fitsSummary(transcript);
@@ -697,18 +536,13 @@ export async function prepareContext(input: {
         if (summarySignal.aborted) return summaryDeadline();
         const transcript = summaryTranscript(batch, summary);
         /**
-         * The prompt this summary request carries, held once.
-         *
-         * It is the caller's system prompt, which no longer changes between rounds or batches, and `summary` grows as
-         * batches are merged so the *transcript* below has one shape per batch. Read once per batch so that the
-         * estimate, the forecast, the request and the key that names it are all the same bytes, rather than a call
-         * each that happen to agree today.
+         * Read once per batch so the estimate, forecast, request and cache key use the same bytes.
          */
         const summarySystem = input.system;
         const rawSummaryEstimate = estimateInputTokens(summarySystem, transcript, input.tools);
         /**
-         * The summary request is a model request like any other, so it is predicted the same way: what has to fit
-         * is the window, and `fitsSummary` above is what decides how much of the conversation goes into one batch.
+         * Forecast the summary request like any model request; `fitsSummary` already chose the
+         * batch.
          */
         const summaryForecast = forecastRequest({
           system: summarySystem,
@@ -721,8 +555,7 @@ export async function prepareContext(input: {
         const summaryCacheKey = input.cacheKeyFor?.(summarySystem, input.tools);
         try {
           response = await input.provider.complete({
-            // The main request's own prefix, replayed: same system, same tool schemas in the same order, same batch
-            // bytes. Only the instruction at the end is new, which is what the cache is allowed to miss.
+            // Replay the main request's prefix; only the final instruction is new.
             system: summarySystem,
             messages: transcript,
             tools: input.tools,
@@ -734,19 +567,11 @@ export async function prepareContext(input: {
           });
         } catch (error) {
           /**
-           * A summary request that failed is a compaction that did not happen, so the answer is the caller's own
-           * (`compactionFailure`): throw, or hand the request back as it stands. Letting the provider's failure
-           * out of here instead made the two most ordinary ways for a compression to fail — a request that was
-           * refused and a request that took too long — the only two the run could not recover from. A *cancelled*
-           * run is not a failed compaction: the caller asked for the work to stop, and sending the request anyway
-           * because a summary could not be written would answer Stop with a request.
+           * A failed summary request is a compaction that did not happen, handled per
+           * `compactionFailure`. A cancelled run rethrows: Stop must never send the request.
            */
           if (input.signal.aborted) throw error;
-          /**
-           * The deadline is this call's own fact, and it is named as such: an adapter that reports its
-           * cancellation says only that a request was aborted, not that a summary could not be written or that
-           * the conversation was kept.
-           */
+          /** Name the deadline explicitly; the adapter only reports an abort. */
           if (summarySignal.aborted) return summaryDeadline();
           return abandonCompaction(error instanceof Error ? error : new Error(String(error)));
         }
@@ -761,8 +586,7 @@ export async function prepareContext(input: {
         if (response.usage.cacheWriteInputTokens !== undefined)
           compactionUsage.cacheWriteInputTokens =
             (compactionUsage.cacheWriteInputTokens ?? 0) + response.usage.cacheWriteInputTokens;
-        // Summary requests use the same model, so their reported usage calibrates the
-        // estimate for the main loop as well.
+        // Summary requests use the same model, so their usage calibrates the main estimate too.
         input.calibration?.observe(rawSummaryEstimate, response.usage.inputTokens);
         input.onUsage(response);
         if (response.finishReason === 'length' && retriesLeft > 0) {
@@ -813,12 +637,8 @@ export async function prepareContext(input: {
       const rawSummaryText = response.text;
       const merged = storedSummary(rawSummaryText);
       /**
-       * The answer as it arrived, kept only when storing it changed something.
-       *
-       * `summary` is what the next request carries, so the two differ exactly when the wrapper above was taken
-       * off — and a record that says "the model wrote this, and this is what is stored" is what a reader needs to
-       * tell a normalised summary from a model that answered with something else. Absent is therefore a real
-       * answer rather than a missing field: the stored summary is the model's own text, verbatim.
+       * The raw answer, kept only when storing changed it; absent means the stored summary is
+       * verbatim.
        */
       rawOutput = rawSummaryText === merged ? undefined : rawSummaryText;
       if (!merged)
@@ -835,14 +655,8 @@ export async function prepareContext(input: {
       covered = end;
     }
     /**
-     * The price of the trade, before it is written down.
-     *
-     * Both sides are the same shape — the summary the model is given, plus the transcript from that cut — so
-     * the comparison is between two surfaces rather than between a summary and "the rest". Compacting a
-     * conversation into something that costs more is refused here, which is what keeps a degenerate summary
-     * (one that restates more than it replaces) from being recorded as progress. It is checked *before* the
-     * window is: a summary that made the conversation bigger and no longer fits is one defect, and naming the
-     * cause is more use than naming the consequence.
+     * Compare the surface before and after (summary plus tail). A summary that costs more than it
+     * replaces is refused, and this is checked before the window so the cause is named.
      */
     const replacedChars =
       previousSummary.length + contextMessageSize(history.slice(previouslyCovered));
@@ -868,9 +682,8 @@ export async function prepareContext(input: {
       replacedChars,
       surfaceChars,
       ...(input.runId === undefined ? {} : { runId: input.runId }),
-      // The envelope this summary ran under: which protocol and model answered, and the output budget the policy
-      // allows a summary in this window. The prompt and catalogue it replayed are in the round's own
-      // `context.envelope`, and `rawOutput` is present only when storing the answer changed it.
+      // The summary's protocol, model and output budget; the prompt and catalogue are in the
+      // round's `context.envelope`.
       ...(input.protocol === undefined ? {} : { protocol: input.protocol }),
       ...(input.model === undefined ? {} : { model: input.model }),
       maxTokens: summaryOutputBudget(),
@@ -878,19 +691,10 @@ export async function prepareContext(input: {
     });
     settleCompaction('finished', covered, compactionUsage);
     /**
-     * Compress again when the conversation is still above the threshold and the policy allows another attempt.
-     *
-     * This is the convergence half: one compression whose retained tail is itself half the conversation leaves
-     * the next round exactly where this one was, and paying for a second compression is cheaper than paying for a
-     * window overflow on the round that follows. The re-entry re-reads the surface it just recorded, so the
-     * second attempt compacts what is actually left rather than a remembered copy of it. A forced compression
-     * (a person's `/compact`, an overflow recovery) never re-enters: it is already the most aggressive shape.
-     *
-     * The lock is released before the re-entry, which takes it again for its own summary: a lock held across
-     * the recursive call would make the second attempt refuse itself. The `finally` below must then leave that
-     * second claim alone — it is the retry's for the whole of its summary, and `handedOff` is what says so. The
-     * comment here used to call the second release "a no-op by construction, because only the run that holds the
-     * lock can release it": the release does match, because it is the *same* run, which is exactly the problem.
+     * Convergence: compress again while still above the threshold and the policy allows another
+     * attempt. The re-entry re-reads the recorded surface. Forced compressions never re-enter. The
+     * lock is released first and re-claimed by the retry; `handedOff` keeps the `finally` below
+     * from clearing it.
      */
     const attempt = input.compactionAttempt ?? 0;
     if (
@@ -916,10 +720,8 @@ export async function prepareContext(input: {
     };
   } finally {
     /**
-     * The lock is released on every exit, including the ones that throw: a run that gave up on a summary must
-     * not leave the session looking like a compaction is still in flight, because the next attempt would then
-     * be refused on its behalf. The one exit that does not release is the hand-off to a retry, whose own claim
-     * this invocation would otherwise clear (`handedOff`).
+     * Release the lock on every exit, including throws, except after handing it to a retry
+     * (`handedOff`).
      */
     if (!handedOff) store.releaseCompaction(sessionId, input.runId);
   }

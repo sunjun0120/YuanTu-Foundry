@@ -17,17 +17,9 @@ export class InvariantViolationError extends Error {
   }
 }
 /**
- * The runtime invariant registry.
- *
- * The project's cross-cutting promises used to live in exactly one place a package could not reach: its own
- * test file. That made every new seam a new edit to `tests/invariants.test.ts`, and made it impossible for a
- * package, an extension or an embedder to publish a promise of its own. This is the seam that fixes that, and
- * it is deliberately shaped like the other registries in this runtime: `register` hands back its removal,
- * names are owned, and asking for a violation collects *all* of them rather than stopping at the first —
- * one broken promise must not hide the rest.
- *
- * It is also deliberately not a filter on every event: an invariant runs at the scopes its publisher named,
- * so the cost is bounded by the number of invariants rather than by how busy the runtime is.
+ * The runtime invariant registry, so packages, extensions and embedders can publish their own
+ * promises. `register` returns its removal, names are owned, and a run collects every violation
+ * rather than stopping at the first. Invariants run only at the scopes their publisher named.
  */
 export class InvariantRegistry {
   private entries = new Map<string, Invariant>();
@@ -66,11 +58,8 @@ export class InvariantRegistry {
     }));
   }
   /**
-   * Runs every invariant whose scope is `scope` and returns the violations.
-   *
-   * Nothing throws out of here except a programming error in this class: a check that throws, rejects or
-   * hangs becomes a violation like any other. That is the whole contract — a broken promise is data the
-   * caller decides what to do with, and one check blowing up must not stop the others from running.
+   * Runs every invariant for `scope` and returns the violations. A check that throws, rejects or
+   * hangs becomes a violation; only a bug in this class throws.
    */
   async run(scope: InvariantScope, context: InvariantContext = {}): Promise<InvariantViolation[]> {
     const violations: InvariantViolation[] = [];
@@ -94,11 +83,8 @@ export class InvariantRegistry {
     if (violations.length) throw new InvariantViolationError(violations);
   }
   /**
-   * Bounds one check by the shared timeout, and does not leave the loser of the race unhandled.
-   *
-   * A timed-out check is reported as a violation naming the invariant rather than as a generic timeout: the
-   * caller has to be able to tell "this promise is broken" from "the thing that verifies it is stuck", and
-   * both have to be loud.
+   * Bounds one check by the shared timeout. A timeout is reported as a violation naming the
+   * invariant.
    */
   private async bounded(invariant: Invariant, context: InvariantContext): Promise<void> {
     let timer: NodeJS.Timeout | undefined;

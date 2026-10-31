@@ -3,11 +3,9 @@ import { ENVELOPE_SYSTEM_CHARS, type ContextEnvelope } from '../protocol/context
 import type { ToolSpec } from '../protocol/index.ts';
 
 /**
- * The envelope record a round writes into the session log.
- *
- * The record's *shape* and its reader live in `packages/protocol/context.ts`; the digest and the copy policy live
- * here because they need `node:crypto` and the protocol modules are imported by the renderer, which has none. The
- * split is the same one `cacheKeyFor` keeps: the protocol states what a thing is, the kernel computes it.
+ * The envelope record a round writes to the log. Shape and reader live in
+ * `packages/protocol/context.ts`; the digest and copy policy live here because they need
+ * `node:crypto`.
  */
 export function envelopeEvent(input: {
   runId: string;
@@ -19,12 +17,8 @@ export function envelopeEvent(input: {
   maxContextTokens?: number;
   cacheKey?: string;
   /**
-   * The system hash this run has already recorded, when it has one.
-   *
-   * It is what makes the record cost one copy of a prompt rather than one copy per round: an unchanged prompt
-   * writes its identity and nothing else, and `foldContextEnvelopes` reads the text back from the record that
-   * carried it. The caller seeds it from the session's newest record, so a *reopened* session does not pay for a
-   * second copy either.
+   * The system hash already recorded (seeded from the session's newest record), so an unchanged
+   * prompt writes only its identity.
    */
   previousSystemHash?: string;
   /** The same rule for the tool catalogue, seeded and updated the same way. */
@@ -47,12 +41,7 @@ export function envelopeEvent(input: {
     toolsCount: input.tools.length,
   };
   /**
-   * The copy, when this record is the one that carries it.
-   *
-   * The cap is in characters because a character slice is what bounds the copy — a byte cap would cut a CJK
-   * prompt at a third of the characters for the same bytes and is not a thing a reader can be told the size of.
-   * `systemBytes` above records the prompt's real size either way, so a truncated copy is reported as one rather
-   * than passed off as the whole prompt.
+   * The copy, capped in characters; `systemBytes` records the real size so truncation is visible.
    */
   if (input.previousSystemHash !== systemHash) {
     if (input.system.length <= ENVELOPE_SYSTEM_CHARS) envelope.system = input.system;
@@ -62,12 +51,8 @@ export function envelopeEvent(input: {
     }
   }
   /**
-   * The catalogue, under the same one-copy rule, and without a cap of its own.
-   *
-   * A cap is right for the prompt and wrong for the schemas: the prompt is read, so a prefix is useful, while the
-   * catalogue is *replayed* — a shortened one produces a request that shares no prefix with the round it replays,
-   * which is worse than not recording it at all. Deduplication is what bounds it instead, and the catalogue is the
-   * stable half of a run: a session that changes it changes it for a reason, and pays one copy for that reason.
+   * The catalogue, under the same one-copy rule but uncapped: it is replayed, and a shortened one
+   * would break the prefix.
    */
   if (input.previousToolsHash !== toolsHash) envelope.tools = [...input.tools];
   return { envelope, systemHash, toolsHash };

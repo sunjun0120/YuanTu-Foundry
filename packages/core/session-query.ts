@@ -1,45 +1,19 @@
 /**
- * Session retrieval: the read-only tools that make a workspace's own history searchable.
+ * Session retrieval: read-only tools that make a workspace's own history searchable by the model.
  *
- * The store has had the index for a while — `messages_fts` over the searchable text of every message, folded by
- * the same triggers that keep the transcript in step — and the session list uses it, but only the *user* could
- * reach it. A model that needed "how did we configure this last time" had one option: ask the user, or re-derive
- * it. These tools are that index, addressed by the model.
- *
- * Seven decisions shape them:
- *
- * 1. **Search returns the sentence, not the session id.** `search_sessions` answers "where did this come from"
- *    with FTS5's own ranked snippets, because a hit without its context only tells the model that the words exist
- *    somewhere it cannot see.
- * 2. **Reading is a cursor, not a dump.** `read_session_events` walks the durable log with `afterSeq`, a page
- *    limit and an explicit "more remain" signal, so a session with ten thousand events costs one page. Payloads
- *    are bounded per event — the log carries whole tool results — and the summary says so rather than silently
- *    cutting.
- * 3. **The scope is the workspace, and it says so.** A search reads this workspace's conversations (child
- *    sessions of sub-agents are not conversations, and are excluded exactly as the session list excludes them); a
- *    read refuses a session belonging to another workspace by name instead of returning something surprising.
- *    Nothing here can write: every tool is permission-free and therefore survives a read-only or planning run —
- *    which is the run that most needs to look things up.
- * 4. **Searching *inside* a log is its own tool.** `search_sessions` finds the conversation; the durable log also
- *    holds the approvals, the questions, the failures and the step boundaries, and "which round did the provider
- *    refuse this" is a question the transcript answers badly. `search_session_events` matches the log's own
- *    lines, with the same type filter `read_session_events` accepts, and scans a bounded prefix so the cost of a
- *    question is answerable before it is asked.
- * 5. **A trace is the fold, not a bigger page.** `trace_session` answers "what happened in this session, run by
- *    run" — rounds, tool calls, which ones failed, how each run ended — by folding the log rather than by asking
- *    the model to read three thousand events and remember them. It is the view a person gets from the process
- *    record, offered to the model.
- * 6. **The structured filters are the ones this store can prove.** `parent` reads `sessions.parent_session_id`,
- *    so it answers "what did this session delegate, and which branches came off it"; `active` reads `active_run`,
- *    the same recorded fact the session list shows — not a liveness probe, which is why its description says so.
- *    The dimensions a session query might want that this store has no fact for are left out rather than given a
- *    second meaning: a session's **cwd** *is* its workspace, which is the scope every tool here already applies,
- *    so a cwd filter would either be a no-op or a cross-workspace search (refused, decision 3); **type** is a
- *    filter of the event tools, where it belongs; and nothing records a per-session **surface** to filter on.
- * 7. **Lineage is read from the session row, one level deep.** `trace_session` names the session this one
- *    descends from and the sub-agent sessions recorded under it. "Which of my children did this" is the question
- *    the run outline leaves to `job_list`, and it is answered from the lineage columns rather than by matching
- *    text in transcripts. One level only: a tree printed into a page costs the answer it is meant to orient.
+ * 1. `search_sessions` returns FTS5's ranked snippets, not just session ids.
+ * 2. `read_session_events` is a cursor (`afterSeq`, page limit, "more remain"), with per-event
+ *    payload bounds that are announced.
+ * 3. Scope is the workspace: sub-agent child sessions are excluded, and a session from another
+ *    workspace is refused by name. Every tool is permission-free, so it works in read-only and
+ *    planning runs.
+ * 4. `search_session_events` searches within a log (approvals, failures, step boundaries) over a
+ *    bounded prefix.
+ * 5. `trace_session` folds the log run by run (rounds, tool calls, failures, endings).
+ * 6. Filters are only what the store records: `parent` (`parent_session_id`) and `active`
+ *    (`active_run`, not a liveness probe). No cwd filter (cwd is the workspace) and no surface
+ *    filter.
+ * 7. Lineage is read from the session row, one level deep.
  */
 import { isSessionEventType, SESSION_EVENT_TYPES } from '../storage/events.ts';
 import type { SessionEvent } from '../storage/events.ts';
@@ -57,23 +31,12 @@ const MAX_READ_CHARS = 12_000;
 /** One event's payload is summarised to this much; the log holds whole tool results, and a page holds many. */
 const MAX_EVENT_CHARS = 600;
 const MAX_TYPES = 8;
-/**
- * How many events one search or trace may walk.
- *
- * A single bound for both, because the cost is the same read: the log is per-session and read in order, so a
- * scan of N events costs N rows. The cap is disclosed in the result rather than applied silently — a search
- * that stopped early says so, and says how to continue from where it stopped.
- */
+/** How many events one search or trace may walk; the cap is disclosed with a cursor to continue. */
 const MAX_SCAN_EVENTS = 20_000;
 /** How many matches a search shows, and how many runs a trace lists, before it says it truncated. */
 const MAX_MATCHES = 40;
 const MAX_TRACED_RUNS = 20;
-/**
- * How many child sessions a trace names before it stops.
- *
- * A session that delegated forty times has forty children, and their ids are not the answer — where to look next
- * is, which is why the list is capped and the count is always the real one.
- */
+/** How many child sessions a trace names; the count is always the real one. */
 const MAX_LINEAGE_CHILDREN = 10;
 /** One event's payload may spend this much in a search hit or a trace line. */
 const MAX_HIT_CHARS = 300;
@@ -88,11 +51,8 @@ export function sessionQueryTools(deps: SessionQueryDeps): Tool[] {
   return [searchTool(deps), readEventsTool(deps), searchEventsTool(deps), traceTool(deps)];
 }
 /**
- * The session a query is about, or the message explaining why it cannot be read.
- *
- * One check for every tool here: a session id that does not exist and a session belonging to another workspace
- * are different answers, and the second must name the workspace rather than read as "not found" — the model can
- * act on "that history is somewhere else", and can act on nothing at all if it is told the session is missing.
+ * The session a query is about, or why it cannot be read. "Not found" and "belongs to another
+ * workspace" are distinct answers.
  */
 function scoped(deps: SessionQueryDeps, requested: unknown): { id: string } | string {
   const id =
@@ -117,13 +77,9 @@ function scan(
   return { events: events.slice(0, MAX_SCAN_EVENTS), complete: events.length <= MAX_SCAN_EVENTS };
 }
 /**
- * One page of a log under a type filter, and whether the walk stopped before the end.
- *
- * Reading `limit + 1` events and filtering them answers "are there more" only when nothing was dropped. With
- * `types` set the store's next events are mostly other types, the filtered page comes out short, and the page
- * would announce the end of a log it never reached. So the walk continues until the page is full, the log ends,
- * or the same bound a search uses is spent — and spending it is reported as "more may remain" from a cursor,
- * never as an ending. Without a filter the first read already fills or ends the page, so this stays one query.
+ * One page of a log under a type filter. With a filter, the walk continues until the page is full,
+ * the log ends or the scan bound is spent (reported as "more may remain"), so a short page never
+ * reads as the end.
  */
 function readEventPage(
   store: SessionStore,
@@ -198,9 +154,7 @@ function searchTool(deps: SessionQueryDeps): Tool {
         const limit = Number.isFinite(requested)
           ? Math.min(Math.max(1, Math.trunc(requested)), MAX_SEARCH_SESSIONS)
           : 5;
-        // A parent that cannot be read is refused by name rather than answered with an empty list: "no session
-        // started that" and "that session is in another workspace" are different facts, and only the second is
-        // actionable. `scoped` is the same check every other tool here applies to a session id.
+        // An unreadable parent is refused by name (`scoped`), not answered with an empty list.
         let parent: string | undefined;
         if (args.parent !== undefined) {
           const asked = String(args.parent).trim();
@@ -311,8 +265,7 @@ function readEventsTool(deps: SessionQueryDeps): Tool {
           : 50;
         const types = readTypes(args.types);
         if (typeof types === 'string') return { isError: true, content: types };
-        // A page is a bounded walk, not one filtered read: a filter drops the store's next events, and the short
-        // result would read as the end of a log that continues.
+        // A bounded walk, so a filtered short page is not mistaken for the end of the log.
         const page = readEventPage(deps.store, sessionId, requestedAfter, limit, types);
         const { shown, more } = page;
         const lines: string[] = [
@@ -333,9 +286,8 @@ function readEventsTool(deps: SessionQueryDeps): Tool {
           emitted++;
           lines.push(line);
         }
-        // The cursor is the last event *shown*, so a page cut by the character budget resumes without skipping
-        // anything; only an empty page — a narrow filter over a long stretch — has to advance by the walk's own
-        // position, which is what keeps the cursor from standing still.
+        // The cursor is the last event shown; an empty page advances by the walk's position so the
+        // cursor moves.
         const last = shown[emitted - 1]?.seq ?? (shown.length ? requestedAfter : page.cursor);
         if (more || emitted < shown.length)
           lines.push(
@@ -497,8 +449,8 @@ function traceTool(deps: SessionQueryDeps): Tool {
             names.clear();
             continue;
           }
-          // A run's records are bracketed by its own start and finish in log order, which is what lets the
-          // tool calls of a message be attributed to a run at all: message events do not carry a run id.
+          // A run's records are bracketed by its start and finish, which attributes message tool
+          // calls to runs.
           if (!current) continue;
           if (event.type === 'run.finished') {
             current.status = String(data.status ?? '');
@@ -529,8 +481,7 @@ function traceTool(deps: SessionQueryDeps): Tool {
             if (message?.role !== 'tool' || !message.isError) continue;
             const name = names.get(message.toolCallId) ?? 'a tool';
             const flat = String(message.content).replace(/\s+/g, ' ');
-            // Whether the excerpt was cut is decided here, on its own length. The rendered line also carries the
-            // tool name, and measuring that instead announced a cut on failures whose text was whole.
+            // Decide truncation on the excerpt's own length, not the rendered line.
             current.failures.push({
               text: `${name}: ${flat.slice(0, MAX_HIT_CHARS)}`,
               truncated: flat.length > MAX_HIT_CHARS,
@@ -551,12 +502,8 @@ function traceTool(deps: SessionQueryDeps): Tool {
           `${runs.length} run(s) recorded, ${shown.length} shown${runs.length > shown.length ? ` (oldest ${runs.length - shown.length} omitted)` : ''}${complete ? '' : `; the log was scanned only to ${MAX_SCAN_EVENTS} events`}`,
         ];
         /**
-         * Where this session sits in the tree, before what happened in it.
-         *
-         * Both halves come from the lineage columns rather than from the transcript: a delegated child is a row
-         * with `parent_session_id` set, and so is the session this one was forked or delegated from. The parent
-         * row can be gone (a deleted session's children keep their record), and saying that is better than
-         * failing the trace over it.
+         * Where this session sits in the tree, from the lineage columns. A deleted parent is
+         * reported, not fatal.
          */
         if (session.parentSessionId) {
           let title = '(no longer in this database)';
@@ -620,12 +567,8 @@ function readTypes(value: unknown): Set<string> | null | string {
   return new Set(names);
 }
 /**
- * One event as a line.
- *
- * A message event is shown as the message it carries (role and text) rather than as JSON: that is what a reader
- * wants from a transcript, and the raw form would spend the page's budget on quoting a JSON string. Everything
- * else is bounded JSON, because a reader that asked for `step.finished` wants the fields, and truncation is
- * announced instead of hidden.
+ * One event as a line: message events as role and text, everything else as bounded JSON with
+ * truncation announced.
  */
 function summariseEvent(event: SessionEvent): string {
   const message = (event.data as { message?: { role?: unknown; content?: unknown } }).message;

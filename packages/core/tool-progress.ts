@@ -11,10 +11,8 @@ export interface ToolObservation {
   /** Set only for a successful program whose actual inner tools are observed in the same batch. */
   kind?: 'program-output';
   /**
-   * What a successful write did to each file, as hashes (`file-state-digest.ts`).
-   *
-   * Taken at the write boundary, where both sides of the bytes still exist. It is internal run evidence: the
-   * observation it rides on is not stored or sent anywhere, and `RunToolBatch` keeps it off the tool result.
+   * What a successful write did to each file, as hashes (`file-state-digest.ts`). Internal
+   * evidence; never stored or put on the tool result.
    */
   fileStates?: readonly FileStateDigest[];
 }
@@ -37,31 +35,21 @@ export interface EditOscillation {
   signal: 'full' | 'local';
 }
 /**
- * How often one call may fail the same way before the run is told so, and before it is stopped.
- *
- * The query check above only sees rounds made entirely of reads, and any edit resets it — which is exactly the
- * shape of the loop it could not see: edit, run the same test, get the same failure, edit again. A failure is the
- * same when the call (name and arguments) and its output are byte-identical, so a test whose failure changes is
- * progress however many times it runs.
+ * How often one call may fail identically (same name, arguments and output) before the run is
+ * warned, and before it is stopped. Catches the edit/test/same-failure loop the query check cannot
+ * see.
  */
 const FAILURE_WARN = 3;
 const FAILURE_CONCLUDE = 5;
 /**
- * The same counts for a refusal by one environment blocker (`EnvironmentBlockedError`), whatever the call was.
- *
- * Lower, and keyed by the blocker rather than the call, because a blocker refuses `npm test` and `node --test` alike:
- * counting per call would let the model walk through every variant of a command before anything noticed, and no
- * variant can succeed until a person changes the machine.
+ * The same counts for refusals by one environment blocker (`EnvironmentBlockedError`), keyed by
+ * blocker because no command variant can succeed until the machine changes.
  */
 const BLOCKED_WARN = 2;
 const BLOCKED_CONCLUDE = 3;
 /**
- * How many writes that undo an earlier one before the run is told, and how many before it is told again.
- *
- * Two levels rather than a hard stop, because the official result says the oscillation is a cost problem and
- * not a correctness one: three of the four samples that oscillated still ended `resolved`, and the state each
- * was in when a threshold would have fired was *not* the state its final patch came from. So the guard only
- * ever injects a prompt; the run budget stays the thing that stops a run that ignores it.
+ * Writes that undo an earlier one before the run is told, and before it is told again. Prompts
+ * only; the run budget is what stops a run.
  */
 const OSCILLATION_WARN = 2;
 const OSCILLATION_FINAL = 4;
@@ -69,36 +57,23 @@ const OSCILLATION_FINAL = 4;
 const OSCILLATION_MAX_PATHS = 512;
 const OSCILLATION_MAX_HUNKS = 4_096;
 /**
- * The investigation allowance's two round thresholds, and the clock default used when a caller passes none.
- *
- * The round count was not changed by the measurement that moved the clock: it is the rounds that are hard to
- * bound honestly, and 12/20 was never the branch that fired (`RunDefaults.investigationMs`).
+ * The investigation allowance's round thresholds, and the clock default
+ * (`RunDefaults.investigationMs`).
  */
 const INVESTIGATION_WARN_ROUNDS = 12;
 const INVESTIGATION_CONCLUDE_ROUNDS = 20;
 const INVESTIGATION_DEFAULT_MS = 240_000;
 /**
- * Calls that only read, so a round of them repeating unchanged is a model asking the same question again.
- *
- * Any tool that is not a query resets the comparison, which is why every read a model reaches for while
- * investigating has to be one: one `web_search` in a round of repeated reads used to hide the repetition entirely,
- * back when this was a list of its own. Which tools are queries is now the tool classification's answer
- * (`Tool.query`, `tools/tool-categories.ts`); `job_output` is not one on purpose — polling a running job is
- * supposed to return the same thing until it moves.
+ * Read-only calls, so a round of them repeating unchanged is a repeated question. Any non-query
+ * resets the comparison. Classification comes from `Tool.query` (`tools/tool-categories.ts`);
+ * `job_output` is not a query.
  */
 const productQuery = (name: string): boolean => classifyTool({ name }).query;
 /** Calls that collect a job already running: waiting on one is not a new investigation round. */
 const collections = new Set(['job_list', 'job_output']);
 /** Fields of a structured result that differ on every run of the same call, and so say nothing about it. */
 const volatileFields = new Set(['durationMs', 'elapsedMs', 'startedAt', 'finishedAt']);
-/**
- * A failure's text with the parts that change on every run masked out.
- *
- * Test runners print how long they took, and a command result carries its own duration, so two runs of the same
- * test that fail the same way were never byte-identical — the repeated-failure check could not fire for the
- * loop it exists for. Durations and timestamps are masked; everything else, the assertion included, still has to
- * match.
- */
+/** A failure's text with durations and timestamps masked, so identical failures compare equal. */
 const stableFailureText = (value: string): string =>
   value
     .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, '<time>')
@@ -138,8 +113,8 @@ export class ToolProgressGuard {
     /** Model time the investigation may take; the nudge fires at half of it. */
     investigationMs?: number;
     /**
-     * Whether a tool is a query. The run passes its registry's answer, so a tool that classifies itself
-     * (`Tool.query`) is counted too; without it the product table decides.
+     * Whether a tool is a query, from the run's registry (so `Tool.query` counts); otherwise the
+     * product table.
      */
     isQuery?: (name: string) => boolean;
   };
@@ -165,12 +140,9 @@ export class ToolProgressGuard {
   /** Refusals per environment blocker, cleared with `failures`: a person acting is what may have changed it. */
   private blocked = new Map<string, number>();
   /**
-   * The whole-file states each path has been in, and every changed block a write has produced, by digest.
-   *
-   * Deliberately *not* cleared by `reset()`. The other counters are cleared whenever new evidence arrives,
-   * because a new round of queries or a fresh failure may be progress; this one is the state that says the
-   * model is going in circles, and a successful edit in between is exactly what it must survive. Only an
-   * intervention that could plausibly change the plan clears it (`resetOscillation`).
+   * Whole-file states and changed blocks each path has been in, by digest. Not cleared by
+   * `reset()`, since a successful edit is exactly what an oscillation survives; only
+   * `resetOscillation` clears it.
    */
   private fileStates = new Map<string, Set<string>>();
   private reverseHunks = new Set<string>();
@@ -188,11 +160,8 @@ export class ToolProgressGuard {
     this.investigationWarned = false;
   }
   /**
-   * Whether context a policy injected after a round is something the run has not been told before.
-   *
-   * A policy speaking is an intervention, and an intervention clears the counters. But a post-execute hook that
-   * attaches the same note to every round is not a new one each time: treating it as such reset the failure and
-   * query counts every round, so a run with such a hook could repeat itself until its budget ran out.
+   * Whether policy-injected context is new. A hook repeating the same note every round must not
+   * reset the counters every round.
    */
   newIntervention(notes: readonly string[]): boolean {
     let fresh = false;
@@ -228,17 +197,15 @@ export class ToolProgressGuard {
     const failing = this.observeFailures(observations);
     const blocked = this.observeBlocked(observations);
     const queries = this.observeQueries(observations);
-    // Counted before the early return below: a hit is recorded as an event even in a round whose own notice is
-    // the conclusion, because the log is what a later review reads the cost of the run from.
+    // Record hits even in a concluding round, for later cost review.
     this.recordOscillation(observations);
     if (failing >= FAILURE_CONCLUDE || blocked >= BLOCKED_CONCLUDE || queries === 'conclude')
       return 'conclude';
     const investigation = this.observeInvestigation(observations);
     if (investigation) return investigation;
     if (blocked === BLOCKED_WARN) return 'environment-blocked';
-    // Before the query and failure notices: those two re-arm themselves on the next round, while each level of
-    // the oscillation notice is said once and would otherwise be dropped for good by a round that happened to
-    // end in a repeated query.
+    // Before the query and failure notices: each oscillation level is said once and would otherwise
+    // be lost.
     const oscillation = this.oscillationNotice();
     if (oscillation) return oscillation;
     if (queries === 'warn') return 'warn';
@@ -250,12 +217,8 @@ export class ToolProgressGuard {
     return this.oscillationNotice() ?? 'continue';
   }
   /**
-   * Counts each write that undid an earlier one, recording one hit per write.
-   *
-   * Two signals, either one enough, because a whole-file comparison alone misses the shape that actually
-   * appeared in the sample: the model alternated edits across several places in one file and never repeated
-   * the complete file. One write counts once however many of its blocks reversed — it is one decision to go
-   * back.
+   * Counts each write that undid an earlier one, by whole-file state or by changed block (the model
+   * may alternate edits across places without repeating the whole file). One hit per write.
    */
   private recordOscillation(observations: readonly ToolObservation[]): void {
     for (const { result, fileStates } of observations) {
@@ -269,15 +232,13 @@ export class ToolProgressGuard {
       const newHunks: string[] = [];
       for (const file of fileStates) {
         if (!projectPaths.has(normalizedPath(file.path))) continue;
-        // A write that changes nothing says nothing about the plan, and must not become a state either: a
-        // reported "written" with identical bytes is not evidence the model went anywhere.
+        // A write that changes nothing is not evidence of movement.
         const before = file.before ?? '';
         const after = file.after ?? '';
         if (before === after) continue;
         let states = this.fileStates.get(file.path);
         if (!states) {
-          // The state the file was in before the first write this guard saw: a later return to it is a revert
-          // even though this run never wrote that state.
+          // The file's state before the first observed write; returning to it is a revert.
           states = new Set([before]);
           this.fileStates.set(file.path, states);
           while (this.fileStates.size > OSCILLATION_MAX_PATHS)
@@ -387,8 +348,7 @@ export class ToolProgressGuard {
           ) ||
           result.change ||
           result.images?.length ||
-          // Policy context is new evidence only the first time it is said; a repeat of it is not (see
-          // `newIntervention`), and the run resets this comparison itself when it is new.
+          // Policy context counts as new evidence only the first time (`newIntervention`).
           (result.additionalContext?.length &&
             result.additionalContext.some((note) => !this.interventions.has(digest(note)))),
       )
