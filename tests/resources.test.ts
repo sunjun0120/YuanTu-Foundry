@@ -29,22 +29,21 @@ const workspaceSkills = (dir: string): string[] =>
     .filter((skill) => !skill.path.startsWith('builtin:'))
     .map((skill) => skill.name);
 
-test('the built-in office skill is offered everywhere and a workspace skill of its name replaces it', async (t) => {
+test('no Office skill ships with the build, so a workspace skill is what guides document work', async (t) => {
   const dir = await root(t);
-  const builtin = discoverSkills(dir).find((skill) => skill.name === 'office-documents');
-  assert.equal(builtin?.path, 'builtin:office-documents');
-  const expanded = expandSkill(dir, '/skill:office-documents write the report').prompt;
-  assert.match(expanded, /# Writing Office documents/);
-  assert.match(expanded, /write the report/);
-  await mkdir(path.join(dir, '.yuantu', 'skills', 'office-documents'), { recursive: true });
+  assert.deepEqual(discoverSkills(dir), []);
+  await mkdir(path.join(dir, '.yuantu', 'skills', 'docx'), { recursive: true });
   await writeFile(
-    path.join(dir, '.yuantu/skills/office-documents/SKILL.md'),
+    path.join(dir, '.yuantu/skills/docx/SKILL.md'),
     '---\ndescription: House style\n---\nOur own rules',
   );
-  const replaced = discoverSkills(dir).filter((skill) => skill.name === 'office-documents');
-  assert.equal(replaced.length, 1);
-  assert.equal(replaced[0]!.path, '.yuantu/skills/office-documents/SKILL.md');
-  assert.match(expandSkill(dir, '/skill:office-documents go').prompt, /Our own rules/);
+  assert.deepEqual(
+    discoverSkills(dir).map((skill) => skill.path),
+    ['.yuantu/skills/docx/SKILL.md'],
+  );
+  const expanded = expandSkill(dir, '/skill:docx write the report').prompt;
+  assert.match(expanded, /Our own rules/);
+  assert.match(expanded, /write the report/);
 });
 test('a workspace cannot replace the built-in code analysis skill', async (t) => {
   const dir = await root(t);
@@ -77,17 +76,14 @@ test('a workspace cannot replace the built-in code analysis skill', async (t) =>
 });
 test('the code analysis skill is listed only where the analysis service is configured', async (t) => {
   const dir = await root(t);
-  assert.deepEqual(
-    discoverSkills(dir).map((skill) => skill.path),
-    ['builtin:office-documents'],
-  );
+  assert.deepEqual(discoverSkills(dir), []);
   assert.throws(
     () => expandSkill(dir, '/skill:code-analysis-report go'),
     /Unknown skill: code-analysis-report/,
   );
   assert.deepEqual(
     discoverSkills(dir, { analysisService: true }).map((skill) => skill.path),
-    ['builtin:code-analysis-report', 'builtin:office-documents'],
+    ['builtin:code-analysis-report'],
   );
 });
 test('skills use project precedence and explicit invocation loads current body', async (t) => {

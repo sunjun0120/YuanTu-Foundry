@@ -273,7 +273,6 @@ export const EXPLORE_TOOLS = [
   'lsp_symbols',
   'lsp_code_action',
   'lsp_workspace_symbols',
-  'office_inspect',
   'verify_file_delivery',
   'recall_knowledge',
   'list_memories',

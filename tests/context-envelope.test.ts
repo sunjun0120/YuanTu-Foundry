@@ -91,17 +91,10 @@ test('a round records the prompt and the catalogue it was actually sent with', a
   assert.ok(loaded, 'resources.loaded is in the log, not only on the live channel');
   assert.deepEqual(loaded.data.instructions, ['AGENTS.md']);
   /**
-   * An empty workspace still has the skills that ship with the build. The envelope records the catalogue the
-   * model was actually given, so the built-in skill is part of it — pinning `[]` here asserted that no skill
-   * exists, which was never the product intent and would hide a built-in that failed to load.
+   * The envelope records the catalogue the model was actually given. An empty workspace without the analysis
+   * service has no skill at all: the only built-in one needs that service's tools.
    */
-  const skills = loaded.data.skills as { name: string; path: string }[];
-  assert.ok(
-    skills.some(
-      (skill) => skill.name === 'office-documents' && skill.path === 'builtin:office-documents',
-    ),
-    `the built-in skill is in the recorded catalogue: ${JSON.stringify(skills)}`,
-  );
+  assert.deepEqual(loaded.data.skills, []);
 
   // The announcement is machine context, not a human turn: the conversation still has one typed user message.
   assert.deepEqual(

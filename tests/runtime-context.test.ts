@@ -799,13 +799,12 @@ test('a skill written during a run is announced instead of changing the prompt',
     `the skill file was written: ${written?.role === 'tool' ? written.content : 'no tool result'}`,
   );
   assert.equal(new Set(requests.map((request) => request.system)).size, 1, 'one prompt throughout');
-  // Only the built-in skills were on offer when the run started; the workspace had none of its own.
-  const before = snapshotsIn(requests[0]!.messages, 'skills');
-  assert.equal(before.length, 1);
-  assert.doesNotMatch(before[0]!, /release:/);
+  // No skill was on offer when the run started: the workspace had none, and no built-in one is listed without
+  // the analysis service.
+  assert.deepEqual(snapshotsIn(requests[0]!.messages, 'skills'), []);
   const after = snapshotsIn(requests[1]!.messages, 'skills');
-  assert.equal(after.length, 2, 'the changed set is announced once more, after the first');
-  assert.match(after[1]!, /Available skills \(use load_skill to read relevant guidance\):/);
-  assert.match(after[1]!, /release: How releases are cut/);
+  assert.equal(after.length, 1, 'the new set is announced once');
+  assert.match(after[0]!, /Available skills \(use load_skill to read relevant guidance\):/);
+  assert.match(after[0]!, /release: How releases are cut/);
   assert.ok(!requests[1]!.system.includes('How releases are cut'), 'and not through the prompt');
 });

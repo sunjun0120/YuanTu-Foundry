@@ -1,17 +1,13 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import mammoth from 'mammoth';
-import { OfficeUnavailableError, runOfficeAutomation, type OfficeFormat } from './automation.ts';
-import { environmentBlockedMessage } from '../protocol/environment-blocked.ts';
-import type { OfficePreview } from './preview.ts';
 import { readPptxSlides } from './read.ts';
-import { runSpreadsheetOperation, spreadsheetPreviewHtml } from './spreadsheet.ts';
+import { spreadsheetPreviewHtml } from './spreadsheet.ts';
 import { previewStyleLink, previewText, type PreviewLanguage } from './preview-page.ts';
 import { assertExpansionWithinBudget } from './zip-entry.ts';
 import JSZip from 'jszip';
 
-export { PREVIEW_BACKENDS, previewExtensions } from './preview-backends.ts';
-export type { PreviewBackend, PreviewType } from './preview-backends.ts';
-import type { PreviewBackend, PreviewType } from './preview-backends.ts';
+/** The Office formats the workspace panel previews, by the file's own extension. */
+export type OfficeFormat = 'docx' | 'xlsx' | 'pptx';
 
 const HTML_BYTES = 16_000_000;
 const escape = (value: string): string =>
@@ -86,35 +82,10 @@ async function presentationHtml(
   );
 }
 
-async function renderHtml(
-  format: OfficeFormat,
-  sourcePath: string,
-  outputPath: string,
-): Promise<PreviewType> {
-  if (format === 'xlsx') {
-    await runSpreadsheetOperation({ operation: 'preview', format, sourcePath, outputPath });
-    return 'data-html';
-  }
-  const html =
-    format === 'docx' ? await documentHtml(sourcePath) : await presentationHtml(sourcePath);
-  if (Buffer.byteLength(html) > HTML_BYTES) throw new Error('Office preview HTML exceeds 16 MB');
-  await writeFile(outputPath, html, 'utf8');
-  return 'document-html';
-}
-
 /**
- * Render one preview with the requested engine, falling back where the request allows it.
+ * One Office document as a self-contained HTML page, for the workspace panel.
  *
- * Only `auto` falls back, and only past an engine that is missing from this machine — Office not installed or
- * its script refused, LibreOffice not found. A conversion that ran and failed is reported as it is, because
- * retrying it in another engine would hide a broken document behind a different-looking PDF.
- */
-/**
- * One Office document as a self-contained HTML page, without writing it anywhere.
- *
- * `office_preview` writes a file the user then opens in a browser; the workspace panel has no such file to
- * point at, so this is the same renderers returning the page itself. The page is still the safe one built by
- * `page()`: no script, no network, images only from `data:`.
+ * The page is the safe one built by `page()`: no script, no network, images only from `data:`.
  */
 export async function officePreviewHtml(
   format: OfficeFormat,
@@ -128,47 +99,4 @@ export async function officePreviewHtml(
       : await presentationHtml(sourcePath, language);
   if (Buffer.byteLength(html) > HTML_BYTES) throw new Error('Office preview HTML exceeds 16 MB');
   return html;
-}
-export async function renderPreview(
-  input: { format: OfficeFormat; sourcePath: string; outputPath: string; backend: PreviewBackend },
-  renderer: OfficePreview,
-  signal: AbortSignal,
-): Promise<PreviewType> {
-  const { format, sourcePath, outputPath, backend } = input;
-  const pdf = outputPath.toLowerCase().endsWith('.pdf');
-  const office = async (): Promise<PreviewType> => {
-    await runOfficeAutomation({ operation: 'preview', format, sourcePath, outputPath }, signal);
-    return 'office-pdf';
-  };
-  const libreoffice = async (): Promise<PreviewType> => {
-    await renderer.render({ format, sourcePath, outputPath }, signal);
-    return 'libreoffice-pdf';
-  };
-  if (backend === 'html' || (backend === 'auto' && !pdf))
-    return renderHtml(format, sourcePath, outputPath);
-  if (backend === 'native')
-    return format === 'xlsx' ? renderHtml(format, sourcePath, outputPath) : office();
-  if (backend === 'office') return office();
-  if (backend === 'libreoffice' || format === 'xlsx') return libreoffice();
-  try {
-    return await office();
-  } catch (officeError) {
-    if (!(officeError instanceof OfficeUnavailableError)) throw officeError;
-    try {
-      return await libreoffice();
-    } catch (libreError) {
-      if (!(libreError instanceof OfficeUnavailableError)) throw libreError;
-      throw new OfficeUnavailableError(
-        environmentBlockedMessage(
-          'office-pdf-engine-unavailable',
-          'No PDF engine is available on this machine. Office: ' +
-            officeError.message.slice(0, 300) +
-            ' LibreOffice: ' +
-            libreError.message.slice(0, 300),
-          'Choose an .html output_path for the built-in preview (it does not prove page layout), ' +
-            'or a person can install Microsoft Office or LibreOffice for a PDF.',
-        ),
-      );
-    }
-  }
 }

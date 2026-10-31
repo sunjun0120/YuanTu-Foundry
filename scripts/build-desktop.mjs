@@ -24,9 +24,6 @@ await build({
   sourcemap: true,
 });
 await build(rendererBuildOptions());
-await copyFile('packages/office/automation.ps1', 'dist/desktop/automation.ps1');
-await mkdir('dist/packages/office', { recursive: true });
-await copyFile('packages/office/automation.ps1', 'dist/packages/office/automation.ps1');
 await copyFile('apps/desktop/index.html', 'dist/desktop/index.html');
 // The React layer's own stylesheet: the project palette and the rules for the DOM islands React only wraps.
 await copyFile('apps/desktop/ui/styles.css', 'dist/desktop/ui.css');

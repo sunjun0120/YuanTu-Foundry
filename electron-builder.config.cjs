@@ -38,8 +38,8 @@ module.exports = {
      * `pdfjs-dist` stays a real file because the attachment worker imports `legacy/build/pdf.mjs` at runtime, which
      * loads `pdf.worker.mjs` beside it. Everything else (the modern build, viewer, types, image decoders, and the
      * cmap/font/wasm data reached only through `getDocument` URL options the desktop never passes) is ~30 MB unused.
-     * The Office libraries need no entry here: the Host, the Office worker and the attachment worker inline them,
-     * so they are devDependencies and never packaged.
+     * The Office preview libraries need no entry here: the Host and the attachment worker inline them, so they are
+     * devDependencies and never packaged.
      */
     '!node_modules/pdfjs-dist/{build,web,types,image_decoders,cmaps,standard_fonts,wasm,iccs}/**',
     '!node_modules/pdfjs-dist/legacy/{web,image_decoders}/**',

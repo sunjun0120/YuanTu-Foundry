@@ -67,7 +67,6 @@ test('the palette hides export and code-analysis-report in both languages and al
       english.some((item) => item.value === 'code-analysis-report' || item.value === 'export'),
       false,
     );
-    assert.match(english.find((item) => item.value === 'office-documents')!.description, /Word/);
     assert.equal(
       english.find((item) => item.value === 'local-review')?.description,
       '项目自定义说明',
@@ -97,15 +96,6 @@ test('every built-in skill has a description in both interface languages', () =>
     const key = BUILTIN_SKILL_DESCRIPTIONS[skill.path]!;
     assert.match(translate(key, 'zh-CN'), /[一-鿿]/, `${key} in Chinese`);
     assert.doesNotMatch(translate(key, 'en-US'), /[一-鿿]/, `${key} in English`);
-  }
-  try {
-    setLocale('zh-CN');
-    const office = paletteItems('/office', false, skills).find(
-      (item) => item.value === 'office-documents',
-    );
-    assert.match(office!.description, /演示文稿/);
-  } finally {
-    setLocale('zh-CN');
   }
 });
 

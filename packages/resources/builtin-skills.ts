@@ -20,77 +20,6 @@ export function isProtectedBuiltinSkill(name: string): boolean {
   return name === 'code-analysis-report';
 }
 
-const OFFICE_DOCUMENTS = `---
-name: office-documents
-description: Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.
----
-
-# Writing Office documents
-
-Use this when the user wants a report, proposal, letter, handout, workbook or slide deck as a .docx, .xlsx or
-.pptx file.
-
-## Before writing
-
-- Settle audience, purpose and length first. If the request leaves them open, choose sensible defaults and say
-  which ones you chose instead of asking several questions.
-- Collect the facts from the workspace or the conversation before drafting. Never invent figures, names, dates
-  or quotations; mark anything unknown as a placeholder such as [TBD: Q3 revenue].
-
-## Word (office_create, format docx)
-
-- \`title\` is the document title. Put the body in \`blocks\`, in reading order.
-- Structure with headings: level 1 for sections, level 2 for subsections, level 3 rarely.
-- Keep paragraphs short (3-5 sentences). Use a list for parallel items and steps (\`ordered: true\` for steps).
-- Use a table for anything compared across two or more attributes. Make the first row the header and keep
-  columns few; split a wide table rather than squeezing it.
-- Start long reports with a short summary section and end with conclusions or next steps.
-- Use \`page_break\` only between major parts, for example before an appendix.
-
-## PowerPoint (office_create, format pptx)
-
-- One idea per slide. The title states the takeaway ("Revenue grew 12%"), not the topic ("Revenue").
-- At most 5 bullets per slide and about 12 words per bullet. Move detail to \`notes\`.
-- Open with a title slide (a slide with only \`title\`), close with a summary or next-steps slide, and use
-  title-only slides as section dividers in decks longer than about 10 slides.
-- Put numbers in a \`table\` slide rather than in bullets; keep tables to about 6 rows and 5 columns.
-
-## Excel (office_create, format xlsx)
-
-- Pass \`sheets\`: one entry per sheet with a \`name\` and a two-dimensional \`rows\` array. The first row is the
-  header; keep columns to what the reader needs.
-- A cell whose text starts with \`=\` becomes a real formula, not a string: \`=SUM(C2:C3)\` is written as the
-  formula \`SUM(C2:C3)\`. Reference explicit ranges (\`=SUM(B2:B3)\`) rather than whole columns, which change
-  meaning when rows are inserted.
-- There is no calculation engine here, so a formula is stored without a cached result and Excel, WPS or
-  LibreOffice computes it when the file opens. Do not add a Python/openpyxl step just to compute a value.
-- To change an existing workbook, use office_edit with \`cells\` (\`{ sheet, cell, value }\`) instead of rebuilding
-  it, and read it with office_inspect first to learn the real sheet and cell names.
-- After creating a workbook, read it back with office_inspect: a formula cell is shown as \`=SUM(...)\`, and the
-  sheet's \`range\` and \`rows\` tell you whether the table landed where you meant.
-
-## Editing a template (office_edit)
-
-- Read the template with office_inspect first and copy the exact text to replace, including punctuation.
-- Prefer distinctive placeholders such as {{client_name}}: every occurrence of each \`from\` is replaced, so a
-  short common word would change more than intended.
-- The replacement takes the formatting of the text where the match starts.
-
-## Checking the result
-
-- After creating or editing, read the output back with office_inspect and confirm the content, order and
-  that no placeholder is left unfilled by mistake.
-- Do not create a preview file only to check your own work: office_inspect already shows the content, needs no
-  approval and leaves nothing behind, and the user can open the file in the app's built-in preview. Every
-  office_preview writes a file the user must approve and that you would then have to delete.
-- Use office_preview when the user asks for a preview file. An .html output works everywhere; a .pdf output
-  needs Microsoft Office or LibreOffice on this machine; if neither is available, say so and offer HTML. An
-  Excel HTML preview shows the data, not the exact layout.
-- Before handing the file over, call verify_file_delivery on its final workspace path and report the verified
-  path, or say that verification was not possible.
-- Hand the file to the user with present, and tell them what is in it and anything left for them to fill in.
-`;
-
 const CODE_ANALYSIS_REPORT = `---
 name: code-analysis-report
 description: 用内置代码分析服务分析源码包或 GitHub 仓库，并写出有据可查的分析报告。
@@ -105,7 +34,7 @@ description: 用内置代码分析服务分析源码包或 GitHub 仓库，并�
 1. 获取 project_id：本地源码包或工作区目录用 analysis_upload_source；GitHub 仓库把 URL 交给服务的导入工具。
 2. 按用户关心的方面调用 scan_* 工具（许可证、漏洞、可维护性、SBOM 等）。返回 job id 的是异步任务，用 job_output 带 wait_ms 等待结果，不要自己反复调用分析工具。
 3. 结果里有报告链接时，用 analysis_download_report 保存，再用 present 交付后端的标准报告；工具列表里没有 analysis_download_report 时，把链接直接告诉用户。
-4. 用户要求定制报告时，按 office-documents 技能用 office_create 写 Word 报告。
+4. 用户要求定制 Word 报告时，有相应技能就按技能写；没有就临时写脚本生成，检查后再交付。
 
 ## 报告规则
 - 每个数字、许可证名称、漏洞编号都必须来自服务返回的数据；没有数据的方面写明「服务未提供」，不要推测。
@@ -115,7 +44,6 @@ description: 用内置代码分析服务分析源码包或 GitHub 仓库，并�
 `;
 
 const BUILTIN: Record<string, string> = {
-  'office-documents': OFFICE_DOCUMENTS,
   'code-analysis-report': CODE_ANALYSIS_REPORT,
 };
 

@@ -136,7 +136,6 @@ test('the shipped read-only tools opt in, and nothing that writes does', async (
     'load_skill',
     // Loading only names schemas for the next request; it writes nothing.
     'load_tools',
-    'office_inspect',
     'read_file',
     'read_image',
     'read_memory',
@@ -168,7 +167,6 @@ test('the shipped read-only tools opt in, and nothing that writes does', async (
     'save_memory',
     'forget_memory',
     'index_document',
-    'office_create',
     // Read-only in name, but they share the language server session: two of them at once would interleave
     // edits into one document, and the writes among them do not even declare a permission to fence them.
     'lsp_diagnostics',

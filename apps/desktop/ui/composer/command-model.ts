@@ -57,7 +57,6 @@ export function commandQuery(text: string): string | undefined {
  */
 export const BUILTIN_SKILL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   'builtin:code-analysis-report': 'skill.codeAnalysisReportDescription',
-  'builtin:office-documents': 'skill.officeDocumentsDescription',
 };
 
 export function paletteItems(

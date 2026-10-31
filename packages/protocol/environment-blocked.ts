@@ -1,13 +1,13 @@
 /**
- * A failure that belongs to the machine, not the call (e.g. a stale Windows sandbox lease, a
- * missing Office script): every call fails the same until a person fixes the environment. The
+ * A failure that belongs to the machine, not the call (e.g. a stale Windows sandbox lease):
+ * every call fails the same until a person fixes the environment. The
  * prefix lets the run loop recognise the class and stop retrying.
  */
 export const ENVIRONMENT_BLOCKED_PREFIX = 'Environment blocked';
 
 /**
- * The text of an environment blocker, for an error class that has to stay its own (callers catch
- * `OfficeUnavailableError` to try another engine) but should still be recognised as one.
+ * The text of an environment blocker, for an error class that has to stay its own (so callers can
+ * catch it by type) but should still be recognised as one.
  *
  * @param code A stable reason, the same for every call the blocker refuses (`windows-sandbox-stale-lease`).
  * @param detail What is wrong, in one or two sentences.

@@ -289,10 +289,6 @@ export const conversationMessages: Record<string, [string, string]> = {
     '用内置代码分析服务分析源码包或 GitHub 仓库，并写出有据可查的分析报告。',
     'Analyse source archives or GitHub repositories with the built-in code analysis service and write evidence-based reports.',
   ],
-  'skill.officeDocumentsDescription': [
-    '用 office_create、office_edit 和 office_preview 规划、撰写并检查 Word 报告、Excel 工作簿和 PowerPoint 演示文稿。',
-    'Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.',
-  ],
   'ui.copy': ['复制代码', 'Copy code'],
   'ui.copied': ['已复制', 'Copied'],
   'ui.copyFailed': ['复制失败', 'Copy failed'],

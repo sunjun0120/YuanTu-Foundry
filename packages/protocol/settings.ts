@@ -486,10 +486,6 @@ export const ENVIRONMENT = {
     range: [1, 8],
     description: '同一 Host 可同时运行的不同会话数（默认 2；同一会话始终串行，1 为全局串行）',
   },
-  YUANTU_LIBREOFFICE_PATH: {
-    kind: 'string',
-    description: '可选 Office PDF 预览的 LibreOffice 命令行程序路径（Windows 建议 soffice.com）',
-  },
   // Test-only keys, listed because the check has to know every YUANTU_* name the project itself sets.
   YUANTU_NODE_PATH: { kind: 'string', description: '（测试）子进程使用的 node 路径' },
   YUANTU_TEST_WINDOWS_SHELL: {

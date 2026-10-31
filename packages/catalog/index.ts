@@ -1,7 +1,6 @@
 import { builtinServiceTools } from '../builtin-services/index.ts';
 import { builtinServiceConfigured } from '../builtin-services/manifest.ts';
 import path from 'node:path';
-import { officeTools } from '../office/tools.ts';
 import { deliveryTool } from '../tools/delivery.ts';
 import { presentTool } from '../tools/present.ts';
 import { knowledgeTools } from '../knowledge/tools.ts';
@@ -166,7 +165,6 @@ export function createTools(
   registry.register(runCodeTool());
   registry.register(deliveryTool(root));
   registry.register(presentTool(root));
-  for (const tool of officeTools(root)) registry.register(tool);
   const knowledge = knowledgeTools(root, memoryRoot);
   registry.onClose(knowledge.close);
   for (const tool of knowledge.tools) registry.register(tool);

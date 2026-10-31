@@ -83,11 +83,10 @@ export async function readEntry(
 /**
  * Price a whole package before a library that has no bound of its own reads it.
  *
- * `readEntry` bounds the parts this repository reads itself, but `office_inspect` hands DOCX and XLSX packages to
- * mammoth and SheetJS, and neither of those consults a limit while inflating. Which parts they touch is their
- * business, so the bound cannot be a whitelist of known parts: every entry is streamed and counted, each one
- * capped on its own and all of them against one budget. A package that would inflate past either ceiling is
- * refused before the library sees it, and each stream is destroyed as its ceiling is crossed — so the refusal
+ * `readEntry` bounds the parts this repository reads itself, but the workspace preview hands a DOCX package to
+ * mammoth, which does not consult a limit while inflating. Which parts it touches is its business, so the bound
+ * cannot be a whitelist of known parts: every entry is streamed and counted, each one capped on its own and all of
+ * them against one budget. A package that would inflate past either ceiling is refused before the library sees it, and each stream is destroyed as its ceiling is crossed — so the refusal
  * costs the budget rather than the bomb.
  */
 export async function assertExpansionWithinBudget(

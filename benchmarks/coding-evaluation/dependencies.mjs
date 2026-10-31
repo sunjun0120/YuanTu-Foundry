@@ -5,11 +5,11 @@ import { copyFiles, inventory, inventoryLinked, hash } from './materialize.mjs';
 /**
  * Dev dependencies the source Host still imports at runtime.
  *
- * The desktop bundles inline the Office libraries, so they are devDependencies and never packaged (see
+ * The desktop bundles inline the Office preview libraries, so they are devDependencies and never packaged (see
  * `electron-builder.config.cjs` and `scripts/check-windows-package.mjs`). A frozen runtime runs the Host from its
  * TypeScript sources rather than a bundle, so it needs them installed like any production dependency.
  */
-const SOURCE_RUNTIME_DEV_DEPENDENCIES = ['docx', 'jszip', 'mammoth', 'pptxgenjs', 'xlsx'];
+const SOURCE_RUNTIME_DEV_DEPENDENCIES = ['jszip', 'mammoth', 'xlsx'];
 
 /** Clone existing installed production dependencies, never install or use the network.
  * Production means what the source Host imports: `dependencies` plus the declared

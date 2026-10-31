@@ -14,11 +14,8 @@ import { lineFramer } from '../packages/client/host-transport.ts';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import JSZip from 'jszip';
-import type { OfficeFormat } from '../packages/office/automation.ts';
-import { inspectOffice } from '../packages/office/inspect.ts';
-import { runSpreadsheetOperation } from '../packages/office/spreadsheet.ts';
-import { createDocx } from '../packages/office/document.ts';
-import { createPptx } from '../packages/office/presentation.ts';
+import { officePreviewHtml, type OfficeFormat } from '../packages/office/render.ts';
+import { writeDocx, writePptx, writeXlsx } from './office-fixtures.ts';
 import { tempRoot } from './temp-fixture.ts';
 import { translate } from '../apps/desktop/i18n.ts';
 
@@ -222,41 +219,28 @@ test('the Host link refuses an oversized line once and reads nothing after it', 
 });
 
 /**
- * `office_inspect` hands a workspace file to readers this repository does not own. They run in a worker with a
- * time limit, so a hang costs a thread — but a reader that throws something other than an `Error`, or that answers
- * with something other than the JSON the tool promises, is still this tool's defect. Each case starts from a real
+ * The workspace panel's preview hands a workspace file to readers this repository does not own (mammoth, SheetJS).
+ * A reader that throws something other than an `Error`, or that answers with something other than the page the
+ * panel draws, is still the preview's defect. Each case starts from a real
  * package of each format and damages it the three ways a file arrives damaged: cut short, bytes flipped, or a
  * well-formed zip whose XML is soup.
  */
-test('office inspection answers or refuses damaged packages, never anything else', async (t) => {
+test('the Office preview answers or refuses damaged packages, never anything else', async (t) => {
   const root = await tempRoot(t, 'yuantu-office-malformed-');
   const originals: [OfficeFormat, Buffer][] = [];
   for (const format of ['docx', 'xlsx', 'pptx'] as const) {
     const outputPath = path.join(root, `seed.${format}`);
     if (format === 'xlsx')
-      await runSpreadsheetOperation({
-        operation: 'create',
-        format,
+      await writeXlsx(
         outputPath,
-        sheets: [
-          {
-            name: 'Data',
-            rows: [
-              ['a', 1],
-              ['b', '=SUM(B1:B1)'],
-            ],
-          },
+        [
+          ['a', 1],
+          ['b', '=SUM(B1:B1)'],
         ],
-      });
-    else if (format === 'docx')
-      await createDocx({ operation: 'create', format, outputPath, title: 'T', paragraphs: ['p'] });
-    else
-      await createPptx({
-        operation: 'create',
-        format,
-        outputPath,
-        slides: [{ title: 'S', body: ['one', 'two'] }],
-      });
+        'Data',
+      );
+    else if (format === 'docx') await writeDocx(outputPath, { title: 'T', paragraphs: ['p'] });
+    else await writePptx(outputPath, ['S', 'one two']);
     originals.push([format, await readFile(outputPath)]);
   }
   const soup = [
@@ -295,8 +279,8 @@ test('office inspection answers or refuses damaged packages, never anything else
         await writeFile(file, bytes);
         const label = `seed ${seed}, ${format}, ${damage}`;
         try {
-          const answer = await inspectOffice(file, format);
-          assert.equal(typeof JSON.parse(answer), 'object', label);
+          const answer = await officePreviewHtml(format, file);
+          assert.match(answer, /^<!doctype html>/, label);
         } catch (error) {
           assert.ok(error instanceof Error, `${label}: threw ${typeof error} ${String(error)}`);
         }

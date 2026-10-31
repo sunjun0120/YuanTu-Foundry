@@ -209,7 +209,6 @@ test('SWE patch collection includes new, modified, deleted and test files but ex
     'web_fetch',
     'browser_open',
     'git_commit',
-    'office_edit',
   ])
     assert.equal(
       await approvalAllowed(approval(name, { path: 'change.py' }, 'command'), root),

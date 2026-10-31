@@ -11,8 +11,7 @@ import {
   OFFICE_PREVIEW_BYTES,
 } from '../../../packages/protocol/rpc.ts';
 import type { WorkspaceEntry } from '../../../packages/protocol/rpc.ts';
-import { officePreviewHtml } from '../../../packages/office/render.ts';
-import type { OfficeFormat } from '../../../packages/office/automation.ts';
+import { officePreviewHtml, type OfficeFormat } from '../../../packages/office/render.ts';
 // The class that owns the workspace's path rules. `files.list`/`files.read` reuse it rather than restating
 // its containment and ignore rules, so a client's file tree and the model's own tools cannot disagree about
 // which paths exist.

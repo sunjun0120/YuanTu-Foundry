@@ -19,6 +19,20 @@ const removedBackupModules = [
   'database-backup-worker',
   'renderer-backups',
 ];
+const removedOfficeModules = [
+  'automation',
+  'document',
+  'inspect',
+  'inspect-runner',
+  'inspect-worker',
+  'limits',
+  'presentation',
+  'preview',
+  'preview-backends',
+  'replace',
+  'tools',
+  'xml-text',
+];
 const removedOutputs = [
   'apps/web',
   'apps/agent-acp',
@@ -34,6 +48,14 @@ const removedOutputs = [
   'desktop/database-backup-worker.cjs.map',
   'desktop/mcp-test-worker.cjs',
   'desktop/mcp-test-worker.cjs.map',
+  ...removedOfficeModules.flatMap((name) =>
+    ['.js', '.js.map', '.d.ts'].map((extension) => `packages/office/${name}${extension}`),
+  ),
+  'packages/office/automation.ps1',
+  'packages/tools/office-inspect-worker.js',
+  'packages/tools/office-inspect-worker.js.map',
+  'packages/tools/automation.ps1',
+  'desktop/automation.ps1',
 ];
 for (const relative of removedOutputs) {
   const target = path.resolve(output, relative);

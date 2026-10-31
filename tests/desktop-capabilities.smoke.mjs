@@ -88,7 +88,7 @@ test(
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     assert.equal(await page.locator('#skill-select').count(), 0);
     await page.locator('#prompt').fill('/');
-    // By name, not by text: the built-in office skill's description mentions office_preview, which contains "review".
+    // By name, not by text: a skill description may contain "review" inside another word.
     await page.getByRole('option', { name: /^review\b/ }).waitFor();
     await page.locator('#image-input').setInputFiles({
       name: 'pixel.png',

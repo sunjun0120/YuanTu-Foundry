@@ -11,8 +11,8 @@
  * to carry, and the reasons behind it (no upstream fix, a code path not reached) change without the report
  * noticing; past the date the gate fails until someone has looked again and moved the date or removed the entry.
  *
- * What ships is not the same as `dependencies`, so `npm audit --omit=dev` is not the scope either. The Host, the
- * Office worker and the attachment worker inline the Office and Markdown libraries, which are devDependencies for
+ * What ships is not the same as `dependencies`, so `npm audit --omit=dev` is not the scope either. The Host and the
+ * attachment worker inline the Office preview and Markdown libraries, which are devDependencies for
  * exactly that reason (`electron-builder.config.cjs`), and the Electron runtime itself is a devDependency. The gate
  * therefore reads the full report and keeps the advisories whose package is installed at a location the product
  * ships: the production tree, plus the devDependencies in `SHIPPED_DEV`. Every devDependency the product source
@@ -22,24 +22,8 @@ import { execSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-const ACCEPTED = new Map([
-  [
-    'GHSA-5p2g-fcmc-qvqq',
-    {
-      reason:
-        'image-size via pptxgenjs: only 2.x is patched and pptxgenjs depends on the 1.x API; PPTX output embeds no images',
-      reviewBy: '2027-01-31',
-    },
-  ],
-  [
-    'GHSA-w3rx-r6r6-pgpr',
-    {
-      reason:
-        'image-size via pptxgenjs: same as above; the ICNS parser is only reached for embedded images',
-      reviewBy: '2027-01-31',
-    },
-  ],
-]);
+/** Advisories carried with a reason and a review date, as `[id, { reason, reviewBy }]`; none at present. */
+const ACCEPTED = new Map();
 
 /**
  * devDependencies whose code reaches users. `tree` inlines the package with everything it depends on; `self` ships
@@ -49,12 +33,10 @@ const ACCEPTED = new Map([
  */
 const SHIPPED_DEV = new Map([
   ['electron', 'self'],
-  ['docx', 'tree'],
   ['highlight.js', 'tree'],
   ['jszip', 'tree'],
   ['mammoth', 'tree'],
   ['marked', 'tree'],
-  ['pptxgenjs', 'tree'],
   ['xlsx', 'tree'],
 ]);
 

@@ -9,9 +9,8 @@ import path from 'node:path';
  * the refusal must not be read as the helper's own "outside the install directory" rejection — those are
  * different facts about different things.
  *
- * The signature is the one `packages/office/automation.ts` classifies for the same reason; it is repeated here
- * rather than imported so that a test about installer logic does not depend on the office package to describe
- * an environment fact.
+ * The signature is the one PowerShell reports when its execution policy refuses a script; it is written here
+ * so that a test about installer logic describes the environment fact itself.
  */
 const SCRIPT_REFUSAL = /AuthorizationManager|UnauthorizedAccess|PSSecurityException/i;
 

@@ -6,8 +6,8 @@ import { similarNames } from '../protocol/similar-names.ts';
  * that names the rest.
  *
  * A request used to carry every schema in the registry — about sixty tools and 33 KB in an empty workspace —
- * on every round, although most turns never touch a language server, a browser, an Office file or the
- * knowledge index. The deferred tools stay registered and callable exactly as before (same validation,
+ * on every round, although most turns never touch a language server, a browser or the knowledge
+ * index. The deferred tools stay registered and callable exactly as before (same validation,
  * permission and approval); what changes is only whether their schema is *sent* before the model asks for it.
  *
  * Which deferred tools a request carries is derived from the session's own transcript rather than kept in
@@ -20,8 +20,8 @@ export const LOAD_TOOLS = 'load_tools';
 /**
  * The tools whose schema waits for a `load_tools` call.
  *
- * The rule is "a whole subsystem a typical coding turn does not use": language servers, the browser, Office
- * documents, indexing documents into the knowledge base, the web, interactive terminals, worktree management
+ * The rule is "a whole subsystem a typical coding turn does not use": language servers, the browser, verifying a
+ * delivered file, indexing documents into the knowledge base, the web, interactive terminals, worktree management
  * and manifest-driven validation. Everything a turn reaches for constantly — files, search, commands and their
  * jobs, git status/diff/log/commit, the checklist, questions, delivery and memory — is always sent, because a
  * load costs the model one round. Memory is the measured case: a plain "remember this" reaches it, and the extra
@@ -56,16 +56,7 @@ export const DEFERRED_GROUPS: readonly { hint: string; names: readonly string[] 
     hint: 'browser automation',
     names: ['browser_open', 'browser_click', 'browser_fill', 'browser_screenshot', 'browser_close'],
   },
-  {
-    hint: 'Word/Excel/PowerPoint files and file delivery checks',
-    names: [
-      'office_inspect',
-      'office_preview',
-      'office_create',
-      'office_edit',
-      'verify_file_delivery',
-    ],
-  },
+  { hint: 'file delivery checks', names: ['verify_file_delivery'] },
   { hint: 'knowledge base indexing', names: ['index_document', 'remove_indexed_document'] },
   { hint: 'web', names: ['web_search', 'web_fetch'] },
   {

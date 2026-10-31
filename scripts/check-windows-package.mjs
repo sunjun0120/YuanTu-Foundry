@@ -48,8 +48,16 @@ export async function validateWindowsPackage(directory, { inspect = true } = {})
   const bundledHost = path.join(resources, 'app/dist/packages/tools/host.bundle.js');
   if ((await stat(bundledHost)).size < 1024 * 1024)
     throw new Error('Packaged Host bundle is missing or truncated');
-  // Office automation inlined into the bundle looks for its script beside the bundle, not under `dist/packages/office`.
-  await readFile(path.join(resources, 'app/dist/packages/tools/automation.ps1'));
+  // Removed with the Office tools (`scripts/clean-paused-builds.mjs`); a copy here means a stale `dist` was packaged.
+  for (const stale of [
+    'dist/packages/tools/office-inspect-worker.js',
+    'dist/packages/tools/automation.ps1',
+    'dist/packages/office/automation.ps1',
+    'dist/packages/office/tools.js',
+    'dist/desktop/automation.ps1',
+  ])
+    if (await stat(path.join(resources, 'app', stale)).catch(() => null))
+      throw new Error(`Packaged app still contains removed Office output ${stale}`);
   const metadata = JSON.parse(await readFile(path.join(resources, 'app/package.json'), 'utf8'));
   if (metadata.main !== 'dist/desktop/main.cjs')
     throw new Error('Packaged desktop entry point changed');

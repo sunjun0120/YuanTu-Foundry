@@ -21,26 +21,20 @@ import { isWindowsDeviceName, Workspace } from '../packages/tools/files.ts';
 import type { FileChange, FileSnapshot, ToolContext } from '../packages/protocol/index.ts';
 import { fileHandlers } from '../apps/agent-host/handlers/files.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
-import { runSpreadsheetOperation } from '../packages/office/spreadsheet.ts';
+import { writeXlsx } from './office-fixtures.ts';
 import { tempRoot } from './temp-fixture.ts';
 import { translate } from '../apps/desktop/i18n.ts';
 
 test('an Office document is previewed as a page instead of "binary"', async (t) => {
   const root = await tempRoot(t, 'yuantu-preview-office-');
-  await runSpreadsheetOperation({
-    operation: 'create',
-    format: 'xlsx',
-    outputPath: path.join(root, 'book.xlsx'),
-    sheets: [
-      {
-        name: 'Summary',
-        rows: [
-          ['Metric', 'Value'],
-          ['Revenue', 947],
-        ],
-      },
+  await writeXlsx(
+    path.join(root, 'book.xlsx'),
+    [
+      ['Metric', 'Value'],
+      ['Revenue', 947],
     ],
-  });
+    'Summary',
+  );
   const preview = (await fileHandlers['files.read']!({ workspace: root } as HostContext, {
     path: 'book.xlsx',
   })) as { kind: string; html?: string; reason?: string };

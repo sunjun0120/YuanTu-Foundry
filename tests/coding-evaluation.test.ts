@@ -689,7 +689,7 @@ test('the dev dependencies the source Host imports are copied, other dev depende
     sourceDirectory: source,
     targetDirectory: target,
   });
-  // The Office libraries are inlined into the desktop bundles but imported by the source Host a frozen runtime
+  // The Office preview libraries are inlined into the desktop bundles but imported by the source Host a frozen runtime
   // runs; without them the Host dies on its first import (`Cannot find package 'mammoth'`).
   assert.deepEqual(receipt.packages.map((entry: { name: string }) => entry.name).sort(), [
     'a',

@@ -181,7 +181,6 @@ export type ToolCategory =
   | 'git'
   | 'lsp'
   | 'browser'
-  | 'office'
   | 'delivery'
   | 'web'
   | 'memory'

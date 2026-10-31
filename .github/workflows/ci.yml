@@ -9,7 +9,6 @@
 # is absent — that is expected behaviour, not a failure:
 #   - the real-language-server section of tests/lsp.test.ts needs a real language server on PATH
 #   - native sandbox kernel tests require their matching operating system
-#   - Office tests need a local Microsoft Office install
 #   - Chromium-dependent tests need Playwright's browser download
 name: CI
 on:
