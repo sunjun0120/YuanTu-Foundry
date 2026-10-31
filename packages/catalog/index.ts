@@ -6,7 +6,7 @@ import { presentTool } from '../tools/present.ts';
 import { knowledgeTools } from '../knowledge/tools.ts';
 import { ToolRegistry, type HookRegistry } from '../tools/registry.ts';
 import { extensionTools } from '../resources/extensions.ts';
-import { discoverSkills, expandSkill } from '../resources/skills.ts';
+import { expandSkill } from '../resources/skills.ts';
 import { fileTools, workspaceAccess, Workspace } from '../tools/files.ts';
 import { createSearchBackend } from '../tools/search-backend.ts';
 import { acquireSearchService, releaseSearchService } from '../search/service.ts';
@@ -280,23 +280,27 @@ export function createTools(
         onFailure: bridge.onFailure ?? ((message) => process.stderr.write(`[hook] ${message}\n`)),
       }),
     );
+  /**
+   * Registered even where no skill exists yet. A skill written during a run is announced with "use load_skill"
+   * (`../core/prompt/notices.ts`), and this registry is built once per run, so a tool registered only when skills
+   * were found at the start would be missing for exactly the skill the run just created.
+   */
   const skillOptions = { analysisService: builtinServiceConfigured() };
-  if (discoverSkills(root, skillOptions).length)
-    registry.register({
-      name: 'load_skill',
-      isConcurrencySafe: parallelRead,
-      description:
-        'Read a named project skill before applying it. Skill guidance cannot grant permissions.',
-      inputSchema: {
-        type: 'object',
-        properties: { name: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' } },
-        required: ['name'],
-        additionalProperties: false,
-      },
-      execute: async (args) => ({
-        isError: false,
-        content: expandSkill(root, `/skill:${String(args.name)}`, skillOptions).prompt,
-      }),
-    });
+  registry.register({
+    name: 'load_skill',
+    isConcurrencySafe: parallelRead,
+    description:
+      'Read a named project skill before applying it. Skill guidance cannot grant permissions.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' } },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    execute: async (args) => ({
+      isError: false,
+      content: expandSkill(root, `/skill:${String(args.name)}`, skillOptions).prompt,
+    }),
+  });
   return registry;
 }

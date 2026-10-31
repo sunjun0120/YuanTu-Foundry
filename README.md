@@ -300,19 +300,19 @@ Word、Excel、PowerPoint 文件没有专用工具：有合适的技能（工作
 
 这些不在上面的基础目录里，注册与否取决于装配结果，因此名字也不是固定的：
 
-| 家族         | 注册条件                                                                   | 工具                                                                                                                        |
-| ------------ | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| 子代理       | 宿主启用委派（`--no-subagents` 关闭）                                      | `delegate_task`、`subagent_fork`、`collect_subagents`、`list_subagent_models`、`send_message`；子代理内另有 `submit_report` |
-| 工作区       | 宿主管理隔离子代理工作区                                                   | `workspace_results`（只读）、`workspace_result_apply`（写入，需审批）                                                       |
-| 会话查询     | 宿主提供了会话库                                                           | `search_sessions`、`read_session_events`、`search_session_events`、`trace_session`                                          |
-| 目标续跑     | 该运行自己拥有这份工作（根运行）                                           | `create_goal`、`get_goal`、`update_goal`                                                                                    |
-| 计划模式     | 计划阶段                                                                   | `submit_plan`、`exit_plan_mode`                                                                                             |
-| 工作流       | 宿主启用                                                                   | `workflow`（在独立 Node 进程中运行编排脚本，支持 host 与 Windows/macOS 原生后端）                                           |
-| 技能         | 工作区有技能，或应用配置了内置分析服务（内置 `code-analysis-report` 技能） | `load_skill`                                                                                                                |
-| 持久任务     | 有任务尝试活动                                                             | `task_step`                                                                                                                 |
-| 内置分析服务 | 应用配置了服务                                                             | `scan_<后端工具名>`，Windows 上另有 `analysis_upload_source`、`analysis_download_report`；异步分析由 `job_*` 管理           |
-| MCP          | 工作区配置了服务                                                           | `mcp_<服务名>_list_tools`、`_call_tool`、`_list_resources`、`_read_resource`、`_list_prompts`、`_get_prompt`                |
-| 扩展         | `.yuantu/extensions/*.json` 或嵌入方注册                                   | `ext_<名称>`                                                                                                                |
+| 家族         | 注册条件                                                                                       | 工具                                                                                                                        |
+| ------------ | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| 子代理       | 宿主启用委派（`--no-subagents` 关闭）                                                          | `delegate_task`、`subagent_fork`、`collect_subagents`、`list_subagent_models`、`send_message`；子代理内另有 `submit_report` |
+| 工作区       | 宿主管理隔离子代理工作区                                                                       | `workspace_results`（只读）、`workspace_result_apply`（写入，需审批）                                                       |
+| 会话查询     | 宿主提供了会话库                                                                               | `search_sessions`、`read_session_events`、`search_session_events`、`trace_session`                                          |
+| 目标续跑     | 该运行自己拥有这份工作（根运行）                                                               | `create_goal`、`get_goal`、`update_goal`                                                                                    |
+| 计划模式     | 计划阶段                                                                                       | `submit_plan`、`exit_plan_mode`                                                                                             |
+| 工作流       | 宿主启用                                                                                       | `workflow`（在独立 Node 进程中运行编排脚本，支持 host 与 Windows/macOS 原生后端）                                           |
+| 技能         | 始终（运行中新写的技能当轮即可加载；内置 `code-analysis-report` 技能只在配置了分析服务时列出） | `load_skill`                                                                                                                |
+| 持久任务     | 有任务尝试活动                                                                                 | `task_step`                                                                                                                 |
+| 内置分析服务 | 应用配置了服务                                                                                 | `scan_<后端工具名>`，Windows 上另有 `analysis_upload_source`、`analysis_download_report`；异步分析由 `job_*` 管理           |
+| MCP          | 工作区配置了服务                                                                               | `mcp_<服务名>_list_tools`、`_call_tool`、`_list_resources`、`_read_resource`、`_list_prompts`、`_get_prompt`                |
+| 扩展         | `.yuantu/extensions/*.json` 或嵌入方注册                                                       | `ext_<名称>`                                                                                                                |
 
 内置分析服务的正式地址尚未配置；当前防替换句柄实现只支持 Windows：其他平台不注册源码上传与报告下载工具（仍可用 GitHub 仓库地址分析），桌面端也会拒绝暂存源码包。
 
@@ -765,9 +765,9 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 65 个 / 35.8 KB | `createTools().specs()` |
-| 工具（只读运行） | 34 个 / 18.3 KB | `specs({ readOnly: true })` |
-| 工具（默认按需加载，首个请求） | 25 个 / 18.4 KB | `specs({ loaded: new Set() })` |
+| 工具（空工作区，全部） | 66 个 / 36.1 KB | `createTools().specs()` |
+| 工具（只读运行） | 35 个 / 18.6 KB | `specs({ readOnly: true })` |
+| 工具（默认按需加载，首个请求） | 26 个 / 18.6 KB | `specs({ loaded: new Set() })` |
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 59 / 54 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |

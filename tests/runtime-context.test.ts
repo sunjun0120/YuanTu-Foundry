@@ -783,13 +783,24 @@ test('a skill written during a run is announced instead of changing the prompt',
           path: '.agents/skills/release/SKILL.md',
           content: '---\nname: release\ndescription: How releases are cut\n---\nsteps\n',
         })
-      : reply('记住了。'),
+      : round === 2
+        ? toolCall('load-1', 'load_skill', { name: 'release' })
+        : reply('记住了。'),
   );
   await mkdir(path.join(root, '.agents/skills/release'), { recursive: true });
   const agent = new Agent({ store, provider, tools: createTools(root), approve: async () => true });
   await agent.run({ sessionId, prompt: '写一个发布技能' });
 
-  assert.equal(requests.length, 2, 'the write and the answer are two rounds');
+  assert.equal(requests.length, 3, 'the write, the load and the answer are three rounds');
+  // The announcement says to use load_skill, so the tool has to be there in the same run, even in a workspace
+  // that had no skill when the run started.
+  const loaded = store
+    .messages(sessionId)
+    .find((message) => message.role === 'tool' && message.toolCallId === 'load-1');
+  assert.ok(
+    loaded?.role === 'tool' && loaded.isError === false && /steps/.test(loaded.content),
+    `the new skill loads in the run that wrote it: ${loaded?.role === 'tool' ? loaded.content : 'no tool result'}`,
+  );
   // The skill has to be there for the announcement to have anything to say: assert the write itself worked.
   const written = store
     .messages(sessionId)

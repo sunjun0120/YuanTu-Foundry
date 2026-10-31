@@ -29,8 +29,7 @@ const tool = (name: string, extra: Partial<Tool> = {}): Tool => ({
 });
 async function registry(t: test.TestContext) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-mode-'));
-  // `load_skill` only exists where a project skill does, so the workspace needs one for the pinned set below
-  // to describe the build a user actually gets.
+  // A project skill, so the pinned set below describes a workspace that has something for `load_skill` to read.
   await mkdir(path.join(root, '.agents', 'skills', 'demo'), { recursive: true });
   await writeFile(
     path.join(root, '.agents', 'skills', 'demo', 'SKILL.md'),

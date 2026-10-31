@@ -78,8 +78,8 @@ test('a real run records its transcript as events, and all three views agree', a
     [
       'run.started',
       'message.user',
-      // The runtime's machine-written skills announcement is a user-role message in the log too.
-      'message.user',
+      // No skills announcement: this workspace has no skill, and no built-in one is listed without the
+      // analysis service. Where one is announced, it is a second user-role message here.
       'resources.loaded',
       'step.started',
       'context.envelope',
