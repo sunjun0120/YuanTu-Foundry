@@ -296,17 +296,49 @@ node -e "const s=require('./package.json').scripts;for(const[k,v]of Object.entri
     await readFile(path.join(resources, 'document-libs/node_modules', name, 'package.json'));
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [ ] **Step 5: 重新评估依赖审计豁免**
+
+`scripts/check-audit.mjs` 第 25-40 行有两条 `image-size`（经由 pptxgenjs 引入）的豁免，理由是"PPTX 输出不嵌入图片"。改成模型直接用完整的 pptxgenjs 写脚本以后，`addImage` 也能用，这条理由就不成立了，不能照抄。
+
+先查清 `image-size` 到底会不会被执行：
+
+```bash
+grep -rln "image-size" node_modules/pptxgenjs/dist/
+```
+
+计划编写时查过：pptxgenjs 4.0.1 的 `dist/` 里没有任何文件引用 `image-size`。Node 下量图片尺寸走的是 `require('sizeof')`（`dist/pptxgen.cjs.js` 约 5020 行），而 `sizeof` 并没有安装，加载失败会被捕获。也就是说 `image-size` 只是声明了依赖，实际从不加载。按查到的结果分两种情况：
+
+- **仍然没有引用**（预期情况）：
+  - 把两条豁免的 `reason` 改成：`'image-size via pptxgenjs: declared but never loaded; no file in pptxgenjs/dist requires it (guarded by tests/document-libs.test.ts)'`，`reviewBy` 不变。
+  - 在 `tests/document-libs.test.ts` 加一个守护用例。pptxgenjs 哪天升级后开始加载 `image-size`，这个用例就会失败，逼人重新评估：
+
+    ```ts
+    test('pptxgenjs never loads image-size, which the audit exemption relies on', async () => {
+      const dist = path.resolve('node_modules/pptxgenjs/dist');
+      for (const name of await readdir(dist))
+        if (name.endsWith('.js'))
+          assert.doesNotMatch(await readFile(path.join(dist, name), 'utf8'), /image-size/, name);
+    });
+    ```
+  - `stageDocumentLibs` 的名单不变（`image-size` 仍会被复制，它在 `dependencies` 里）。
+- **有引用**：停下，向用户报告。可选的做法有两种：用 npm `overrides` 把 `image-size` 升到已修复的 2.x，并验证 pptxgenjs 的图片功能还能用；或者在 pptx 技能里禁止 `addImage`。不要自己挑。
+
+同时更新 `check-audit.mjs` 顶部那段注释：现在 `docx` 和 `pptxgenjs` 的发布方式不再是"被 Host 内联"，而是"作为 `resources/document-libs` 整树发布"。在 `SHIPPED_DEV` 上方补一句：`docx` 与 `pptxgenjs` 在 Task 5 之后不再被 `apps/`、`packages/` 导入，但仍按 `tree` 留在清单里，因为它们整树打包进了 `document-libs`。
+
+Run: `npm run audit:check`
+Expected: 通过，并且没有 "stale exemption" 提示。
+
+- [ ] **Step 6: 跑测试确认通过**
 
 Run: `node scripts/run-tests.mjs tests/document-libs.test.ts`
-Expected: PASS（6 个用例）。
+Expected: PASS（7 个用例）。
 Run: `node scripts/prepare-document-libs.mjs`
 Expected: 打印 `Staged N document library packages`，N 在 10 到 20 之间。
 
-- [ ] **Step 6: 提交**
+- [ ] **Step 7: 提交**
 
 ```bash
-git add scripts/prepare-document-libs.mjs electron-builder.config.cjs package.json scripts/check-windows-package.mjs tests/document-libs.test.ts
+git add scripts/prepare-document-libs.mjs electron-builder.config.cjs package.json scripts/check-windows-package.mjs scripts/check-audit.mjs tests/document-libs.test.ts
 git commit -m "build: ship the document libraries as a resource"
 ```
 
@@ -314,12 +346,16 @@ git commit -m "build: ship the document libraries as a resource"
 
 ### Task 3: 沙箱能读到文档库（卡口任务）
 
-这个任务决定方案是否成立。Windows 原生沙箱用独立账户执行命令，`tests/windows-sandbox-host.test.ts` 已经证明：只有当前用户能读的目录，沙箱账户读不到。打包后的应用在 `%LOCALAPPDATA%\Programs\…`，很可能属于这种目录。**如果 Step 3 的探针失败，停下来，把结果和下面的备选方案报告给用户，由用户选择，不要自己挑。**
+这个任务决定方案是否成立。Windows 原生沙箱用独立账户执行命令，`tests/windows-sandbox-host.test.ts` 已经证明：只有当前用户能读的目录，沙箱账户读不到。打包后的应用在 `%LOCALAPPDATA%\Programs\…`，很可能属于这种目录。**如果 Step 4 的探针失败，停下来，把结果和下面的备选方案报告给用户，由用户选择，不要自己挑。**
+
+真实账户测试只在专门的 GitHub Actions 临时机器上执行：`accountAcceptanceSkip()`（`scripts/windows-account-ci.mjs`）要求 `GITHUB_ACTIONS=true`、`RUNNER_ENVIRONMENT=github-hosted`、`FOUNDRY_TEST_WINDOWS_ACCOUNT_JOURNEYS=1`，本机运行一律跳过。所以**本机跑通不算验收**，验收以 `.github/workflows/windows-account-sandbox.yml` 的结果为准。`scripts/check-windows-sandbox.mjs` 只跑 `WINDOWS_ACCOUNT_JOURNEY_FILES` 里的文件，并用 `assertAcceptanceOutput` 要求零跳过，所以新测试必须登记在这份清单里。
 
 **Files:**
 - Modify: `packages/sandbox/sandbox-seatbelt.ts:197-212`（`policyInput` 的 `runtimeDirectories`）
 - Create: `tests/windows-sandbox-document-libs.test.ts`
-- Test: `tests/sandbox-seatbelt.test.ts`（只跑，不改）
+- Modify: `scripts/windows-sandbox-suites.mjs`（登记新测试）
+- Modify: `.github/workflows/windows-account-sandbox.yml`（`push` 和 `pull_request` 的 `paths` 各加 `packages/platform/document-libs.ts`、`scripts/prepare-document-libs.mjs`）
+- Test: `tests/sandbox-seatbelt.test.ts`（只跑，不改）；`tests/test-workflow.test.ts`（如果它固定了清单或路径过滤，跟着改）
 
 **Interfaces:**
 - Consumes: Task 1 的 `documentLibsDirectory()`；Task 2 的 `stageDocumentLibs()`。
@@ -388,12 +424,24 @@ test(
     });
     const host = await startHost(t, { YUANTU_SANDBOX: 'native', YUANTU_BASE_URL: url });
     const script = path.join(host.root, 'make.cjs');
+    // All three formats, each through the library the matching skill uses, and each read back with jszip.
     await writeFile(
       script,
       `const need=require('node:module').createRequire(${JSON.stringify(libs + path.sep)});
-const fs=require('node:fs');const {Document,Packer,Paragraph}=need('docx');
-Packer.toBuffer(new Document({sections:[{children:[new Paragraph('probe')]}]}))
-  .then(b=>{fs.writeFileSync('probe.docx',b);fs.writeFileSync('probe-result.json',JSON.stringify({bytes:b.length}))});`,
+const fs=require('node:fs');
+const {Document,Packer,Paragraph}=need('docx');const PptxGenJS=need('pptxgenjs');const XLSX=need('xlsx');const JSZip=need('jszip');
+(async()=>{
+  fs.writeFileSync('probe.docx',await Packer.toBuffer(new Document({sections:[{children:[new Paragraph('probe-docx')]}]})));
+  const deck=new PptxGenJS();deck.addSlide().addText('probe-pptx',{x:1,y:1,w:6,h:1});await deck.writeFile({fileName:'probe.pptx'});
+  const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([['probe-xlsx']]),'S');XLSX.writeFile(book,'probe.xlsx');
+  const text=async(file,part)=>(await (await JSZip.loadAsync(fs.readFileSync(file))).file(part).async('string'));
+  const result={
+    docx:(await text('probe.docx','word/document.xml')).includes('probe-docx'),
+    pptx:(await text('probe.pptx','ppt/slides/slide1.xml')).includes('probe-pptx'),
+    xlsx:XLSX.readFile('probe.xlsx').Sheets.S.A1.v==='probe-xlsx',
+  };
+  fs.writeFileSync('probe-result.json',JSON.stringify(result));
+})();`,
     );
     command = `${quoteWindowsArgument(node)} ${quoteWindowsArgument(script)}`;
     const { client } = await connectClient(host);
@@ -413,7 +461,7 @@ Packer.toBuffer(new Document({sections:[{children:[new Paragraph('probe')]}]}))
       });
       await client.run(sessionId, 'make the probe document');
       const evidence = JSON.parse(await readFile(path.join(host.root, 'probe-result.json'), 'utf8'));
-      assert.ok(evidence.bytes > 1000, JSON.stringify(receipts));
+      assert.deepEqual(evidence, { docx: true, pptx: true, xlsx: true }, JSON.stringify(receipts));
     } finally {
       if (sessionId) await client.request('run.cancel', { sessionId }).catch(() => {});
       await client.stop();
@@ -422,25 +470,45 @@ Packer.toBuffer(new Document({sections:[{children:[new Paragraph('probe')]}]}))
 );
 ```
 
-如果 `client.run` 的签名要求 `completion` 参数（看 `windows-sandbox-host.test.ts` 第 109 行的写法），就照那里补一个 `file-contains` 检查 `probe-result.json` 含 `bytes` 的验收项。
+如果 `client.run` 的签名要求 `completion` 参数（看 `windows-sandbox-host.test.ts` 第 109 行的写法），就照那里补一个 `file-contains` 检查：`probe-result.json` 含 `"xlsx":true`。
 
-- [ ] **Step 3: 在本机（Windows）跑探针**
+- [ ] **Step 3: 登记到真实账户验收清单，本机确认只是跳过**
 
-Run: `node scripts/run-tests.mjs tests/windows-sandbox-document-libs.test.ts`
-Expected 两种情况：
-- PASS：沙箱账户能执行 `runtime/node.exe`，也能读 `document-libs`。继续 Step 4。
-- FAIL，`receipts` 里能看到 `EACCES`/`EPERM`/"拒绝访问"：**停下**，向用户报告失败输出，并给出备选方案：
-  1. 安装时（或首次启用沙箱时）用现有 ACL 授权机制（`packages/sandbox/windows-sandbox/acl.ps1` 的 `grant`）给沙箱账户加 `resources/runtime` 和 `resources/document-libs` 的只读 + 执行权限；
-  2. 每个会话把库复制到沙箱可读的会话临时目录，技能里的路径指向那里；
-  3. 技能不写死自带 Node，先用 PATH 上的 `node`，库仍需方案 1 或 2 才能读到。
-  等用户选定后，把选中的方案作为新任务插入到 Task 4 之前，再继续。
+`scripts/windows-sandbox-suites.mjs` 的 `WINDOWS_ACCOUNT_JOURNEY_FILES` 按字母序加入 `'tests/windows-sandbox-document-libs.test.ts'`（放在 `'tests/windows-sandbox-host.test.ts'` 前面）。`.github/workflows/windows-account-sandbox.yml` 的两处 `paths` 加上 Files 里列的两条。新测试文件名已经能匹配现有的 `tests/windows-sandbox-*` 过滤，不用再加。
 
-- [ ] **Step 4: 提交**
+Run: `node scripts/run-tests.mjs tests/windows-sandbox-document-libs.test.ts tests/test-workflow.test.ts`
+Expected: 探针显示 **skip**，原因是 "real account journeys require an explicitly enabled disposable GitHub Actions runner"；`test-workflow` PASS。本机这里出现 skip 是正常的，**不代表验收通过**。
+
+提交：
 
 ```bash
-git add packages/sandbox/sandbox-seatbelt.ts tests/windows-sandbox-document-libs.test.ts
-git commit -m "feat(sandbox): let sandboxed scripts read the document libraries"
+git add packages/sandbox/sandbox-seatbelt.ts tests/windows-sandbox-document-libs.test.ts scripts/windows-sandbox-suites.mjs .github/workflows/windows-account-sandbox.yml
+git commit -m "test(sandbox): probe document generation through the real sandbox account"
 ```
+
+- [ ] **Step 4: 在 CI 上真实运行探针（卡口）**
+
+推分支会触发外部 CI，**先问用户**：是否把当前分支推到远端，用来触发 `Windows sandbox accounts` 工作流。用户同意后：
+
+```bash
+git push -u origin HEAD
+```
+
+```bash
+gh run list --workflow "Windows sandbox accounts" --branch "$(git branch --show-current)" --limit 1
+```
+
+```bash
+gh run watch <run-id> --exit-status
+```
+
+在日志里确认 `tests/windows-sandbox-document-libs.test.ts` 是**实际执行并通过**的（`check-windows-sandbox.mjs` 的零跳过断言会让任何 skip 都判失败）。两种结果：
+- 通过：沙箱账户能执行 `runtime/node.exe`、能读 `document-libs`，三种格式都能生成并读回。继续 Task 4。
+- 失败，日志里有 `EACCES`/`EPERM`/"拒绝访问"：**停下**，把失败输出报告给用户，并给出备选方案：
+  1. 安装时（或首次启用沙箱时）用现有 ACL 授权机制（`packages/sandbox/windows-sandbox/acl.ps1` 的 `grant`），给沙箱账户加 `resources/runtime` 和 `resources/document-libs` 的只读 + 执行权限；
+  2. 每个会话把库复制到沙箱可读的会话临时目录，技能里的路径指向那里；
+  3. 技能不写死自带 Node，先用 PATH 上的 `node`；库仍要靠方案 1 或 2 才能读到。
+  等用户选定后，把选中的方案作为新任务插到 Task 4 之前，探针保持不变，重新跑这一步直到通过。
 
 ---
 
@@ -490,10 +558,32 @@ test('without shipped libraries the document skills say so instead of naming a p
   assert.doesNotMatch(text, /\{\{/);
   assert.equal(
     fillDocumentPlaceholders('{{DOCUMENT_LIBS}}|{{NODE}}', 'C:\\a\\node_modules', 'C:\\n\\node.exe'),
-    'C:/a/node_modules|C:/n/node.exe',
+    '"C:/a/node_modules/"|C:/n/node.exe',
   );
 });
+
+test('a library path with quotes or backslashes still yields a valid JavaScript string', async (t) => {
+  // An install location such as C:\Users\O'Brien\... must not end the string literal early.
+  const root = await tempRoot(
+    t,
+    process.platform === 'win32' ? "yuantu-o'brien-$&-" : "yuantu-o'brien-$&-\\\"x-",
+  );
+  const libs = path.join(root, 'node_modules');
+  await stageDocumentLibs(path.resolve('node_modules'), libs);
+  const script = fillDocumentPlaceholders(
+    "const need = require('node:module').createRequire({{DOCUMENT_LIBS}});\n" +
+      "console.log(typeof need('docx').Document);",
+    libs,
+    process.execPath,
+  );
+  const file = path.join(root, 'probe.cjs');
+  await writeFile(file, script);
+  const { stdout } = await promisify(execFile)(process.execPath, [file]);
+  assert.equal(stdout.trim(), 'function');
+});
 ```
+
+Windows 的目录名不能含 `"`，所以那里只测 `'` 和 `$&`。这个用例要用到 Task 2 的 `stageDocumentLibs` 和 `execFile`/`promisify`，在文件顶部一并导入。期望值里的 `"C:/a/node_modules/"` 是 `JSON.stringify` 的结果，引号是值的一部分。
 
 （在该文件顶部补 `import { fillDocumentPlaceholders } from '../packages/resources/builtin-skills.ts';`。）第 82、90 行的期望里，`'builtin:office-documents'` 换成 `'builtin:docx', 'builtin:pptx', 'builtin:xlsx'`（按字母序和 `builtin:code-analysis-report` 排在一起：`['builtin:code-analysis-report', 'builtin:docx', 'builtin:pptx', 'builtin:xlsx']`）。
 
@@ -578,7 +668,7 @@ Use this when the user wants a report, proposal, letter or handout as a .docx fi
 ## Example
 
 \`\`\`js
-const need = require('node:module').createRequire('{{DOCUMENT_LIBS}}/');
+const need = require('node:module').createRequire({{DOCUMENT_LIBS}});
 const fs = require('node:fs');
 const { Document, Packer, Paragraph, HeadingLevel, Table, TableRow, TableCell, TextRun, WidthType } = need('docx');
 
@@ -614,7 +704,7 @@ Packer.toBuffer(doc).then((bytes) => fs.writeFileSync(process.argv[2], bytes));
 ## Reading it back
 
 \`\`\`js
-const need = require('node:module').createRequire('{{DOCUMENT_LIBS}}/');
+const need = require('node:module').createRequire({{DOCUMENT_LIBS}});
 need('jszip').loadAsync(require('node:fs').readFileSync(process.argv[2]))
   .then((zip) => zip.file('word/document.xml').async('string'))
   .then((xml) => console.log(xml.replace(/<\\/w:p>/g, '\\n').replace(/<[^>]+>/g, '')));
@@ -644,7 +734,7 @@ Use this when the user wants a slide deck as a .pptx file.
 ## Example
 
 \`\`\`js
-const need = require('node:module').createRequire('{{DOCUMENT_LIBS}}/');
+const need = require('node:module').createRequire({{DOCUMENT_LIBS}});
 const PptxGenJS = need('pptxgenjs');
 
 const pptx = new PptxGenJS();
@@ -678,7 +768,7 @@ pptx.writeFile({ fileName: process.argv[2] });
 ## Reading it back
 
 \`\`\`js
-const need = require('node:module').createRequire('{{DOCUMENT_LIBS}}/');
+const need = require('node:module').createRequire({{DOCUMENT_LIBS}});
 need('jszip').loadAsync(require('node:fs').readFileSync(process.argv[2])).then(async (zip) => {
   const slides = Object.keys(zip.files).filter((n) => /^ppt\\/slides\\/slide\\d+\\.xml$/.test(n))
     .sort((a, b) => parseInt(a.match(/\\d+/)[0]) - parseInt(b.match(/\\d+/)[0]));
@@ -709,7 +799,7 @@ Use this when the user wants a workbook as a .xlsx file.
 ## Example
 
 \`\`\`js
-const need = require('node:module').createRequire('{{DOCUMENT_LIBS}}/');
+const need = require('node:module').createRequire({{DOCUMENT_LIBS}});
 const XLSX = need('xlsx');
 
 const sheet = XLSX.utils.aoa_to_sheet([
@@ -729,7 +819,7 @@ XLSX.writeFile(book, process.argv[2]);
 ## Reading it back
 
 \`\`\`js
-const need = require('node:module').createRequire('{{DOCUMENT_LIBS}}/');
+const need = require('node:module').createRequire({{DOCUMENT_LIBS}});
 const XLSX = need('xlsx');
 const book = XLSX.readFile(process.argv[2], { cellFormula: true });
 for (const name of book.SheetNames) console.log(name + '\\n' + XLSX.utils.sheet_to_csv(book.Sheets[name]));
@@ -764,9 +854,12 @@ const DOCUMENT_SKILLS = new Set(['docx', 'pptx', 'xlsx']);
 /**
  * The document skills name the Node and the library directory a script must use, which only this process knows.
  *
- * Forward slashes work in a `require` path and a command line on every platform, and spare the model escaping
- * Windows backslashes inside a JavaScript string. Without shipped libraries the skill says so up front, so the
- * model reports it instead of running a script that cannot load anything.
+ * `{{DOCUMENT_LIBS}}` becomes a whole JavaScript string literal, quotes included: an install path may hold a quote
+ * (C:\Users\O'Brien\…) that would end a hand-quoted string early. Forward slashes work in a `require` path and on
+ * a command line on every platform. `{{NODE}}` stays bare because the skill puts it inside double quotes on the
+ * command line, and neither a Windows path nor the packaged macOS location contains one. Without shipped
+ * libraries the skill says so up front, so the model reports it instead of running a script that cannot load
+ * anything.
  */
 export function fillDocumentPlaceholders(
   text: string,
@@ -778,14 +871,16 @@ export function fillDocumentPlaceholders(
     ? ''
     : '> This build does not ship the document libraries, so the scripts below cannot run. Tell the user, and ' +
       'install docx, pptxgenjs, xlsx and jszip in a scratch directory only if they agree.\n\n';
+  const literal = JSON.stringify(libs ? slash(libs) + '/' : 'node_modules/');
+  // Function replacers: a string replacement would read `$&` or `$'` in a path as a substitution pattern.
   return (
     notice +
-    text
-      .replaceAll('{{DOCUMENT_LIBS}}', libs ? slash(libs) : 'node_modules')
-      .replaceAll('{{NODE}}', slash(node))
+    text.replaceAll('{{DOCUMENT_LIBS}}', () => literal).replaceAll('{{NODE}}', () => slash(node))
   );
 }
 ```
+
+特殊路径测试里的目录名带 `$&`，就是为了锁住函数形式替换这一点。
 
 `builtinSkillText` 改为：
 
@@ -870,7 +965,7 @@ git commit -m "feat(resources): replace the office skill with docx, pptx and xls
 - Modify: `packages/tools/deferred-tools.ts:9,23,62-65`、`packages/tools/tool-categories.ts:81-84`、`packages/core/subagents/contract.ts:276`、`packages/protocol/tool-contract.ts:184`、`packages/protocol/settings.ts:489-492`、`packages/protocol/environment-blocked.ts:3,10`（注释）
 - Modify: `packages/office/render.ts`、`packages/office/spreadsheet.ts`、`apps/agent-host/handlers/files.ts:14-15`
 - Delete: `packages/office/{tools,automation,document,presentation,replace,inspect,inspect-runner,inspect-worker,preview,preview-backends,limits,xml-text}.ts`、`packages/office/automation.ps1`
-- Modify: `scripts/build-host-bundle.mjs:46-67`、`scripts/build-desktop.mjs:27-29`、`scripts/check-windows-package.mjs:51-52`、`.github/workflows/ci.yml:12`、`benchmarks/coding-evaluation/dependencies.mjs:8`、`tests/coding-evaluation.test.ts:692`（注释）、`tests/windows-install-safety.test.ts:12-13`（注释）
+- Modify: `scripts/build-host-bundle.mjs:46-67`、`scripts/build-desktop.mjs:27-29`、`scripts/check-windows-package.mjs:51-52`、`scripts/clean-paused-builds.mjs`、`.github/workflows/ci.yml:12`、`benchmarks/coding-evaluation/dependencies.mjs:8`、`tests/coding-evaluation.test.ts:692`（注释）、`tests/windows-install-safety.test.ts:12-13`（注释）
 - Create: `tests/office-fixtures.ts`、`tests/office-preview-readonly.test.ts`
 - Delete: `tests/office.test.ts`、`tests/office-native.test.ts`、`tests/office-preview.test.ts`
 - Modify tests: `tests/files.test.ts:24-44`、`tests/malformed-input.test.ts:17-21,230-300`、`tests/tool-concurrency-mode.test.ts:139,171`、`tests/swe-bench.test.ts:212`
@@ -898,8 +993,11 @@ export async function writeDocx(file: string, paragraphs: string[]): Promise<voi
   await writeFile(file, await Packer.toBuffer(doc));
 }
 
+/** The same default-export adaptation `packages/office/presentation.ts` used: under NodeNext the import is the namespace. */
+const PptxGenJS = pptxgenjs as unknown as typeof pptxgenjs.default;
+
 export async function writePptx(file: string, slides: string[]): Promise<void> {
-  const pptx = new pptxgenjs();
+  const pptx = new PptxGenJS();
   for (const text of slides) pptx.addSlide().addText(text, { x: 0.5, y: 0.5, w: 9, h: 1 });
   await writeFile(file, (await pptx.write({ outputType: 'nodebuffer' })) as Buffer);
 }
@@ -1016,6 +1114,53 @@ git rm packages/office/tools.ts packages/office/automation.ts packages/office/au
 
 `scripts/check-windows-package.mjs:51-52`：删掉检查 `automation.ps1` 的注释和 `readFile`。"bundled dependency" 循环（`docx, jszip, mammoth, pptxgenjs, xlsx` 不应出现在 `app/node_modules`）保留不动。
 
+`scripts/clean-paused-builds.mjs`：停止生成不会删掉旧产物。`npm run build` 第一步就是这个脚本，`tsc` 和打包脚本都不会清空 `dist`，而 `electron-builder` 会把 `dist/packages/**` 整个装进安装包。所以旧的 Office worker、自动化脚本和工具模块必须在这里显式删除。照文件里 `removedMcpModules` 的写法加一组：
+
+```js
+const removedOfficeModules = [
+  'automation',
+  'document',
+  'inspect',
+  'inspect-runner',
+  'inspect-worker',
+  'limits',
+  'presentation',
+  'preview',
+  'preview-backends',
+  'replace',
+  'tools',
+  'xml-text',
+];
+```
+
+`removedOutputs` 里加：
+
+```js
+  ...removedOfficeModules.flatMap((name) =>
+    ['.js', '.js.map', '.d.ts'].map((extension) => `packages/office/${name}${extension}`),
+  ),
+  'packages/office/automation.ps1',
+  'packages/tools/office-inspect-worker.js',
+  'packages/tools/office-inspect-worker.js.map',
+  'packages/tools/automation.ps1',
+  'desktop/automation.ps1',
+```
+
+`scripts/check-windows-package.mjs` 在删掉 `automation.ps1` 检查的同一处，改成反向检查，确保旧产物没有进安装包：
+
+```js
+  // Removed with the Office tools (`scripts/clean-paused-builds.mjs`); a copy here means a stale `dist` was packaged.
+  for (const stale of [
+    'dist/packages/tools/office-inspect-worker.js',
+    'dist/packages/tools/automation.ps1',
+    'dist/packages/office/automation.ps1',
+    'dist/packages/office/tools.js',
+    'dist/desktop/automation.ps1',
+  ])
+    if (await stat(path.join(resources, 'app', stale)).catch(() => null))
+      throw new Error(`Packaged app still contains removed Office output ${stale}`);
+```
+
 `.github/workflows/ci.yml:12`：删掉 "Office tests need a local Microsoft Office install" 这一行注释。
 
 `benchmarks/coding-evaluation/dependencies.mjs:8`、`tests/coding-evaluation.test.ts:692`、`tests/windows-install-safety.test.ts:12-13`：读上下文。注释里引用已删除文件（`automation.ts`）的，改成描述现状；只是泛称"Office 库"的，保持不动。
@@ -1031,8 +1176,22 @@ Expected: PASS。
 Run: `npm run layers:check && npm run cycles:check && npm run references:check && npm run lint`
 Expected: 全部通过。
 
-Run: `npm run build`
-Expected: 成功；`dist/packages/tools/` 下不再有 `office-inspect-worker.js` 和 `automation.ps1`。
+Run: `npm run build`（**不要**先删 `dist`，要验证的正是在旧产物上做增量构建的情况）
+Expected: 成功。再确认旧产物都已清掉：
+
+```bash
+ls dist/packages/office
+```
+
+Expected: 只有 `preview-page`、`read`、`render`、`spreadsheet`、`zip-entry` 这五个模块的 `.js`/`.js.map`/`.d.ts`。
+
+```bash
+ls dist/packages/tools/office-inspect-worker.js dist/packages/tools/automation.ps1 dist/desktop/automation.ps1
+```
+
+Expected: 三个都报 "No such file"。
+
+Windows 打包验证（Task 6 Step 3 的 `package:windows:dir`）里，`validateWindowsPackage` 新加的反向检查会再确认一次安装包里没有这些文件。
 
 用 Grep 在 `packages apps scripts tests`（排除 `node_modules`、`dist`、`.scratch`）里搜 `office_inspect|office_create|office_edit|office_preview|officeTools|runOfficeAutomation|automation\.ps1|LIBREOFFICE`，预期没有结果。
 
@@ -1102,3 +1261,4 @@ git commit -m "docs: describe document generation through skills"
 - Spec 覆盖：删除工具（Task 5）、保留只读（Task 5 Step 1/4）、自带库（Task 1、2）、占位符传路径（Task 4）、沙箱读取验证（Task 3）、技能（Task 4）、code-analysis-report 与 notices（Task 4）、README（Task 6）、测试调整（Task 4、5）——都有对应任务。
 - Spec 里写的"`OfficeFormat` 改在 `render.ts` 本地定义"→ Task 5 Step 4；"`tool-contract.ts` 的 `'office'` 分类"→ Task 5 Step 4。
 - Spec 没写、计划补上的：用 `{{NODE}}` 指定自带 Node（工具子进程的 PATH 不保证有 `node`）；Task 3 改成卡口任务，因为 Windows 沙箱账户很可能读不到用户目录下的安装位置。
+- 评审补充（2026-10-31）：真实账户探针登记进 `WINDOWS_ACCOUNT_JOURNEY_FILES`，以 CI 实际运行、零跳过为准，并覆盖三种格式（Task 3）；`image-size` 豁免改以"pptxgenjs 从不加载它"为依据，加守护测试，并跑 `audit:check`（Task 2 Step 5）；`clean-paused-builds.mjs` 清除旧 Office 产物，安装包检查反向确认（Task 5 Step 5）；库路径用 `JSON.stringify` 生成完整字符串字面量，并用函数形式替换，避免 `$&` 被当成替换模式（Task 4）；PPT 夹具沿用默认导出的类型适配（Task 5 Step 1）。
