@@ -219,3 +219,42 @@ test('a run copy takes its own action limits, not its parent’s, as with name r
   assert.deepEqual(enumOf(registry.forRun())?.sort(), ['hover', 'servers', 'stop']);
   assert.deepEqual(enumOf(registry.forRun({ allow: ['lsp.stop'] })), ['stop']);
 });
+
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createTools } from '../packages/catalog/index.ts';
+import { EXPLORE_TOOLS } from '../packages/core/subagents/contract.ts';
+
+test('the catalog offers lsp, lsp_start and lsp_edit and no old language server name', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lsp-family-'));
+  const tools = createTools(root);
+  t.after(async () => {
+    await tools.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const names = tools.specs().map((spec) => spec.name);
+  assert.deepEqual(names.filter((name) => name.startsWith('lsp')).sort(), [
+    'lsp',
+    'lsp_edit',
+    'lsp_start',
+  ]);
+  const readOnly = tools.specs({ readOnly: true }).map((spec) => spec.name);
+  assert.ok(readOnly.includes('lsp'));
+  assert.equal(readOnly.includes('lsp_edit'), false);
+  assert.equal(readOnly.includes('lsp_start'), false);
+  // A read-only child never had the server managers; it still has every query.
+  const child = tools.forRun({ allow: EXPLORE_TOOLS });
+  const lsp = child.specs().find((spec) => spec.name === 'lsp')!;
+  const actions = (lsp.inputSchema as { properties: { action: { enum: string[] } } }).properties
+    .action.enum;
+  assert.deepEqual(actions.sort(), [
+    'code_actions',
+    'definition',
+    'diagnostics',
+    'hover',
+    'references',
+    'symbols',
+    'workspace_symbols',
+  ]);
+});

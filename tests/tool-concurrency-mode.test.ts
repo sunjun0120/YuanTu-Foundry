@@ -168,9 +168,8 @@ test('the shipped read-only tools opt in, and nothing that writes does', async (
     'index_document',
     // Read-only in name, but they share the language server session: two of them at once would interleave
     // edits into one document, and the writes among them do not even declare a permission to fence them.
-    'lsp_diagnostics',
-    'lsp_rename',
-    'lsp_apply_code_action',
+    'lsp',
+    'lsp_edit',
     // Not a writer of the workspace — it declares no permission because it never touches a project file — but a
     // search refreshes the index before it ranks anything, and a refresh that finds a changed document writes
     // it. So "pure search" is not a promise this tool can make, and it does not make it.

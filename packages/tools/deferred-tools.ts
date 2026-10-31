@@ -1,5 +1,6 @@
 import type { Message, Tool } from '../protocol/index.ts';
 import { similarNames } from '../protocol/similar-names.ts';
+import { TOOL_FAMILIES } from '../protocol/tool-families.ts';
 
 /**
  * Deferred tool loading: the catalog a request carries is the tools a turn usually needs, plus one `load_tools`
@@ -43,20 +44,7 @@ export const DEFERRED_GROUPS: readonly {
   {
     namespace: 'lsp',
     hint: 'language server (definitions, references, hover, symbols, diagnostics, rename, code actions)',
-    names: [
-      'lsp_servers',
-      'lsp_start',
-      'lsp_stop',
-      'lsp_diagnostics',
-      'lsp_definition',
-      'lsp_references',
-      'lsp_hover',
-      'lsp_symbols',
-      'lsp_workspace_symbols',
-      'lsp_rename',
-      'lsp_code_action',
-      'lsp_apply_code_action',
-    ],
+    names: ['lsp', 'lsp_start', 'lsp_edit'],
   },
   {
     namespace: 'browser',
@@ -226,15 +214,27 @@ export function matchDeferredTools(query: string, candidates: Iterable<string>):
       names.map((name) => [name, { namespace, hint: hint.toLowerCase() }]),
     ),
   );
+  // A family's actions and the names it replaced count as its own name: "rename" still finds `lsp_edit`.
+  const familyTerms = new Map(
+    TOOL_FAMILIES.map((family) => [
+      family.name,
+      [...Object.keys(family.actions), ...Object.values(family.actions)].join(' '),
+    ]),
+  );
   const scored: { name: string; score: number }[] = [];
   for (const name of candidates) {
     const lower = name.toLowerCase();
+    const terms = familyTerms.get(name) ?? '';
     const group = groups.get(name);
     const hint = group?.hint ?? '';
     let score = 0;
     for (const word of words)
       score +=
-        lower.includes(word) || group?.namespace.includes(word) ? 2 : hint.includes(word) ? 1 : 0;
+        lower.includes(word) || terms.includes(word) || group?.namespace.includes(word)
+          ? 2
+          : hint.includes(word)
+            ? 1
+            : 0;
     if (score > 0) scored.push({ name, score });
   }
   return scored

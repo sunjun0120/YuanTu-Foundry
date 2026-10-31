@@ -72,7 +72,7 @@ test('partial deferred loads keep the loader declaration stable without disclosi
   const { tools } = await registry(t);
   tools.toolMode = 'deferred';
   const before = tools.specs({ loaded: new Set() });
-  const after = tools.specs({ loaded: new Set(['lsp_hover']) });
+  const after = tools.specs({ loaded: new Set(['lsp']) });
   assert.deepEqual(
     after.find((tool) => tool.name === LOAD_TOOLS),
     before.find((tool) => tool.name === LOAD_TOOLS),
@@ -126,9 +126,9 @@ test('a deferred catalog holds back the listed subsystems and names them in load
   assert.ok(loader.description.length < 2000, String(loader.description.length));
   assert.ok(JSON.stringify(sent).length < JSON.stringify(full).length * 0.7);
 
-  const widened = tools.specs({ loaded: new Set(['lsp_hover']) }).map((spec) => spec.name);
-  assert.ok(widened.includes('lsp_hover'));
-  assert.ok(!widened.includes('lsp_definition'));
+  const widened = tools.specs({ loaded: new Set(['lsp']) }).map((spec) => spec.name);
+  assert.ok(widened.includes('lsp'));
+  assert.ok(!widened.includes('lsp_edit'));
 
   const everything = tools.specs({ loaded: new Set(held.map((spec) => spec.name)) });
   assert.deepEqual(
@@ -146,7 +146,7 @@ test('the native presentation never sends load_tools', async (t) => {
   tools.toolMode = 'native';
   const native = tools.specs({ loaded: new Set() }).map((spec) => spec.name);
   assert.ok(!native.includes(LOAD_TOOLS));
-  assert.ok(native.includes('lsp_hover'));
+  assert.ok(native.includes('lsp'));
 });
 
 test('the loaded set is read from the transcript: named loads and direct calls', () => {
@@ -156,17 +156,22 @@ test('the loaded set is read from the transcript: named loads and direct calls',
       role: 'assistant',
       content: '',
       toolCalls: [
-        { id: '1', name: LOAD_TOOLS, arguments: { names: ['lsp_hover', 'read_file', 'nope'] } },
+        { id: '1', name: LOAD_TOOLS, arguments: { names: ['lsp', 'read_file', 'nope'] } },
         { id: '2', name: 'web_fetch', arguments: { url: 'https://example.com' } },
         { id: '3', name: 'read_file', arguments: { path: 'a' } },
       ],
     },
   ];
-  assert.deepEqual([...loadedTools(messages, DEFERRED_TOOLS)].sort(), ['lsp_hover', 'web_fetch']);
+  assert.deepEqual([...loadedTools(messages, DEFERRED_TOOLS)].sort(), ['lsp', 'web_fetch']);
 });
 
 test('a keyword query loads its best matches, and the transcript reads it back the same way', async (t) => {
-  assert.equal(matchDeferredTools('rename symbol', DEFERRED_TOOLS)[0], 'lsp_rename');
+  // "symbol" is one of lsp's actions and "rename" one of lsp_edit's, so both are loaded; the tie goes by name.
+  assert.deepEqual(matchDeferredTools('rename symbol', DEFERRED_TOOLS).slice(0, 2), [
+    'lsp',
+    'lsp_edit',
+  ]);
+  assert.equal(matchDeferredTools('rename', DEFERRED_TOOLS)[0], 'lsp_edit');
   assert.deepEqual(matchDeferredTools('browser', DEFERRED_TOOLS), [
     'browser_click',
     'browser_close',
@@ -200,7 +205,7 @@ test('a keyword query loads its best matches, and the transcript reads it back t
   ).entries.get(LOAD_TOOLS)!.tool;
   const found = await loader.execute({ query: 'rename symbol' }, context);
   assert.equal(found.isError, false);
-  assert.match(found.content, /^Loaded lsp_rename/);
+  assert.match(found.content, /^Loaded lsp, lsp_edit/);
   const nothing = await loader.execute({ query: 'zzzz qqqq' }, context);
   assert.equal(nothing.isError, true);
   assert.match(nothing.content, /No loadable tool matches/);
@@ -232,10 +237,10 @@ test('a run reads only what the transcript gained, and answers as a full read wo
   messages.push(calls('web_fetch'));
   agrees();
   // Only appended messages are read: a message rewritten in the already-read prefix is not looked at again.
-  messages[1] = calls('lsp_hover');
+  messages[1] = calls('lsp');
   assert.deepEqual([...tracker.current()!], ['web_fetch']);
-  messages.push(calls('read_file', 'lsp_hover'));
-  assert.deepEqual([...tracker.current()!].sort(), ['lsp_hover', 'web_fetch']);
+  messages.push(calls('read_file', 'lsp'));
+  assert.deepEqual([...tracker.current()!].sort(), ['lsp', 'web_fetch']);
   // The goal is read fresh at every call.
   goal = { status: 'active' };
   assert.ok(tracker.current()!.has('update_goal'));
@@ -252,12 +257,9 @@ test('load_tools refuses names it cannot load, including ones a restricted run d
     (registry as unknown as { entries: Map<string, { tool: { execute: Function } }> }).entries.get(
       LOAD_TOOLS,
     )!.tool;
-  const ok = await loader(tools).execute(
-    { names: ['lsp_hover', 'read_file', 'no_such_tool'] },
-    context,
-  );
+  const ok = await loader(tools).execute({ names: ['lsp', 'read_file', 'no_such_tool'] }, context);
   assert.equal(ok.isError, false);
-  assert.match(ok.content, /Loaded lsp_hover/);
+  assert.match(ok.content, /Loaded lsp;/);
   assert.match(ok.content, /Already in your tool list, call directly: read_file/);
   assert.match(ok.content, /Not loadable: no_such_tool/);
   // "Loading" a tool that is always sent is not a failure: the model should just call it.
@@ -297,8 +299,8 @@ test('a run sends the short catalog, widens it after load_tools, and a later run
       async complete(request) {
         seen.push(names(request));
         step++;
-        if (step === 1) return call('c1', LOAD_TOOLS, { names: ['lsp_servers'] });
-        if (step === 2) return call('c2', 'lsp_servers', {});
+        if (step === 1) return call('c1', LOAD_TOOLS, { names: ['lsp'] });
+        if (step === 2) return call('c2', 'lsp', { action: 'servers' });
         return reply();
       },
     },
@@ -315,8 +317,8 @@ test('a run sends the short catalog, widens it after load_tools, and a later run
     'update_goal',
   ])
     assert.ok(!seen[0]!.includes(name), name);
-  assert.ok(!seen[0]!.includes('lsp_servers'));
-  assert.ok(seen[1]!.includes('lsp_servers'), 'the round after the load carries the schema');
+  assert.ok(!seen[0]!.includes('lsp'));
+  assert.ok(seen[1]!.includes('lsp'), 'the round after the load carries the schema');
   const results = store
     .messages(session.id)
     .filter((message) => message.role === 'tool')
@@ -331,7 +333,7 @@ test('a run sends the short catalog, widens it after load_tools, and a later run
   step = 2;
   const second = await agent.run({ sessionId: session.id, prompt: 'again' });
   assert.equal(second.status, 'completed', second.error);
-  assert.ok(seen[0]!.includes('lsp_servers'), 'a later run starts from what the transcript loaded');
+  assert.ok(seen[0]!.includes('lsp'), 'a later run starts from what the transcript loaded');
 });
 
 test('a held-back tool called without loading still runs and is loaded from then on', async (t) => {
@@ -353,7 +355,7 @@ test('a held-back tool called without loading still runs and is loaded from then
     provider: {
       async complete(request) {
         seen.push(names(request));
-        return seen.length === 1 ? call('d1', 'lsp_servers', {}) : reply();
+        return seen.length === 1 ? call('d1', 'lsp', { action: 'servers' }) : reply();
       },
     },
   });
@@ -362,8 +364,8 @@ test('a held-back tool called without loading still runs and is loaded from then
   const tool = store.messages(session.id).find((message) => message.role === 'tool') as
     { isError?: boolean; content: string } | undefined;
   assert.ok(tool && !tool.isError, JSON.stringify(tool));
-  assert.ok(!seen[0]!.includes('lsp_servers'));
-  assert.ok(seen[1]!.includes('lsp_servers'));
+  assert.ok(!seen[0]!.includes('lsp'));
+  assert.ok(seen[1]!.includes('lsp'));
 });
 
 test('an edit reports the region it produced, numbered and bounded', () => {
@@ -480,16 +482,16 @@ test('usage counts loads, calls and calls made without a load, per session', () 
   });
   const report = deferredToolUsage([
     [
-      assistant([[LOAD_TOOLS, { names: ['lsp_hover', 'read_file'] }]]),
-      assistant([['lsp_hover', {}]]),
+      assistant([[LOAD_TOOLS, { names: ['lsp', 'read_file'] }]]),
+      assistant([['lsp', { action: 'hover' }]]),
       assistant([['web_fetch', { url: 'x' }]]),
     ],
-    [assistant([['lsp_hover', {}]]), assistant([['read_file', { path: 'a' }]])],
+    [assistant([['lsp', { action: 'hover' }]]), assistant([['read_file', { path: 'a' }]])],
   ]);
   assert.equal(report.sessions, 2);
   assert.equal(report.loadCalls, 1);
   assert.deepEqual(report.tools, [
-    { name: 'lsp_hover', loads: 1, calls: 2, direct: 1, sessions: 2 },
+    { name: 'lsp', loads: 1, calls: 2, direct: 1, sessions: 2 },
     { name: 'web_fetch', loads: 0, calls: 1, direct: 1, sessions: 1 },
   ]);
 });

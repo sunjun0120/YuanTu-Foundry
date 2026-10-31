@@ -1,7 +1,8 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { PreparedTool, Tool, ToolContext, ToolFamily } from '../protocol/index.ts';
+import { TOOL_FAMILIES } from '../protocol/tool-families.ts';
 import { invalidArgumentsMessage } from './call-result.ts';
-import { compileToolSchema, toolSchemaErrorsText } from './registry.ts';
+import { compileToolSchema, toolSchemaErrorsText, type ToolRegistry } from './registry.ts';
 
 type Properties = Record<string, Record<string, unknown>>;
 
@@ -125,4 +126,30 @@ export function composeFamily(
       return member.execute(rest, context);
     },
   };
+}
+
+/** One line per family, in front of the per-action lines `composeFamily` adds. */
+export const FAMILY_SUMMARIES: Readonly<Record<string, string>> = {
+  lsp:
+    'Ask a language server about code: diagnostics, definitions, references, hover, symbols and the code actions ' +
+    'offered at a position; also list running servers or stop one. Start a server with lsp_start first.',
+  lsp_edit:
+    'Apply a language server edit: rename a symbol, or apply a code action listed by lsp (action "code_actions").',
+};
+
+/**
+ * Replace each family's registered members with the family tool. Runs after every tool is registered, so a family
+ * offers exactly the members this host has, and one with none is not registered.
+ */
+export function mergeToolFamilies(registry: ToolRegistry): void {
+  for (const family of TOOL_FAMILIES) {
+    const members = new Map<string, Tool>();
+    for (const [action, name] of Object.entries(family.actions)) {
+      const tool = registry.tool(name);
+      if (tool) members.set(action, tool);
+    }
+    if (!members.size) continue;
+    for (const name of Object.values(family.actions)) registry.remove(name);
+    registry.register(composeFamily(family, members, FAMILY_SUMMARIES[family.name] ?? family.name));
+  }
 }

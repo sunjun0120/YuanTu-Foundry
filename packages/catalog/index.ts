@@ -33,6 +33,8 @@ import { toolDeadlinePolicy } from '../tools/timeouts.ts';
 import { fileObservationEnabled } from '../tools/fs-observation.ts';
 import { runCodeTool } from '../tools/run-code.ts';
 import { DEFERRED_TOOLS, loadToolsTool } from '../tools/deferred-tools.ts';
+import { mergeToolFamilies } from '../tools/tool-family.ts';
+import { scopeAllowlist } from '../protocol/tool-families.ts';
 import { parseSetting } from '../protocol/settings.ts';
 import {
   acquireBrowserSession,
@@ -124,13 +126,19 @@ export function createTools(
    * starts (the subprocess sub-agent provider) promise the tool filter it was asked for.
    */
   const allowlist = parseSetting(process.env, 'YUANTU_TOOL_ALLOWLIST');
-  if (typeof allowlist === 'string')
-    registry.restrict({
-      allow: allowlist
+  if (typeof allowlist === 'string') {
+    // Read in the merged catalog's terms: `lsp.hover` or an old name like `lsp_hover` allows that one action.
+    const scoped = scopeAllowlist(
+      allowlist
         .split(',')
         .map((name) => name.trim())
         .filter(Boolean),
+    );
+    registry.restrict({
+      allow: scoped.tools,
+      ...(scoped.actions.size ? { actions: scoped.actions } : {}),
     });
+  }
   // Every call the product makes has a wall clock; a bare `ToolRegistry` (a test, an embedder) has none until it
   // is given one, so nothing about the deadline leaks into callers that never asked for it.
   registry.deadlines = toolDeadlinePolicy();
@@ -307,5 +315,7 @@ export function createTools(
       content: expandSkill(root, `/skill:${String(args.name)}`, skillOptions).prompt,
     }),
   });
+  // Last, so a family is composed from exactly the members this host registered (`../tools/tool-family.ts`).
+  mergeToolFamilies(registry);
   return registry;
 }
