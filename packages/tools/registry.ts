@@ -16,6 +16,7 @@ import type { ValidateFunction } from 'ajv';
 import type { ExecutionPolicy } from '../protocol/execution.ts';
 import { DeferredApprovalError } from '../protocol/failure.ts';
 import { JobRegistry } from '../protocol/jobs.ts';
+import { resolveToolAlias, scopeAllowlist } from '../protocol/tool-families.ts';
 import type { PermissionPolicyView } from '../protocol/permissions.ts';
 import type { Tool, ToolCall, ToolContext, ToolResult, ToolSpec } from '../protocol/index.ts';
 import type { Disposer } from './dispatch.ts';
@@ -157,6 +158,12 @@ export class ToolRegistry {
    * that already started.
    */
   private restrictions: ((current: { name: string; entry: object }) => boolean)[] = [];
+  /**
+   * Narrowing below the tool: for a tool family (`../protocol/tool-families.ts`), which of its actions each scope
+   * allows. Scopes intersect like `restrictions`, and like them are not copied by `forRun`. A tool whose actions
+   * intersect to nothing is not offered at all — an empty `action` enum is not a schema anyone accepts.
+   */
+  private actionLimits: ReadonlyMap<string, ReadonlySet<string>>[] = [];
   /**
    * How long one call may take, or `undefined` for "no deadline".
    *
@@ -321,6 +328,8 @@ export class ToolRegistry {
     allow?: readonly string[];
     deny?: readonly string[];
     entries?: readonly object[];
+    /** Per tool, the actions this scope allows; a tool not named here keeps every action. */
+    actions?: ReadonlyMap<string, ReadonlySet<string>>;
   }): Disposer {
     const hasAllow = scope.allow !== undefined;
     const hasDeny = scope.deny !== undefined;
@@ -336,10 +345,24 @@ export class ToolRegistry {
       return bound !== undefined && !bound.has(current.entry);
     };
     this.restrictions.push(rule);
+    const limits = scope.actions?.size ? scope.actions : undefined;
+    if (limits) this.actionLimits.push(limits);
     return () => {
       const index = this.restrictions.indexOf(rule);
       if (index >= 0) this.restrictions.splice(index, 1);
+      const at = limits ? this.actionLimits.indexOf(limits) : -1;
+      if (at >= 0) this.actionLimits.splice(at, 1);
     };
+  }
+  /** The actions of `name` this registry offers, or `undefined` when no scope limits them. */
+  private allowedActions(name: string): ReadonlySet<string> | undefined {
+    let allowed: Set<string> | undefined;
+    for (const limits of this.actionLimits) {
+      const set = limits.get(name);
+      if (!set) continue;
+      allowed = allowed ? new Set([...allowed].filter((action) => set.has(action))) : new Set(set);
+    }
+    return allowed;
   }
   /**
    * Whether this registry currently offers `name`, as one answer for both halves of the question.
@@ -352,6 +375,7 @@ export class ToolRegistry {
   offers(name: string): boolean {
     const entry = this.entries.get(name);
     if (entry === undefined) return false;
+    if (this.allowedActions(name)?.size === 0) return false;
     return this.restrictions.every((rule) => rule({ name, entry }));
   }
   /** Internal capabilities stay on Tool definitions, never in provider-facing specs. */
@@ -383,6 +407,7 @@ export class ToolRegistry {
    * may read safely for one path and not for another, and only the tool knows which is which.
    */
   executionMode(call: ToolCall): 'parallel' | 'exclusive' {
+    if (!this.entries.has(call.name)) call = resolveToolAlias(call);
     const entry = this.entries.get(call.name);
     if (!entry || entry.tool.permission) return 'exclusive';
     if (typeof entry.tool.isConcurrencySafe !== 'function') return 'exclusive';
@@ -423,11 +448,7 @@ export class ToolRegistry {
       .filter(({ tool }) => !options.policy?.deniesEveryCall(tool))
       // Plugin registration order must not change the serialized prompt after a restart.
       .sort((a, b) => (a.tool.name < b.tool.name ? -1 : a.tool.name > b.tool.name ? 1 : 0))
-      .map(({ tool }) => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: presentedSchema(tool.inputSchema),
-      }));
+      .map(({ tool }) => this.limitedSpec(tool));
     /**
      * Deferral, like folding, is a presentation of the same set: a held-back tool is still offered and
      * executable, and the `load_tools` description names it. `load_tools` itself only appears under this mode —
@@ -467,6 +488,38 @@ export class ToolRegistry {
    * background jobs or language server, tools that carry no permission and would otherwise pass the
    * read-only filter.
    */
+  /**
+   * A tool as the provider sees it, narrowed to the actions this registry allows: the `action` enum and the
+   * description's per-action lines (`- <action>: ...`, as `composeFamily` writes them) lose the rest, so the model
+   * is never offered an operation it would be refused.
+   */
+  private limitedSpec(tool: Tool): ToolSpec {
+    const spec = {
+      name: tool.name,
+      description: tool.description,
+      inputSchema: presentedSchema(tool.inputSchema),
+    };
+    const allowed = this.allowedActions(tool.name);
+    const action = (spec.inputSchema.properties as Record<string, { enum?: unknown[] }> | undefined)
+      ?.action;
+    if (!allowed || !Array.isArray(action?.enum)) return spec;
+    const kept = action.enum.filter((value) => allowed.has(String(value)));
+    const hidden = action.enum.filter((value) => !allowed.has(String(value)));
+    return {
+      ...spec,
+      description: spec.description
+        .split('\n')
+        .filter((line) => !hidden.some((value) => line.startsWith(`- ${String(value)}: `)))
+        .join('\n'),
+      inputSchema: {
+        ...spec.inputSchema,
+        properties: {
+          ...(spec.inputSchema.properties as Record<string, unknown>),
+          action: { ...action, enum: kept },
+        },
+      },
+    };
+  }
   forRun(options: { allow?: readonly string[] } = {}): ToolRegistry {
     // The job registry is shared, not copied: it belongs to the session, and a per-run copy with no producers
     // would answer `job_list` with an empty list for a session that plainly has jobs.
@@ -500,7 +553,10 @@ export class ToolRegistry {
      */
     for (const name of RUN_SCOPED_TOOLS) copy.entries.delete(name);
     if (options.allow) {
-      const allowed = new Set(options.allow);
+      // Read in the merged catalog's terms, so `lsp.hover` and an old name like `lsp_hover` allow one action.
+      const scoped = scopeAllowlist(options.allow);
+      const allowed = new Set(scoped.tools);
+      if (scoped.actions.size) copy.actionLimits.push(scoped.actions);
       const denied = [...copy.entries.entries()].filter(([name]) => !allowed.has(name));
       if (denied.length)
         copy.restrict({
@@ -531,6 +587,9 @@ export class ToolRegistry {
     );
   }
   private async executeScoped(call: ToolCall, context: ToolContext): Promise<ToolExecutionResult> {
+    // A call by a name a tool family replaced (`../protocol/tool-families.ts`) runs as the family call it now is.
+    // An old name an embedder registered as its own tool is not rewritten: that tool still wins.
+    if (!this.entries.has(call.name)) call = resolveToolAlias(call);
     context.signal.throwIfAborted();
     /**
      * This registry's own job control, unless the caller supplied one.
@@ -602,6 +661,13 @@ export class ToolRegistry {
         return materialize(
           errorResult(
             `Tool "${call.name}" is not available in this run; it is registered but excluded by a restriction. Do not retry it.`,
+          ),
+        );
+      const actions = this.allowedActions(call.name);
+      if (actions && !actions.has(String(call.arguments.action)))
+        return materialize(
+          errorResult(
+            `Tool "${call.name}" action "${String(call.arguments.action)}" is not available in this run; it is excluded by a restriction. Do not retry it.`,
           ),
         );
       if (!entry.validate(call.arguments))

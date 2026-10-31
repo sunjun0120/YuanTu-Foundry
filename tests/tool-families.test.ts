@@ -118,3 +118,104 @@ test('members with different permissions, or an argument with two types, are bui
     /id/,
   );
 });
+
+import { ToolRegistry } from '../packages/tools/registry.ts';
+
+const lspMember = (name: string) => ({
+  name,
+  description: name,
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false } as const,
+  isConcurrencySafe: () => true,
+  execute: async () => ({ isError: false, content: name }),
+});
+const lspRegistry = () => {
+  const registry = new ToolRegistry();
+  registry.register(
+    composeFamily(
+      TOOL_FAMILIES[0]!,
+      new Map([
+        ['hover', lspMember('lsp_hover')],
+        ['servers', lspMember('lsp_servers')],
+        ['stop', lspMember('lsp_stop')],
+      ]),
+      'Language server.',
+    ),
+  );
+  return registry;
+};
+const enumOf = (registry: ToolRegistry) =>
+  (
+    registry.specs().find((spec) => spec.name === 'lsp')?.inputSchema as
+      { properties: { action: { enum: string[] } } } | undefined
+  )?.properties.action.enum;
+
+test('the registry runs a call by an old name as the family call it now is', async () => {
+  const registry = lspRegistry();
+  const result = await registry.execute(
+    { id: 'o', name: 'lsp_hover', arguments: {} },
+    { signal, approve: async () => false },
+  );
+  assert.equal(result.content, 'lsp_hover');
+  assert.equal(registry.executionMode({ id: 'p', name: 'lsp_hover', arguments: {} }), 'parallel');
+});
+
+test('an action-scoped restriction hides and refuses the other actions', async () => {
+  const registry = lspRegistry();
+  registry.restrict({ allow: ['lsp'], actions: new Map([['lsp', new Set(['hover'])]]) });
+  assert.deepEqual(enumOf(registry), ['hover']);
+  assert.doesNotMatch(registry.specs().find((s) => s.name === 'lsp')!.description, /- stop:/);
+  const refused = await registry.execute(
+    { id: 's', name: 'lsp', arguments: { action: 'stop' } },
+    { signal, approve: async () => true },
+  );
+  assert.equal(refused.isError, true);
+  assert.match(refused.content, /action "stop" is not available in this run/);
+  // An old name for an excluded action is refused the same way.
+  const old = await registry.execute(
+    { id: 'o', name: 'lsp_stop', arguments: {} },
+    { signal, approve: async () => true },
+  );
+  assert.match(old.content, /action "stop" is not available in this run/);
+});
+
+test('a run copy with an action-scoped allowlist keeps the limit', () => {
+  assert.deepEqual(enumOf(lspRegistry().forRun({ allow: ['lsp.hover'] })), ['hover']);
+});
+
+test('stacked action limits intersect, and lifting one restores the wider set', () => {
+  const registry = lspRegistry();
+  const outer = registry.restrict({
+    allow: ['lsp'],
+    actions: new Map([['lsp', new Set(['hover', 'servers'])]]),
+  });
+  const inner = registry.restrict({
+    allow: ['lsp'],
+    actions: new Map([['lsp', new Set(['hover', 'stop'])]]),
+  });
+  assert.deepEqual(enumOf(registry), ['hover']);
+  inner();
+  assert.deepEqual(enumOf(registry)?.sort(), ['hover', 'servers']);
+  outer();
+  assert.deepEqual(enumOf(registry)?.sort(), ['hover', 'servers', 'stop']);
+});
+
+test('an empty intersection hides the tool and refuses it, instead of sending an empty enum', async () => {
+  const registry = lspRegistry();
+  registry.restrict({ allow: ['lsp'], actions: new Map([['lsp', new Set(['servers'])]]) });
+  registry.restrict({ allow: ['lsp'], actions: new Map([['lsp', new Set(['hover'])]]) });
+  assert.equal(registry.offers('lsp'), false);
+  assert.equal(enumOf(registry), undefined);
+  const refused = await registry.execute(
+    { id: 'h', name: 'lsp', arguments: { action: 'hover' } },
+    { signal, approve: async () => true },
+  );
+  assert.equal(refused.isError, true);
+  assert.match(refused.content, /excluded by a restriction/);
+});
+
+test('a run copy takes its own action limits, not its parent’s, as with name restrictions', () => {
+  const registry = lspRegistry();
+  registry.restrict({ allow: ['lsp'], actions: new Map([['lsp', new Set(['hover'])]]) });
+  assert.deepEqual(enumOf(registry.forRun())?.sort(), ['hover', 'servers', 'stop']);
+  assert.deepEqual(enumOf(registry.forRun({ allow: ['lsp.stop'] })), ['stop']);
+});
