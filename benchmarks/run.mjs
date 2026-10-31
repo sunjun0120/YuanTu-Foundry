@@ -67,6 +67,16 @@ async function workspace() {
   record('tools.schema.all', JSON.stringify(tools.specs()).length, 'bytes');
   record('tools.count.readOnly', tools.specs({ readOnly: true }).length, 'tools');
   record('tools.schema.readOnly', JSON.stringify(tools.specs({ readOnly: true })).length, 'bytes');
+  // What a fresh session's first request carries by default: the always-sent tools, plus `load_tools` with the
+  // catalogue of what it can load. The two counts above are the whole catalogue, which no request sends.
+  const first = tools.specs({ mode: 'deferred', loaded: new Set() });
+  record('tools.count.firstRequest', first.length, 'tools');
+  record('tools.schema.firstRequest', JSON.stringify(first).length, 'bytes');
+  record(
+    'tools.schema.loadTools',
+    JSON.stringify(first.find((spec) => spec.name === 'load_tools') ?? {}).length,
+    'bytes',
+  );
   // A permission policy that denies a whole kind hides it too, which is what a desktop session in
   // read-only mode now sends instead of every schema it will refuse one call at a time.
   const readOnly = tools.specs({
