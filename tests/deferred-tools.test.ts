@@ -7,9 +7,13 @@ import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import {
+  DEFERRED_GROUPS,
+  DEFERRED_NAMESPACES,
   DEFERRED_TOOLS,
   LOAD_TOOLS,
+  deferredCatalog,
   deferredToolUsage,
+  loadToolsTool,
   loadedTools,
   matchDeferredTools,
 } from '../packages/tools/deferred-tools.ts';
@@ -545,4 +549,52 @@ test('YUANTU_TOOL_ALLOWLIST leaves only the named tools, however they are added'
     execute: async () => ({ isError: false, content: 'ran' }),
   });
   assert.equal(tools.offers('late_tool'), false, 'a tool added later is restricted too');
+});
+
+test('every deferred group has a unique namespace, and the catalog leads with it', () => {
+  const keys = DEFERRED_GROUPS.map((group) => group.namespace);
+  assert.equal(new Set(keys).size, keys.length);
+  for (const key of keys) assert.match(key, /^[a-z]+$/);
+  const catalog = deferredCatalog([{ name: 'web_search' }, { name: 'web_fetch' }]);
+  assert.match(catalog, /^- web — [^:]+: web_search, web_fetch$/m);
+});
+
+test('a namespace loads its whole group, and the transcript remembers it', async () => {
+  const offered = new Set(DEFERRED_NAMESPACES.get('web')!);
+  const loader = loadToolsTool(
+    (name) => offered.has(name),
+    (name) => `${name} does a web thing. More detail.`,
+  );
+  const context = { signal: new AbortController().signal } as never;
+  const result = await loader.execute({ namespace: ['web'] }, context);
+  assert.equal(result.isError, false);
+  assert.match(result.content, /Loaded web_search, web_fetch/);
+  // Each loaded tool is introduced by its first sentence, so the model knows which one to call.
+  assert.match(result.content, /- web_fetch: web_fetch does a web thing\./);
+  assert.doesNotMatch(result.content, /More detail/);
+  const loaded = loadedTools(
+    [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'l', name: LOAD_TOOLS, arguments: { namespace: ['web'] } }],
+      },
+    ],
+    DEFERRED_TOOLS,
+  );
+  assert.deepEqual([...loaded].sort(), ['web_fetch', 'web_search']);
+});
+
+test('an unknown namespace is refused with the ones that exist', async () => {
+  const loader = loadToolsTool(() => true);
+  const result = await loader.execute({ namespace: ['nope'] }, {
+    signal: new AbortController().signal,
+  } as never);
+  assert.equal(result.isError, true);
+  assert.match(result.content, /Namespaces: .*web/);
+});
+
+test('a keyword search also matches namespace keys', () => {
+  assert.ok(matchDeferredTools('validation', DEFERRED_TOOLS).includes('run_validation'));
+  assert.ok(matchDeferredTools('delivery', DEFERRED_TOOLS).includes('verify_file_delivery'));
 });

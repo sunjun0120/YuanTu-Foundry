@@ -137,7 +137,12 @@ export function createTools(
   // The product always defers the rarer tools until `load_tools` names them (`../tools/deferred-tools.ts`).
   registry.toolMode = 'deferred';
   registry.deferrable = DEFERRED_TOOLS;
-  registry.register(loadToolsTool((name) => registry.offers(name)));
+  registry.register(
+    loadToolsTool(
+      (name) => registry.offers(name),
+      (name) => registry.tool(name)?.description,
+    ),
+  );
   const background = sharedBackground ?? new BackgroundCommands(root);
   if (!sharedBackground) registry.onClose(() => background.close());
   for (const tool of background.tools(scope)) registry.register(tool);

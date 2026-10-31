@@ -281,6 +281,10 @@ export class ToolRegistry {
   remove(name: string): boolean {
     return this.entries.delete(name);
   }
+  /** The registered tool of this name, for assembly code that reads or composes tools; not for dispatch. */
+  tool(name: string): Tool | undefined {
+    return this.entries.get(name)?.tool;
+  }
   /**
    * Narrow what this registry offers, and hand back the way to widen it again.
    *

@@ -34,8 +34,14 @@ export const LOAD_TOOLS = 'load_tools';
  * per-tool sentence made it the largest schema in the list (3.7 KB). The names are listed in full so the model
  * can load or call them exactly.
  */
-export const DEFERRED_GROUPS: readonly { hint: string; names: readonly string[] }[] = [
+export const DEFERRED_GROUPS: readonly {
+  /** The short key `load_tools({ namespace })` loads the group by, and the catalogue line starts with. */
+  namespace: string;
+  hint: string;
+  names: readonly string[];
+}[] = [
   {
+    namespace: 'lsp',
     hint: 'language server (definitions, references, hover, symbols, diagnostics, rename, code actions)',
     names: [
       'lsp_servers',
@@ -53,13 +59,19 @@ export const DEFERRED_GROUPS: readonly { hint: string; names: readonly string[] 
     ],
   },
   {
+    namespace: 'browser',
     hint: 'browser automation',
     names: ['browser_open', 'browser_click', 'browser_fill', 'browser_screenshot', 'browser_close'],
   },
-  { hint: 'file delivery checks', names: ['verify_file_delivery'] },
-  { hint: 'knowledge base indexing', names: ['index_document', 'remove_indexed_document'] },
-  { hint: 'web', names: ['web_search', 'web_fetch'] },
+  { namespace: 'delivery', hint: 'file delivery checks', names: ['verify_file_delivery'] },
   {
+    namespace: 'knowledge',
+    hint: 'knowledge base indexing',
+    names: ['index_document', 'remove_indexed_document'],
+  },
+  { namespace: 'web', hint: 'web', names: ['web_search', 'web_fetch'] },
+  {
+    namespace: 'terminal',
     hint: 'interactive terminals',
     names: [
       'terminal_open',
@@ -71,6 +83,7 @@ export const DEFERRED_GROUPS: readonly { hint: string; names: readonly string[] 
     ],
   },
   {
+    namespace: 'git',
     hint: 'git branches, worktrees, staging and commits',
     names: ['git_branches', 'git_worktrees', 'git_worktree_create', 'git_stage', 'git_commit'],
   },
@@ -79,11 +92,16 @@ export const DEFERRED_GROUPS: readonly { hint: string; names: readonly string[] 
    * a delete or a move pays one load round instead of four schemas on every request.
    */
   {
+    namespace: 'files',
     hint: 'more file operations (unified-diff patch, multi-edit, delete, move)',
     names: ['apply_patch', 'batch_edit', 'delete_file', 'move_file'],
   },
   // Manifest-driven validation and stdin to a managed command: `run_command` covers the common case of both.
-  { hint: 'project validation', names: ['discover_validations', 'run_validation'] },
+  {
+    namespace: 'validation',
+    hint: 'project validation',
+    names: ['discover_validations', 'run_validation'],
+  },
   /**
    * Starting a background job. Sent on every request, it was the command tool some models reached for first —
    * Claude-Haiku-5.5 started `ls` as a job and then needed `job_output`, a whole extra round per command, even
@@ -91,6 +109,7 @@ export const DEFERRED_GROUPS: readonly { hint: string; names: readonly string[] 
    * loads; `job_output`, `job_list` and `job_kill` stay sent, since they also read sub-agent jobs.
    */
   {
+    namespace: 'jobs',
     hint: 'background jobs (dev servers, watchers; plain commands use run_command)',
     names: ['start_command', 'write_command'],
   },
@@ -101,10 +120,11 @@ export const DEFERRED_GROUPS: readonly { hint: string; names: readonly string[] 
    * exists ({@link GOAL_UPDATE}), so a goal's rounds and its notice always find it in the list.
    */
   {
+    namespace: 'sessions',
     hint: 'past sessions (search, read, trace)',
     names: ['search_sessions', 'search_session_events', 'read_session_events', 'trace_session'],
   },
-  { hint: 'session goal', names: ['create_goal', 'get_goal', 'update_goal'] },
+  { namespace: 'goal', hint: 'session goal', names: ['create_goal', 'get_goal', 'update_goal'] },
 ];
 
 /** The goal tool a run sends without a load whenever the session has an unfinished goal. */
@@ -114,6 +134,19 @@ export const GOAL_UPDATE = 'update_goal';
 export const DEFERRED_TOOLS: ReadonlySet<string> = new Set(
   DEFERRED_GROUPS.flatMap((group) => group.names),
 );
+
+/** Namespace → the tools of its group; `load_tools({ namespace })` loads them together. */
+export const DEFERRED_NAMESPACES: ReadonlyMap<string, readonly string[]> = new Map(
+  DEFERRED_GROUPS.map((group) => [group.namespace, group.names]),
+);
+
+/** The tools a `namespace` argument names, ignoring keys that are not namespaces. */
+function namespaceTools(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((key) =>
+    typeof key === 'string' ? (DEFERRED_NAMESPACES.get(key) ?? []) : [],
+  );
+}
 
 /** The deferred tools a transcript has already loaded: named by a `load_tools` call, or called directly. */
 export function loadedTools(
@@ -154,6 +187,8 @@ export function addLoadedTools(
       const query = call.arguments?.query;
       if (typeof query === 'string')
         for (const name of matchDeferredTools(query, deferrable)) loaded.add(name);
+      for (const name of namespaceTools(call.arguments?.namespace))
+        if (deferrable.has(name)) loaded.add(name);
     }
   }
 }
@@ -164,8 +199,9 @@ const MAX_QUERY_MATCHES = 8;
 /**
  * The deferred tools a keyword query names, best first.
  *
- * A word counts twice in a tool's name and once in its group's hint, so "rename" finds `lsp_rename` ahead of the
- * rest of the language-server group, and "browser" loads the browser tools a hint alone could not tell apart.
+ * A word counts twice in a tool's name or its group's namespace and once in the group's hint, so "rename" finds
+ * `lsp_rename` ahead of the rest of the language-server group, and "browser" loads the browser tools a hint alone
+ * could not tell apart.
  * Ties go by name rather than by the set's order, which is what keeps the answer the same for any caller holding
  * the same names.
  */
@@ -174,15 +210,20 @@ export function matchDeferredTools(query: string, candidates: Iterable<string>):
     (word) => word.length >= 2,
   );
   if (!words.length) return [];
-  const hints = new Map(
-    DEFERRED_GROUPS.flatMap(({ hint, names }) => names.map((name) => [name, hint.toLowerCase()])),
+  const groups = new Map(
+    DEFERRED_GROUPS.flatMap(({ namespace, hint, names }) =>
+      names.map((name) => [name, { namespace, hint: hint.toLowerCase() }]),
+    ),
   );
   const scored: { name: string; score: number }[] = [];
   for (const name of candidates) {
     const lower = name.toLowerCase();
-    const hint = hints.get(name) ?? '';
+    const group = groups.get(name);
+    const hint = group?.hint ?? '';
     let score = 0;
-    for (const word of words) score += lower.includes(word) ? 2 : hint.includes(word) ? 1 : 0;
+    for (const word of words)
+      score +=
+        lower.includes(word) || group?.namespace.includes(word) ? 2 : hint.includes(word) ? 1 : 0;
     if (score > 0) scored.push({ name, score });
   }
   return scored
@@ -195,9 +236,11 @@ export function matchDeferredTools(query: string, candidates: Iterable<string>):
 export function deferredCatalog(tools: readonly { name: string }[]): string {
   const hidden = new Set(tools.map((tool) => tool.name));
   const grouped = new Set(DEFERRED_GROUPS.flatMap((group) => group.names));
-  const lines = DEFERRED_GROUPS.flatMap(({ hint, names }) => {
+  // Each line leads with its namespace, which loads the whole group; the names stay listed because a deferred
+  // tool can be called without loading it, and only a name the model has seen can be called that way.
+  const lines = DEFERRED_GROUPS.flatMap(({ namespace, hint, names }) => {
     const shown = names.filter((name) => hidden.has(name));
-    return shown.length ? [`- ${hint}: ${shown.join(', ')}`] : [];
+    return shown.length ? [`- ${namespace} — ${hint}: ${shown.join(', ')}`] : [];
   });
   // A deferrable name no group lists (an embedder's own set) is still named, just without a hint.
   const rest = [...hidden].filter((name) => !grouped.has(name)).sort();
@@ -207,16 +250,28 @@ export function deferredCatalog(tools: readonly { name: string }[]): string {
 
 export const LOAD_TOOLS_DESCRIPTION =
   'Load the full definitions of tools that are available but not yet in your tool list, so you can call them ' +
-  'from your next step. Load only what your next step will call, all in one call; a tool with no or obvious ' +
-  'arguments can also be called directly without loading. When you know the capability but not the name, pass ' +
-  'query (keywords such as "rename symbol") instead, and the best matches are loaded. Loading grants nothing: ' +
-  'each loaded tool keeps its own permissions and approvals. The tools you can load, by area:';
+  'from your next step. Load only what your next step will call, all in one call: pass names (exact tool ' +
+  'names), namespace (load a whole area, such as "lsp"), or query (keywords such as "rename symbol") and the ' +
+  'best matches are loaded. A tool with no or obvious arguments can also be called directly without loading. ' +
+  'Loading grants nothing: each loaded tool keeps its own permissions and approvals. The tools you can load, by ' +
+  'namespace:';
+
+/** A tool description's first sentence, which is what a loaded tool is introduced by. */
+function firstSentence(description: string): string {
+  const line = description.split('\n', 1)[0]!.trim();
+  const end = line.search(/\.(\s|$)/);
+  return end < 0 ? line : line.slice(0, end + 1);
+}
 
 /**
  * The `load_tools` tool. `offers` is the registry's own answer to "may this run call that name", so a name the
- * run cannot use (a read-only child's allowlist, a denying policy) is refused here rather than loaded.
+ * run cannot use (a read-only child's allowlist, a denying policy) is refused here rather than loaded. `describe`
+ * reads a tool's description, so each loaded tool can be introduced by one sentence.
  */
-export function loadToolsTool(offers: (name: string) => boolean): Tool {
+export function loadToolsTool(
+  offers: (name: string) => boolean,
+  describe?: (name: string) => string | undefined,
+): Tool {
   return {
     name: LOAD_TOOLS,
     description: LOAD_TOOLS_DESCRIPTION,
@@ -230,14 +285,37 @@ export function loadToolsTool(offers: (name: string) => boolean): Tool {
           minItems: 1,
           maxItems: 40,
         },
+        namespace: {
+          type: 'array',
+          items: { type: 'string', pattern: '^[a-z]{1,32}$' },
+          minItems: 1,
+          maxItems: DEFERRED_GROUPS.length,
+        },
         query: { type: 'string', minLength: 2, maxLength: 200 },
       },
       additionalProperties: false,
     },
     execute: async (args) => {
       const query = typeof args.query === 'string' ? args.query : undefined;
-      if (args.names === undefined && query === undefined)
-        return { isError: true, content: 'Pass names (exact tool names) or query (keywords).' };
+      const namespaces = Array.isArray(args.namespace) ? (args.namespace as string[]) : undefined;
+      if (args.names === undefined && query === undefined && namespaces === undefined)
+        return {
+          isError: true,
+          content:
+            "Pass names (exact tool names), namespace (an area from this tool's list) or query (keywords).",
+        };
+      const strayNamespaces = (namespaces ?? []).filter((key) => !DEFERRED_NAMESPACES.has(key));
+      const fromNamespaces = namespaceTools(namespaces).filter(offers);
+      if (
+        namespaces !== undefined &&
+        args.names === undefined &&
+        query === undefined &&
+        !fromNamespaces.length
+      )
+        return {
+          isError: true,
+          content: `No loadable tools in namespace ${namespaces.join(', ')}. Namespaces: ${[...DEFERRED_NAMESPACES.keys()].join(', ')}.`,
+        };
       // Matched over the whole deferred set, exactly as `addLoadedTools` will read the call back; what this run
       // may not use is then dropped from the answer, as it is for a name.
       const matched = query ? matchDeferredTools(query, DEFERRED_TOOLS) : [];
@@ -246,7 +324,13 @@ export function loadToolsTool(offers: (name: string) => boolean): Tool {
           isError: true,
           content: `No loadable tool matches "${query}". Pick a name from this tool's list, or try other keywords.`,
         };
-      const names = [...new Set([...((args.names as string[]) ?? []), ...matched.filter(offers)])];
+      const names = [
+        ...new Set([
+          ...((args.names as string[]) ?? []),
+          ...matched.filter(offers),
+          ...fromNamespaces,
+        ]),
+      ];
       const loaded = names.filter((name) => DEFERRED_TOOLS.has(name) && offers(name));
       // A tool that is always sent is already callable: saying so is an answer, not a failure — a model that
       // "loads" one (GPT-5.6-Terra did, for `verify_file_delivery`) should go straight on to call it.
@@ -265,6 +349,13 @@ export function loadToolsTool(offers: (name: string) => boolean): Tool {
           isError: true,
           content: `None of these can be loaded: ${refused.join(', ')}.${suggestion} Use a name from this tool's list.`,
         };
+      const strays = strayNamespaces.length
+        ? ` Unknown namespace: ${strayNamespaces.join(', ')}.`
+        : '';
+      const introductions = loaded.flatMap((name) => {
+        const description = describe?.(name);
+        return description ? [`\n- ${name}: ${firstSentence(description)}`] : [];
+      });
       return {
         isError: false,
         content:
@@ -272,7 +363,9 @@ export function loadToolsTool(offers: (name: string) => boolean): Tool {
             ? `Loaded ${loaded.join(', ')}; their definitions are in your tool list from your next step.`
             : 'Nothing to load.') +
           already +
-          unknown,
+          unknown +
+          strays +
+          introductions.join(''),
       };
     },
   };
