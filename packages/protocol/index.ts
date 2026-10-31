@@ -6,6 +6,7 @@ import type { ExecutionPolicy } from './execution.ts';
 export * from './tool-contract.ts';
 export * from './events.ts';
 export * from './tasks.ts';
+export * from './tool-families.ts';
 
 export type {
   CheckFailureReason,

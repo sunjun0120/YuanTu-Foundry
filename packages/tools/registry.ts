@@ -111,6 +111,11 @@ export function compileToolSchema(schema: Tool['inputSchema']): ValidateFunction
   return compileSchema(schema);
 }
 
+/** Ajv's text for a schema's errors, worded the way the registry's own invalid-argument results are. */
+export function toolSchemaErrorsText(errors: ValidateFunction['errors']): string {
+  return schemaValidator.errorsText(errors);
+}
+
 export class ToolRegistry {
   /**
    * The jobs this registry's session owns.
