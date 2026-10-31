@@ -394,7 +394,11 @@ for (const attempt of [
     });
     await investigationFiles(ctx.root);
     const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
-    assert.equal(result.status, 'completed', result.error);
+    // Edits that never landed are an unfinished change, not a finished answer; reads alone may be a question.
+    if (attempt === 'failed-edit') {
+      assert.equal(result.status, 'needs_review');
+      assert.match(result.error!, /edit attempts that did not land/);
+    } else assert.equal(result.status, 'completed', result.error);
     assert.equal(result.text, 'Stopped without changes');
     assert.equal(requests, 5 + attempts);
     assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), 'bad');
@@ -483,7 +487,7 @@ for (const lands of [true, false]) {
     });
     await investigationFiles(ctx.root);
     const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
-    assert.equal(result.status, 'completed', result.error);
+    assert.equal(result.status, lands ? 'completed' : 'needs_review', result.error);
     assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), lands ? 'good' : 'bad');
     assert.equal(
       ctx.events.some((e) => e.type === 'context.injected' && e.data.action === 'act-conclude'),

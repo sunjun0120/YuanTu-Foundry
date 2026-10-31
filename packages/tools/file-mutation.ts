@@ -11,7 +11,7 @@ import type {
 } from '../protocol/index.ts';
 import type { Workspace } from './files.ts';
 import type { MutationGates } from './fs-observation.ts';
-import { matchEdit } from './edit-match.ts';
+import { matchEdit, recountHunks } from './edit-match.ts';
 import { writeAll, atomicWriteFile } from '../platform/write-all.ts';
 
 const MAX_FILE_BYTES = 1_000_000;
@@ -237,7 +237,7 @@ export async function prepareApplyPatch(
   await gates.observations.assertRead(input);
   const before = await readMutationBytes(file);
   const source = before.toString('utf8');
-  const after = applyPatch(source, String(args.patch), { fuzzFactor: 0 });
+  const after = applyPatch(source, recountHunks(String(args.patch)), { fuzzFactor: 0 });
   if (after === false) throw new Error('Patch does not apply exactly to the current file');
   const next = Buffer.from(after);
   if (next.length > MAX_FILE_BYTES || after.includes('\0'))

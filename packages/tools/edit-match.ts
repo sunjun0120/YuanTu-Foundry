@@ -37,6 +37,63 @@ export function matchEdit(source: string, oldText: string, newText: string): Edi
   throw new Error(missing(source, oldText));
 }
 
+/**
+ * A unified diff whose hunk headers say how many lines their bodies actually hold.
+ *
+ * Models write the body right and the `@@ -a,b +c,d @@` counts wrong — the 2026-10-29 sample lost a task to a
+ * header claiming 17/22 lines for a 14/19-line body, which the parser answered by reading past the hunk and
+ * refusing the whole patch. The counts only delimit a hunk; what it must match is its body, applied exactly as
+ * before. A blank line inside a hunk is a context line whose leading space was dropped. Anything else that is
+ * not a hunk line leaves the patch as written, for the parser to refuse with its own message.
+ */
+export function recountHunks(patch: string): string {
+  const lines = patch.split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(
+      lines[i]!.replace(/\r$/, ''),
+    );
+    if (!header) {
+      out.push(lines[i]!);
+      continue;
+    }
+    const body: string[] = [];
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      const line = lines[j]!;
+      const bare = line.replace(/\r$/, '');
+      if (bare.startsWith('@@ ') || bare.startsWith('diff ')) break;
+      if (bare.startsWith('--- ') && lines[j + 1]?.startsWith('+++ ')) break;
+      body.push(line);
+    }
+    // The newline that ends the patch is not a blank context line.
+    const last = j === lines.length;
+    while (last && body.length && body.at(-1)!.replace(/\r$/, '') === '') {
+      body.pop();
+      j--;
+    }
+    let oldLines = 0;
+    let newLines = 0;
+    for (let k = 0; k < body.length; k++) {
+      const bare = body[k]!.replace(/\r$/, '');
+      if (bare === '') body[k] = ' ' + body[k];
+      const mark = body[k]![0];
+      if (mark === ' ') {
+        oldLines++;
+        newLines++;
+      } else if (mark === '-') oldLines++;
+      else if (mark === '+') newLines++;
+      else if (mark !== '\\') return patch;
+    }
+    out.push(
+      `@@ -${header[1]!},${String(oldLines)} +${header[2]!},${String(newLines)} @@${header[3]!}`,
+      ...body,
+    );
+    i = j - 1;
+  }
+  return out.join('\n');
+}
+
 function occurrences(source: string, text: string): number[] {
   const found: number[] = [];
   for (let index = source.indexOf(text); index >= 0; index = source.indexOf(text, index + 1))

@@ -6,6 +6,7 @@ import type {
   Questioner,
   RunResult,
   RunStatus,
+  ToolCall,
   Usage,
   UserInput,
 } from '../protocol/index.ts';
@@ -84,6 +85,14 @@ const COMPACTION_RETRY_ROUNDS = 3;
  */
 const ACT_NO_CHANGE_ROUNDS = 3;
 const ACT_FAILED_EDIT_ROUNDS = 4;
+/** The paths a file editor's call names, whichever of the editors' argument shapes it uses. */
+const editTargets = (call: ToolCall): string[] => {
+  const args = call.arguments;
+  const paths = [args.path, args.from, args.to];
+  if (Array.isArray(args.edits))
+    for (const edit of args.edits) paths.push((edit as { path?: unknown } | null)?.path);
+  return paths.filter((value): value is string => typeof value === 'string');
+};
 /**
  * The rounds of a compaction wait the session's previous run left unspent, `0` when there is none.
  *
@@ -508,6 +517,14 @@ export class Agent {
       let noChangeActRounds = 0;
       // A refused edit is the model trying to make the change, not widening the search, so it has its own count.
       let failedEditActRounds = 0;
+      /**
+       * Whether the model has tried to edit the project and nothing has landed since.
+       *
+       * A run the cutoff ends after that is a change left unmade, and reporting it `completed` hid it: the
+       * 2026-10-29 sample scored two empty patches whose runs both said completed. A run that only read may have
+       * been a question, so reads alone never set this.
+       */
+      let editRefusedUnchanged = false;
       let releaseAct: (() => void) | undefined;
       let refreshProgressTools: (() => void) | undefined;
       const setQueryPhase = (next: typeof queryState.phase): void => {
@@ -1059,6 +1076,11 @@ export class Agent {
             }
             status = verdict.status;
             if (verdict.error !== undefined) error = verdict.error;
+            if (status === 'completed' && queryState.phase !== 'none' && editRefusedUnchanged) {
+              status = 'needs_review';
+              error =
+                'The investigation limit ended the run after edit attempts that did not land; the project is unchanged.';
+            }
             steps.end(round, 'final');
             break;
           }
@@ -1129,7 +1151,22 @@ export class Agent {
                 editors.has(call.name) &&
                 !/excluded by a restriction/.test(result.content),
             );
+            // Only an edit aimed at the project: a refused scratch probe is investigation, not the change.
+            if (
+              observations.some(
+                ({ call, result }) =>
+                  result.isError &&
+                  editors.has(call.name) &&
+                  !/excluded by a restriction/.test(result.content) &&
+                  editTargets(call).some((target) => {
+                    const relative = target.replaceAll('\\', '/').replace(/^\.\//, '');
+                    return relative !== '.scratch' && !relative.startsWith('.scratch/');
+                  }),
+              )
+            )
+              editRefusedUnchanged = true;
             if (projectChanged) {
+              editRefusedUnchanged = false;
               // Preserve failure/blocker counts across edits; only leave the edit-only phase.
               resetQueryPhase();
             } else if (queryState.phase === 'edit') {

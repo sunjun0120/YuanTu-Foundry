@@ -503,6 +503,30 @@ test('write_file overwrites an existing file only when asked, as an undoable edi
   assert.equal(await readFile(path.join(ctx.root, 'a.txt'), 'utf8'), 'new\ncontent\n');
 });
 
+test('apply_patch recounts hunk headers from their bodies, and still applies only exact text', async (t) => {
+  const ctx = await setup(t);
+  await writeFile(path.join(ctx.root, 'a.py'), 'one\r\ntwo\r\nthree\r\nfour\r\n');
+  // The header claims 5/6 lines for a 3/4-line body, the shape a model wrote in the 2026-10-29 sample; the
+  // parser read past the hunk and refused the whole patch. No `---`/`+++` header either.
+  const miscounted = '@@ -1,5 +1,6 @@\n one\n-two\n+TWO\n+2.5\n three\n';
+  const applied = await ctx.edit('apply_patch', { path: 'a.py', patch: miscounted });
+  assert.equal(applied.isError, false, applied.content);
+  assert.equal(
+    await readFile(path.join(ctx.root, 'a.py'), 'utf8'),
+    'one\r\nTWO\r\n2.5\r\nthree\r\nfour\r\n',
+  );
+  // Recounting delimits a hunk; it never loosens what the hunk must match.
+  const wrong = await ctx.edit('apply_patch', {
+    path: 'a.py',
+    patch: '@@ -1,9 +1,9 @@\n one\n-two\n+2\n',
+  });
+  assert.equal(wrong.isError, true);
+  assert.equal(
+    await readFile(path.join(ctx.root, 'a.py'), 'utf8'),
+    'one\r\nTWO\r\n2.5\r\nthree\r\nfour\r\n',
+  );
+});
+
 test('edits written with LF line breaks apply to a CRLF file and keep its line endings', async (t) => {
   const ctx = await setup(t);
   const source = 'def f():\r\n    return 1\r\n\r\nx = 2\r\n';
