@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 降低首个请求的负担和发现成本：按需加载的工具按 namespace 发现、可整组加载；少用的工具移出首个请求；LSP 13 个工具合并为 3 个；精简几个过大的工具描述。其余工具保持原子。
+**Goal:** 降低首个请求的负担和发现成本：按需加载的工具按 namespace 发现、可整组加载；少用的工具移出首个请求；LSP 12 个工具合并为 3 个；精简几个过大的工具描述。其余工具保持原子。
 
 **Architecture:**
 
@@ -25,10 +25,6 @@
 - README 自成一体，不链接 `docs/`。
 - 每个任务结束提交一次，提交信息结尾加 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`。
 - 需要真实模型（花 API 额度）或推送分支的步骤，先问用户。
-
-## 和 spec 的一处差异
-
-spec 第 1 节写的是"`load_tools` 的描述不再逐个列出组内工具名"。但 `LOAD_TOOLS_DESCRIPTION` 允许模型不经加载、直接调用按需加载的工具，前提是它知道名字。LSP 合并之后，按需加载的名字只剩约 30 个，所以计划**保留组内名字**，只在每行前面加上 namespace 键：`- lsp — language servers (...): lsp, lsp_start, lsp_edit`。Task 1 Step 6 会把 spec 的这一句改成实际做法。
 
 ---
 
@@ -191,12 +187,10 @@ Expected: PASS。如果现有用例断言了旧的目录格式（`- hint: names`
 
 Run: `npm run snapshot:update`，再看 `git diff tests/snapshots`：只应该是 `load_tools` 的描述和 schema 变了。
 
-- [ ] **Step 6: 改 spec 并提交**
-
-`docs/superpowers/specs/2026-10-31-tool-consolidation-design.md` 第 1 节"不再逐个列出组内工具名"一句，改为"每行以 namespace 键开头，组内工具名照旧列出，因为模型可以不经加载直接调用按需加载的工具，前提是知道名字"。
+- [ ] **Step 6: 提交**
 
 ```bash
-git add packages tests docs/superpowers/specs/2026-10-31-tool-consolidation-design.md
+git add packages tests
 git commit -m "feat(tools): discover and load deferred tools by namespace"
 ```
 
@@ -211,8 +205,37 @@ git commit -m "feat(tools): discover and load deferred tools by namespace"
 
 - [ ] **Step 1: 记录改动前的基线**
 
-Run: `npm run bench`，把输出里与工具 schema 字节数有关的几行，存到 `.scratch/tool-discovery-baseline.txt`。
-Run: `node scripts/deferred-tool-usage.mjs .yuantu/sessions.sqlite`，结果也追加到同一个文件。
+`npm run bench` 现在只量完整目录（`tools.specs()`）和只读目录，看不出首轮按需加载的收益。先给它补上首个请求的指标，再记基线。
+
+`benchmarks/run.mjs` 第 66–69 行之后加：
+
+```js
+// What a fresh session's first request carries by default: the always-sent tools plus `load_tools` and its catalogue.
+tools.toolMode = 'deferred';
+const first = tools.specs({ loaded: new Set() });
+record('tools.count.firstRequest', first.length, 'tools');
+record('tools.schema.firstRequest', JSON.stringify(first).length, 'bytes');
+record(
+  'tools.schema.loadTools',
+  JSON.stringify(first.find((spec) => spec.name === 'load_tools') ?? {}).length,
+  'bytes',
+);
+tools.toolMode = 'native';
+```
+
+（`toolMode` 的原值先读出来，量完再恢复，不要写死 `'native'`。后面还有别的度量要用这个 `tools`。）
+
+然后：
+
+Run: `npm run bench`，把 `tools.*` 几行存到 `.scratch/tool-discovery-baseline.txt`。
+Run: `node scripts/deferred-tool-usage.mjs .yuantu/sessions.sqlite`，结果也追加到同一个文件。（Task 2b 会给这个统计补上 namespace 加载和加载未命中；基线先用现有版本记一次，改完后两个版本的数字都写进提交说明。）
+
+这一步的 `benchmarks/run.mjs` 改动单独提交：
+
+```bash
+git add benchmarks/run.mjs
+git commit -m "bench: measure the first request's tools and the load_tools catalogue"
+```
 
 - [ ] **Step 2: 写失败的测试（追加）**
 
@@ -293,6 +316,107 @@ git commit -m "feat(tools): load memory readers, recall and the repo map on dema
 
 ---
 
+### Task 2b: 使用统计认 namespace，并统计加载未命中
+
+`deferredToolUsage`（`packages/tools/deferred-tools.ts:299`）是 spec 里"加载轮数"和"加载未命中"两个指标的数据来源，但它现在有两个缺口：
+
+- 不识别 `load_tools({ namespace })`：先加载 `web` 再调用 `web_fetch`，会被记成"未加载直接调用"；
+- 没有任何"未命中"的计数。
+
+**Files:**
+
+- Modify: `packages/tools/deferred-tools.ts`（`deferredToolUsage`）
+- Modify: `scripts/deferred-tool-usage.mjs`（打印新字段）
+- Test: `tests/deferred-tools.test.ts`（追加）
+
+**Interfaces:**
+
+- Produces：`deferredToolUsage(...)` 的返回值新增 `loadMisses: number`（`load_tools` 调用的结果是错误）和 `unknownCalls: number`（结果以 `Unknown tool:` 开头的调用，见 `packages/tools/call-result.ts:44`）。`loadCalls` 含义不变。
+
+- [ ] **Step 1: 写失败的测试（追加）**
+
+```ts
+import { deferredToolUsage } from '../packages/tools/deferred-tools.ts';
+
+test('usage counts a namespace load, and counts loads and calls that missed', () => {
+  const usage = deferredToolUsage([
+    [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'l1', name: 'load_tools', arguments: { namespace: ['web'] } }],
+      },
+      { role: 'tool', toolCallId: 'l1', content: 'Loaded web_search, web_fetch', isError: false },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'f', name: 'web_fetch', arguments: { url: 'https://x' } }],
+      },
+      { role: 'tool', toolCallId: 'f', content: 'ok', isError: false },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'l2', name: 'load_tools', arguments: { query: 'zzzz' } }],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'l2',
+        content: 'No loadable tool matches "zzzz".',
+        isError: true,
+      },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'u', name: 'web_fetcher', arguments: {} }],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'u',
+        content: 'Unknown tool: web_fetcher. Did you mean: web_fetch?',
+        isError: true,
+      },
+    ],
+  ]);
+  const fetch = usage.tools.find((tool) => tool.name === 'web_fetch')!;
+  assert.equal(fetch.loads, 1);
+  assert.equal(fetch.direct, 0);
+  assert.equal(usage.loadCalls, 2);
+  assert.equal(usage.loadMisses, 1);
+  assert.equal(usage.unknownCalls, 1);
+});
+```
+
+（消息对象的确切类型照 `packages/protocol/index.ts` 的 `Message` 补齐。）
+
+Run: `node scripts/run-tests.mjs tests/deferred-tools.test.ts`
+Expected: FAIL（`fetch.loads` 是 0、`direct` 是 1，新字段不存在）。
+
+- [ ] **Step 2: 实现**
+
+`deferredToolUsage`：
+
+- 每条 transcript 开始时，先按 `toolCallId` 建一张"调用 id → 结果消息"的表（遍历一遍 `role === 'tool'` 的消息）。
+- `load_tools` 调用：`names` 里除了现有的 `names` 和 `query` 匹配结果，再并入 `namespace` 展开后的名字（用 Task 1 的 `DEFERRED_NAMESPACES`）。如果这次调用的结果 `isError`，`loadMisses++`。
+- 任何调用的结果 `isError` 且 `content` 以 `Unknown tool:` 开头时，`unknownCalls++`（`load_tools` 本身除外）。
+- 返回值加上 `loadMisses`、`unknownCalls`。
+
+Task 6 合并 LSP 之后，这里还要把旧 LSP 名换算成新名再计数。在 Task 6 的 Step 2 里一并改，这里先不动。
+
+`scripts/deferred-tool-usage.mjs`：在打印 `loadCalls` 的地方，同时打印 `loadMisses` 和 `unknownCalls`；`--json` 的输出带上这两个字段。
+
+- [ ] **Step 3: 跑测试并提交**
+
+Run: `node scripts/run-tests.mjs tests/deferred-tools.test.ts`
+Expected: PASS。
+Run: `node scripts/deferred-tool-usage.mjs .yuantu/sessions.sqlite`，把新版输出追加到 `.scratch/tool-discovery-baseline.txt`。
+
+```bash
+git add packages/tools/deferred-tools.ts scripts/deferred-tool-usage.mjs tests/deferred-tools.test.ts
+git commit -m "feat(tools): count namespace loads and missed loads in deferred tool usage"
+```
+
+---
+
 ### Task 3: 工具家族表与组合函数（只用于 LSP）
 
 **Files:**
@@ -308,7 +432,7 @@ git commit -m "feat(tools): load memory readers, recall and the repo map on dema
 - Produces（protocol）：
   - `export interface ToolFamily { name: string; actions: Readonly<Record<string, string>> }`
   - `export const TOOL_FAMILIES: readonly ToolFamily[]`：`lsp`、`lsp_edit` 两个
-  - `export const TOOL_ALIASES: ReadonlyMap<string, { tool: string; action: string }>`：12 个旧 LSP 名
+  - `export const TOOL_ALIASES: ReadonlyMap<string, { tool: string; action: string }>`：11 个旧 LSP 名（`lsp_start` 不改名）
   - `export function resolveToolAlias<T extends { name: string; arguments: Record<string, unknown> }>(call: T): T`
   - `export function hookSubjects(tool: string, action: string | undefined): string[]`
   - `export function scopeAllowlist(names: readonly string[]): { tools: string[]; actions: Map<string, Set<string>> }`
@@ -335,7 +459,7 @@ test('the old language server names map to the family and action they became', (
   assert.deepEqual(TOOL_ALIASES.get('lsp_code_action'), { tool: 'lsp', action: 'code_actions' });
   assert.deepEqual(TOOL_ALIASES.get('lsp_rename'), { tool: 'lsp_edit', action: 'rename' });
   assert.equal(TOOL_ALIASES.has('lsp_start'), false);
-  assert.equal(TOOL_ALIASES.size, 12);
+  assert.equal(TOOL_ALIASES.size, 11);
   // No family keeps an old name, so an old rule can only ever be narrowed, never widened.
   for (const family of TOOL_FAMILIES) assert.equal(TOOL_ALIASES.has(family.name), false);
 });
@@ -773,6 +897,50 @@ test('a run copy with an action-scoped allowlist keeps the limit', () => {
     ['hover'],
   );
 });
+
+const enumOf = (registry: ToolRegistry) =>
+  (
+    registry.specs().find((s) => s.name === 'lsp')?.inputSchema as
+      { properties: { action: { enum: string[] } } } | undefined
+  )?.properties.action.enum;
+
+test('stacked action limits intersect, and lifting one restores the wider set', () => {
+  const registry = lspRegistry();
+  const outer = registry.restrict({
+    allow: ['lsp'],
+    actions: new Map([['lsp', new Set(['hover', 'servers'])]]),
+  });
+  const inner = registry.restrict({
+    allow: ['lsp'],
+    actions: new Map([['lsp', new Set(['hover', 'stop'])]]),
+  });
+  assert.deepEqual(enumOf(registry), ['hover']);
+  inner();
+  assert.deepEqual(enumOf(registry)?.sort(), ['hover', 'servers']);
+  outer();
+  assert.deepEqual(enumOf(registry)?.sort(), ['hover', 'servers', 'stop']);
+});
+
+test('an empty intersection hides the tool and refuses it, instead of sending an empty enum', async () => {
+  const registry = lspRegistry();
+  registry.restrict({ allow: ['lsp'], actions: new Map([['lsp', new Set(['servers'])]]) });
+  const child = registry.forRun({ allow: ['lsp.hover'] });
+  assert.equal(child.offers('lsp'), false);
+  assert.equal(enumOf(child), undefined);
+  const signal = new AbortController().signal;
+  const refused = await child.execute(
+    { id: 'h', name: 'lsp', arguments: { action: 'hover' } },
+    { signal, approve: async () => true },
+  );
+  assert.equal(refused.isError, true);
+  assert.match(refused.content, /excluded by a restriction/);
+});
+
+test('a run copy inherits its parent’s action limits', () => {
+  const registry = lspRegistry();
+  registry.restrict({ allow: ['lsp'], actions: new Map([['lsp', new Set(['hover', 'stop'])]]) });
+  assert.deepEqual(enumOf(registry.forRun())?.sort(), ['hover', 'stop']);
+});
 ```
 
 Run: `node scripts/run-tests.mjs tests/tool-families.test.ts`
@@ -805,6 +973,7 @@ if (!this.entries.has(call.name)) call = resolveToolAlias(call);
   }
 ```
 
+- **交集为空**：多层限制的交集可能为空。例如父运行只允许 `servers`，子运行只允许查询，这时如果照常生成 schema，会发出 `action.enum: []`，Ajv 会拒绝这种 schema。所以 `offers(name)` 在 `allowedActions(name)` 是空集合时返回 `false`：工具从目录里隐藏，调用按"被限制排除"拒绝，和整个工具被白名单排除时一样。
 - `execute`：在现有的 `if (!this.offers(call.name))` 检查之后，加上：如果 `allowedActions(call.name)` 有值，且 `call.arguments.action` 不在其中，就返回 `` `Tool "${call.name}" action "${String(call.arguments.action)}" is not available in this run; it is excluded by a restriction. Do not retry it.` ``。
 - `specs()`：生成每个 spec 时，如果该工具有 action 限制，就复制一份 `inputSchema`，把 `properties.action.enum` 过滤成允许的值；`description` 按行过滤，去掉以 `- <不允许的 action>:` 开头的行。
 - `forRun({ allow })`：先 `const scoped = scopeAllowlist(options.allow)`，用 `scoped.tools` 走原来按条目绑定的 deny 逻辑；`scoped.actions` 非空时，再给副本 push 一份 action 限制。父注册表已有的 `actionLimits` 也要复制到副本，和 `restrictions` 的处理保持一致：先看 `forRun` 现在有没有复制 `restrictions`，照它做。
@@ -913,7 +1082,7 @@ export function mergeToolFamilies(registry: ToolRegistry): void {
 - `YUANTU_TOOL_ALLOWLIST` 拆出名字后交给 `scopeAllowlist`，调用 `registry.restrict({ allow: scoped.tools, ...(scoped.actions.size ? { actions: scoped.actions } : {}) })`。
 - `MUTATION_TOOLS`（第 56 行）不用改：`attachDiagnostics` 包的是成员，合并发生在注册之后。
 
-`tool-categories.ts`：删掉 12 个旧 LSP 名，加 `['lsp', c('lsp')]`、`['lsp_edit', c('lsp')]`，`lsp_start` 不变。
+`tool-categories.ts`：删掉 11 个旧 LSP 名，加 `['lsp', c('lsp')]`、`['lsp_edit', c('lsp')]`，`lsp_start` 不变。
 
 `deferred-tools.ts` 的 `lsp` 组：`names: ['lsp', 'lsp_start', 'lsp_edit']`，`hint` 保持操作关键词：`'language server (definitions, references, hover, symbols, diagnostics, rename, code actions)'`。
 
@@ -939,12 +1108,17 @@ git commit -m "feat(catalog): offer the language server as lsp, lsp_start and ls
 
 - Modify: `packages/protocol/permission-policy.ts`（编译规则前改写旧名）
 - Modify: `packages/resources/hook-bridge.ts`（matcher 按 `hookSubjects` 匹配；payload 加 `tool_action`）
-- Modify: `packages/tools/deferred-tools.ts`（`load_tools` 认旧名；`addLoadedTools` 换算旧名；搜索匹配旧成员名与 action）
-- Modify: `packages/protocol/tool-families.ts`（加 `rewriteToolHistory`）
-- Modify: `packages/core/run/request.ts:431` 附近
+- Modify: `packages/tools/deferred-tools.ts`（`load_tools` 认旧名；`addLoadedTools` 和 `deferredToolUsage` 换算旧名；搜索匹配旧成员名和 action）
+- Create: `packages/providers/tool-history.ts`（在协议层改写历史里的旧工具名）
+- Modify: `packages/providers/responses.ts:112-130`、`packages/providers/anthropic.ts`、`packages/providers/openai.ts`（构造请求时调用它）
 - Test: `tests/tool-families.test.ts`、`tests/deferred-tools.test.ts:153,185`、`tests/providers.test.ts`（追加）
 
-旧 LSP 名和新名不会同名，所以权限规则不用分版本：旧名规则改写成新名加 `action` 之后，只会缩窄，不会放大授权范围。
+**两点说明**
+
+- 旧 LSP 名和新名不会同名，所以权限规则不用分版本：旧名规则改写成新名加 `action` 之后，只会缩窄，不会放大授权范围。
+- **历史改写不能删掉原生状态。** 原生状态里除了工具调用，还有推理内容：Responses 的 `reasoning` 项、Anthropic 的 `thinking` / `redacted_thinking` 块、OpenAI 兼容接口的 `reasoning_content`。工具循环进行到一半时，OpenAI 和 Anthropic 都要求把这些原样带回去。所以改写放在各协议的适配器里做：只改原生输出中工具调用那几项的名字和参数，推理块一字不动。
+  - 是否回放原生状态，仍然按**原始消息**的哈希判断（`nativeState` 用 `assistantHash` 比对存下来的 `toolCalls`），选中之后再改写，所以哈希不用重算。
+  - 核心层（`packages/core`）不改：它按层级不能依赖 `providers`，而改写只和协议格式有关。
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -952,15 +1126,12 @@ git commit -m "feat(catalog): offer the language server as lsp, lsp_start and ls
 
 ```ts
 import { PermissionPolicy } from '../packages/protocol/permission-policy.ts';
-import { rewriteToolHistory } from '../packages/protocol/tool-families.ts';
 
 test('a rule for an old language server name governs only that action', () => {
+  // Precedence is deny > ask > allow, so the fixture holds only the rule under test.
   const policy = new PermissionPolicy({
     version: 1,
-    rules: [
-      { effect: 'ask', kind: 'write' },
-      { effect: 'allow', tool: 'lsp_rename' },
-    ],
+    rules: [{ effect: 'allow', tool: 'lsp_rename' }],
   });
   const approval = (action: string) => ({
     kind: 'write' as const,
@@ -972,26 +1143,27 @@ test('a rule for an old language server name governs only that action', () => {
     },
   });
   assert.equal(policy.decide(approval('rename')), 'allow');
-  assert.equal(policy.decide(approval('apply_code_action')), 'ask');
-  assert.equal(policy.deniesEveryCall({ name: 'lsp_edit', permission: 'write' }), false);
+  // Not covered by the old rule: no rule matches, so the policy has no answer and the caller asks.
+  assert.equal(policy.decide(approval('apply_code_action')), undefined);
 });
 
-test('history calls by old names are rewritten and lose the native state they no longer match', () => {
-  const current = [{ role: 'user' as const, content: 'hi' }];
-  assert.equal(rewriteToolHistory(current), current);
-  const rewritten = rewriteToolHistory([
-    {
-      role: 'assistant',
-      content: '',
-      toolCalls: [{ id: 'h', name: 'lsp_hover', arguments: { path: 'a', line: 1, character: 1 } }],
-      providerState: {
-        protocol: 'openai-responses',
-        output: [{ type: 'function_call', name: 'lsp_hover' }],
-      },
+test('a deny written for one old name does not hide the whole tool', () => {
+  const policy = new PermissionPolicy({
+    version: 1,
+    rules: [{ effect: 'deny', tool: 'lsp_rename' }],
+  });
+  assert.equal(policy.deniesEveryCall({ name: 'lsp_edit', permission: 'write' }), false);
+  const approval = (action: string) => ({
+    kind: 'write' as const,
+    description: '',
+    toolCall: {
+      id: 'x',
+      name: 'lsp_edit',
+      arguments: { action, path: 'a.ts', line: 1, character: 1 },
     },
-  ]);
-  assert.equal((rewritten[0] as { toolCalls: { name: string }[] }).toolCalls[0]!.name, 'lsp');
-  assert.equal('providerState' in rewritten[0]!, false);
+  });
+  assert.equal(policy.decide(approval('rename')), 'deny');
+  assert.equal(policy.decide(approval('apply_code_action')), undefined);
 });
 ```
 
@@ -1000,50 +1172,116 @@ test('history calls by old names are rewritten and lose the native state they no
 - 第 153 行 `matchDeferredTools('rename symbol', DEFERRED_TOOLS)[0]` 的期望从 `'lsp_rename'` 改为 `'lsp_edit'`；
 - 第 185 行附近 `loader.execute({ query: 'rename symbol' })` 的期望同样改为 `lsp_edit`；
 - 新增：`loader.execute({ names: ['lsp_hover'] })` 成功，结果里写着加载的是 `lsp`，并提示 `lsp_hover is now lsp (action: hover)`；
-- 新增：`loadedTools`，历史里有 `load_tools({ names: ['lsp_hover'] })` 时，结果包含 `lsp`；
-- 新增：`matchDeferredTools('hover', DEFERRED_TOOLS)[0] === 'lsp'`。
+- 新增：`loadedTools` 在历史里有 `load_tools({ names: ['lsp_hover'] })` 时，结果包含 `lsp`；
+- 新增：`matchDeferredTools('hover', DEFERRED_TOOLS)[0] === 'lsp'`；
+- 新增：`deferredToolUsage` 统计到一次调用 `lsp_hover` 时，把它记在 `lsp` 名下。
 
-`tests/providers.test.ts`：照这个文件里截获请求体的现有写法，给 Responses、OpenAI Chat、Anthropic 三个适配器各加一个用例：
+`tests/providers.test.ts`：照这个文件里截获请求体的现有写法，给三个适配器各加一个用例。每个用例的历史里有一条 assistant 消息，调用旧名 `lsp_hover`，并带有和当前连接、模型、端点都匹配的 `providerState`（`messageHash` 用 `assistantHash` 按原始消息算）。三种协议的原生输出分别是：
 
-- 历史里一条 assistant 消息调用 `lsp_hover`，并带有和当前连接、模型、端点都匹配的 `providerState`（Responses 用 `output`，另外两种用各自的原生字段和 `messageHash`）；
-- 先经 `rewriteToolHistory`，再交给适配器；
-- 断言实际请求体里出现 `"lsp"`，并且**完全不含** `lsp_hover`。
+- Responses：`output` 是 `[{ type: 'reasoning', id: 'rs_1', encrypted_content: 'ENC' }, { type: 'function_call', call_id: 'c1', name: 'lsp_hover', arguments: '{"path":"a.ts","line":1,"character":1}' }]`；
+- Anthropic：`output` 是 `[{ type: 'thinking', thinking: 'why', signature: 'SIG' }, { type: 'tool_use', id: 'c1', name: 'lsp_hover', input: { path: 'a.ts', line: 1, character: 1 } }]`；
+- OpenAI 兼容：`output` 是 `[{ role: 'assistant', content: null, reasoning_content: 'why', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'lsp_hover', arguments: '{"path":"a.ts","line":1,"character":1}' } }] }]`，并且连接要开启推理回放（看 `deepseekCapabilities` 的条件，测试里用显式开关 `deepseekCompatibility: 'on'`）。
 
-Responses 适配器在 `providerState` 匹配时直接回放 `state.output`（`packages/providers/responses.ts:112-120`），不看 `toolCalls`，这组用例就是为了锁住"改写后去掉原生状态"。
+每个用例都断言实际请求体：
+
+- 推理内容原样保留：`ENC` / `SIG` 和 `why` / `why` 都在；
+- 工具调用的名字是 `lsp`，参数里有 `"action":"hover"`；
+- 请求体里完全不含 `lsp_hover`。
+
+再加一个对照用例：历史里的工具名是当前名（`read_file`）时，请求体和改动前完全一样。用改动前截获的请求体做基准，或者断言原生 `output` 被原样放进请求体。
 
 Run: `node scripts/run-tests.mjs tests/tool-families.test.ts tests/deferred-tools.test.ts tests/providers.test.ts`
 Expected: 新用例和改过的用例 FAIL。
 
-- [ ] **Step 2: 实现**
+- [ ] **Step 2: 实现历史改写**
 
-`tool-families.ts`：
+`packages/providers/tool-history.ts`：
 
 ```ts
+import type { ProviderState, ToolCall } from '../protocol/index.ts';
+import { TOOL_ALIASES, resolveToolAlias } from '../protocol/index.ts';
+
 /**
- * The transcript as the current catalog names it. A session recorded before the merge holds calls by old names,
- * and a provider may refuse a history that calls a tool its request does not declare; rewriting on the way out
- * keeps the stored log as it happened. A rewritten message drops its native provider state: that state replays
- * the original calls verbatim (Responses sends `output` as it was) or is bound to them by hash.
+ * History by the tool names this request declares.
+ *
+ * A session recorded before a tool family replaced some names (`../protocol/tool-families.ts`) holds calls by
+ * the old names. The visible calls and the native output are rewritten here, item by item, at the protocol that
+ * owns their shape. Reasoning items, thinking blocks and `reasoning_content` are left untouched: a tool loop
+ * resumed mid-turn must hand them back exactly as they were produced. Whether native output is replayed at all is
+ * still decided against the stored message (its hash covers the stored calls), so nothing here recomputes a hash.
  */
-export function rewriteToolHistory<
-  M extends {
-    role: string;
-    toolCalls?: readonly { name: string; arguments: Record<string, unknown> }[];
-    providerState?: unknown;
-  },
->(messages: readonly M[]): readonly M[] {
-  const stale = (m: M) =>
-    m.role === 'assistant' && m.toolCalls?.some((c) => TOOL_ALIASES.has(c.name));
-  if (!messages.some(stale)) return messages;
-  return messages.map((m) => {
-    if (!stale(m)) return m;
-    const { providerState: _dropped, ...rest } = m;
-    return { ...rest, toolCalls: m.toolCalls!.map((c) => resolveToolAlias(c)) } as M;
+export function currentToolCalls(calls: readonly ToolCall[]): ToolCall[] {
+  return calls.map((call) => resolveToolAlias(call));
+}
+
+const renamedArguments = (name: string, json: unknown): unknown => {
+  const alias = TOOL_ALIASES.get(name);
+  if (!alias || typeof json !== 'string') return json;
+  try {
+    return JSON.stringify({
+      action: alias.action,
+      ...(JSON.parse(json) as Record<string, unknown>),
+    });
+  } catch {
+    return json;
+  }
+};
+
+export function currentNativeOutput(state: ProviderState): Record<string, unknown>[] {
+  if (state.protocol === 'openai-responses')
+    return state.output.map((item) => {
+      const name = item.name;
+      if (item.type !== 'function_call' || typeof name !== 'string' || !TOOL_ALIASES.has(name))
+        return item;
+      return {
+        ...item,
+        name: TOOL_ALIASES.get(name)!.tool,
+        arguments: renamedArguments(name, item.arguments),
+      };
+    });
+  if (state.protocol === 'anthropic')
+    return state.output.map((block) => {
+      const name = block.name;
+      if (block.type !== 'tool_use' || typeof name !== 'string' || !TOOL_ALIASES.has(name))
+        return block;
+      const alias = TOOL_ALIASES.get(name)!;
+      return {
+        ...block,
+        name: alias.tool,
+        input: { action: alias.action, ...(block.input as Record<string, unknown>) },
+      };
+    });
+  return state.output.map((message) => {
+    const calls = message.tool_calls;
+    if (!Array.isArray(calls)) return message;
+    return {
+      ...message,
+      tool_calls: calls.map((call: { function?: { name?: unknown; arguments?: unknown } }) => {
+        const name = call.function?.name;
+        if (typeof name !== 'string' || !TOOL_ALIASES.has(name)) return call;
+        return {
+          ...call,
+          function: {
+            ...call.function,
+            name: TOOL_ALIASES.get(name)!.tool,
+            arguments: renamedArguments(name, call.function?.arguments),
+          },
+        };
+      }),
+    };
   });
 }
 ```
 
-`request.ts`：发请求前 `const history = rewriteToolHistory(context.messages);`，用 `history` 代替 `context.messages`。`packages/core/context/context.ts:557` 的压缩请求如果带 `tools`，也做同样处理；不带就不改，并加一句注释说明原因。
+各适配器的接法（先读每个适配器构造历史的那段代码，在"选中原生状态之后、放进请求之前"这一处接入）：
+
+- `responses.ts:112-130`：原生状态匹配时，`input.push(...state.output)` 改为 `input.push(...currentNativeOutput(state))`；不匹配时生成 `function_call` 的那段，用 `currentToolCalls(message.toolCalls)` 代替 `message.toolCalls`。
+- `anthropic.ts` 和 `openai.ts`：找到调用 `nativeState(message, route)` 回放 `state.output` 的地方，改为回放 `currentNativeOutput(state)`；非原生路径里生成 `tool_use` / `tool_calls` 的地方，改用 `currentToolCalls(message.toolCalls)`。`nativeState` 的哈希比对保持用原始 `message`。
+- 只要历史里没有旧名，`currentNativeOutput` 返回的每一项都是原对象，请求体和改动前一致（对照用例锁住这一点）。
+
+`packages/core/context/context.ts:557` 的压缩请求也经过这些适配器，不用单独处理。
+
+- [ ] **Step 3: 实现规则、钩子和加载的兼容**
 
 `permission-policy.ts`：规则校验通过之后、生成编译结果之前，逐条换算：
 
@@ -1055,23 +1293,23 @@ if (alias)
     : { ...rule, tool: alias.tool, match: { ...(rule.match ?? {}), action: alias.action } };
 ```
 
-`deniesEveryCall` 要求规则不带 `match` 和 `arguments`，换算后的 deny 规则带着 `match`，不会把整个工具藏起来，不用改。
+`deniesEveryCall` 要求规则不带 `match` 和 `arguments`，换算后的 deny 规则带着 `match`，不会把整个工具藏起来，不用改。`source()` 照原样输出换算后的规则；新名对版本 1 的读取没有歧义，重新读一遍结果不变。
 
 `hook-bridge.ts`：在 `dispatch` 里，把 `hookMatcherMatches(declaration.matcher, subject)` 改成 `hookSubjects(subject, action)` 里任何一个匹配即可；`action` 取自 payload 里的 `tool_input.action`（看 `hook-bridge.ts:232` 附近 payload 是怎么组的）。合并工具的 payload 加 `tool_action`。
 
 `deferred-tools.ts`：
 
 - `loadToolsTool` 执行时：`names` 逐个换算 `TOOL_ALIASES.get(name)?.tool ?? name` 再去重；有换算的，在成功结果里加 `` `${old} is now ${tool} (action: ${action}).` ``。
-- `addLoadedTools`：两处 `deferrable.has(name)` 之前，先换算旧名。
+- `addLoadedTools` 和 `deferredToolUsage`：判断 `deferrable.has(name)` 之前，先换算旧名。
 - `matchDeferredTools`：工具属于某个家族时，它的 action 名和旧成员名也参与匹配，权重和工具名相同（2 分）。
 
-- [ ] **Step 3: 跑测试确认通过**
+- [ ] **Step 4: 跑测试确认通过**
 
 Run: `node scripts/run-tests.mjs tests/tool-families.test.ts tests/deferred-tools.test.ts tests/providers.test.ts tests/hook-bridge.test.ts tests/hooks.test.ts tests/host-hook-policy.test.ts`
 再用 Glob 找 `tests/*permission*` 一并跑。
-Expected: PASS。
+Expected: PASS。`npm run layers:check` 通过（`providers` 只依赖 `protocol`）。
 
-- [ ] **Step 4: 提交**
+- [ ] **Step 5: 提交**
 
 ```bash
 git add packages tests
@@ -1157,7 +1395,7 @@ git commit -m "docs(tools): trim the largest always-sent descriptions"
 
 - [ ] **Step 2: 生成事实与快照**
 
-Run: `npm run docs:generate`，然后 `npm run docs:check`。预期：全部工具 57 个（含终端），首个请求 20 个。数字不一样时，先找出原因再改，不要直接照抄生成结果。
+Run: `npm run docs:generate`，然后 `npm run docs:check`。预期：全部工具 58 个（含终端；67 − 12 + 3），首个请求 20 个。数字不一样时，先找出原因再改，不要直接照抄生成结果。
 Run: `npm run snapshot:update`。
 
 - [ ] **Step 3: 全量验证**
@@ -1189,5 +1427,9 @@ git commit -m "docs: describe namespaces, on-demand tools and the language serve
   - 第 5 节不做的事：计划里没有其他合并，`browser_close` 不动；
   - 测试 → 各任务；
   - 量化 → Task 2、9。
-- 和 spec 的差异：目录里保留组内工具名（见开头说明），Task 1 Step 6 同步改 spec。
-- 吸收了上一版计划的评审意见：白名单按操作限制；旧名规则只缩窄不放大，而且这次没有新旧同名的情况，不需要给权限策略分版本；历史改写去掉原生状态，并在三个适配器层面验证；`load_tools` 认旧名，搜索匹配操作关键词；排查模型看得到的文字。自动验收按 `terminal_send` 识别的问题，这次不涉及，因为终端工具不合并。
+- 吸收了上一版计划的评审意见：白名单按操作限制；旧名规则只缩窄不放大，而且这次没有新旧同名的情况，不需要给权限策略分版本；`load_tools` 认旧名，搜索匹配操作关键词；排查模型看得到的文字。自动验收按 `terminal_send` 识别的问题，这次不涉及，因为终端工具不合并。
+- 第二轮评审修订（2026-10-31）：
+  - 历史改写挪到各协议的适配器里，只改工具调用，推理块原样保留；测试同时断言推理内容还在、旧名不在（Task 6）；
+  - action 限制交集为空时隐藏工具并拒绝执行，补了限制叠加、撤销、子运行继承的测试（Task 4）；
+  - 基准测试补上首个请求的指标，`deferredToolUsage` 认 namespace 加载并统计加载未命中（Task 2 Step 1、Task 2b）；
+  - LSP 实际是 12 个工具、11 个旧名，合并后共 58 个；权限测试的夹具改为不依赖优先级（Task 3、6、9）。
