@@ -3,7 +3,7 @@ import type { ToolCall, ToolResult } from '../protocol/index.ts';
 import { environmentBlockedCode } from '../protocol/environment-blocked.ts';
 import type { FileStateDigest } from '../tools/file-state-digest.ts';
 import { projectChangedPaths } from './completion/work-evidence.ts';
-import { classifyTool } from '../tools/tool-categories.ts';
+import { classifyTool, isQueryAction } from '../tools/tool-categories.ts';
 
 export interface ToolObservation {
   call: ToolCall;
@@ -344,6 +344,7 @@ export class ToolProgressGuard {
         ({ call, result, kind }) =>
           !(
             (this.options.isQuery ?? productQuery)(call.name) ||
+            isQueryAction(call) ||
             (call.name === 'run_code' && kind === 'program-output' && !result.isError)
           ) ||
           result.change ||

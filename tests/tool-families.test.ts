@@ -258,3 +258,12 @@ test('the catalog offers lsp, lsp_start and lsp_edit and no old language server 
     'workspace_symbols',
   ]);
 });
+
+import { isQueryAction } from '../packages/tools/tool-categories.ts';
+
+test('the language server queries stay queries for the repeated-query guard', () => {
+  assert.equal(isQueryAction({ name: 'lsp', arguments: { action: 'hover' } }), true);
+  assert.equal(isQueryAction({ name: 'lsp_hover', arguments: {} }), true);
+  assert.equal(isQueryAction({ name: 'lsp', arguments: { action: 'stop' } }), false);
+  assert.equal(isQueryAction({ name: 'lsp', arguments: { action: 'code_actions' } }), false);
+});

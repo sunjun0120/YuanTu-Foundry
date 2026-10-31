@@ -1,4 +1,5 @@
 import type { Tool, ToolCategory } from '../protocol/index.ts';
+import { resolveToolAlias } from '../protocol/tool-families.ts';
 
 /**
  * Every product tool's subsystem, and which tools are queries, in one table.
@@ -109,6 +110,23 @@ export const TOOL_CLASSES: ReadonlyMap<string, ToolClass> = new Map<string, Tool
   ['exit_plan_mode', c('run')],
   ['submit_report', c('run')],
 ]);
+
+/**
+ * Family actions that are queries although the family as a whole is not: `lsp` also stops servers and lists code
+ * actions, which never were queries, but its position queries still are.
+ */
+const QUERY_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  [
+    'lsp',
+    new Set(['diagnostics', 'definition', 'references', 'hover', 'symbols', 'workspace_symbols']),
+  ],
+]);
+
+/** Whether this call, by its family action, is a query; an old member name is read as the action it became. */
+export function isQueryAction(call: { name: string; arguments: Record<string, unknown> }): boolean {
+  const current = resolveToolAlias(call);
+  return QUERY_ACTIONS.get(current.name)?.has(String(current.arguments.action)) === true;
+}
 
 /** A tool's class: what it declares about itself, else the product table, else `other` and not a query. */
 export function classifyTool(tool: Pick<Tool, 'name' | 'category' | 'query'>): {
