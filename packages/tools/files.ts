@@ -693,7 +693,7 @@ export function fileTools(
       name: 'edit_file',
       effect: 'workspace-file',
       description:
-        'Replace exactly one occurrence of old_text in an existing UTF-8 file, preserving other bytes. Read before editing. Rejects ambiguous matches and files over 1MB: add surrounding lines to old_text until it is unique. For a new file or a full rewrite use write_file; for several edits in one file, batch_edit (via load_tools).',
+        'Replace exactly one occurrence of old_text in an existing UTF-8 file, preserving other bytes. Read before editing. Rejects ambiguous matches and files over 1MB: add surrounding lines to old_text until it is unique. For a new file use write_file, for a full rewrite write_file with overwrite: true; for several edits in one file, batch_edit (via load_tools).',
       permission: 'write',
       inputSchema: schema(
         {
@@ -712,12 +712,16 @@ export function fileTools(
       name: 'write_file',
       effect: 'workspace-file',
       description:
-        'Create a new UTF-8 file in an existing directory. Refuses to overwrite an existing file; use edit_file for changes.',
+        'Create a new UTF-8 file in an existing directory. An existing file is refused unless overwrite is true, which replaces it whole and requires having read it; prefer edit_file for changes.',
       permission: 'write',
-      inputSchema: schema({ path: str, content: { type: 'string', maxLength: 1_000_000 } }, [
-        'path',
-        'content',
-      ]),
+      inputSchema: schema(
+        {
+          path: str,
+          content: { type: 'string', maxLength: 1_000_000 },
+          overwrite: { type: 'boolean' },
+        },
+        ['path', 'content'],
+      ),
       prepare: (args, ctx) => prepareFileChange(workspace, args, 'create', ctx, gates),
       async execute(args, ctx) {
         return (await prepareFileChange(workspace, args, 'create', ctx, gates)).execute(ctx);

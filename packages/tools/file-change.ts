@@ -5,6 +5,7 @@ import { structuredPatch, formatPatch } from 'diff';
 import type { FileChange, PreparedTool, ToolContext } from '../protocol/index.ts';
 import type { Workspace } from './files.ts';
 import type { MutationGates } from './fs-observation.ts';
+import { matchEdit } from './edit-match.ts';
 import { writeAll, atomicWriteFile } from '../platform/write-all.ts';
 
 const noFollow = constants.O_NOFOLLOW ?? 0;
@@ -88,18 +89,36 @@ export function editSnippet(after: string, index: number, replacement: string): 
 export async function prepareFileChange(
   workspace: Workspace,
   args: Record<string, unknown>,
-  kind: FileChange['kind'],
+  requested: FileChange['kind'],
   context: ToolContext,
   gates: MutationGates,
 ): Promise<PreparedTool> {
   context.signal.throwIfAborted();
   const input = String(args.path);
-  const file = await workspace.resolve(input, kind === 'create');
+  const file = await workspace.resolve(input, requested === 'create');
   const instructions = await gates.instructions(input);
   if (instructions)
     throw new Error(
       'Read the applicable project instructions before retrying this change:\n' + instructions,
     );
+  const exists = async (): Promise<boolean> => {
+    try {
+      await lstat(file);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return false;
+    }
+  };
+  /**
+   * `write_file` with `overwrite` over an existing file is an edit whose replacement is the whole text.
+   *
+   * It takes the edit path entire — the read gate, the before snapshot, the post-approval byte check, the atomic
+   * replace and the journal's undo — so a full rewrite is guarded exactly like a one-line change. Without it a
+   * rewrite was a delete and a create, two approvals and two undo rows for one intent.
+   */
+  const overwrite = requested === 'create' && args.overwrite === true && (await exists());
+  const kind: FileChange['kind'] = overwrite ? 'edit' : requested;
   let before: Buffer = Buffer.alloc(0);
   let after: string;
   let snippet = '';
@@ -109,20 +128,24 @@ export async function prepareFileChange(
     // reads as "your text was slightly wrong" and invites another guess.
     await gates.observations.assertRead(input);
     before = await readBytes(file);
-    const source = before.toString('utf8'),
-      old = String(args.old_text),
-      index = source.indexOf(old);
-    if (index < 0 || source.indexOf(old, index + 1) >= 0)
-      throw new Error('old_text must match exactly once');
-    after = source.slice(0, index) + String(args.new_text) + source.slice(index + old.length);
-    snippet = editSnippet(after, index, String(args.new_text));
-  } else {
-    try {
-      await lstat(file);
-      throw new Error('File already exists; use edit_file');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    if (overwrite) {
+      after = String(args.content);
+      snippet = editSnippet(after, 0, after);
+    } else {
+      const source = before.toString('utf8');
+      const { index, oldText, newText } = matchEdit(
+        source,
+        String(args.old_text),
+        String(args.new_text),
+      );
+      after = source.slice(0, index) + newText + source.slice(index + oldText.length);
+      snippet = editSnippet(after, index, newText);
     }
+  } else {
+    if (await exists())
+      throw new Error(
+        'File already exists; use edit_file for a change, or write_file with overwrite: true to replace it whole',
+      );
     after = String(args.content);
   }
   const next = Buffer.from(after);

@@ -232,7 +232,8 @@ async function setup(t: test.TestContext) {
       const targets =
         name === 'batch_edit'
           ? (args.edits as { path: string }[]).map((edit) => edit.path)
-          : ['edit_file', 'apply_patch'].includes(name)
+          : ['edit_file', 'apply_patch'].includes(name) ||
+              (name === 'write_file' && args.overwrite === true)
             ? [String(args.path)]
             : [];
       for (const target of targets) {
@@ -457,8 +458,105 @@ test('batch edits canonical aliases in sequence', async (t) => {
     ],
   });
   assert.equal(failed.isError, true, failed.content);
-  assert.match(failed.content, /old_text must match exactly once/);
+  assert.match(failed.content, /\.\/a\.txt: old_text was not found/);
+  assert.match(failed.content, /at its batch step/);
   assert.equal(await readFile(path.join(ctx.root, 'a.txt'), 'utf8'), 'done');
+});
+
+test('write_file overwrites an existing file only when asked, as an undoable edit of a read file', async (t) => {
+  const ctx = await setup(t);
+  const tools = createTools(ctx.root);
+  const call = (args: Record<string, unknown>) =>
+    tools.execute(
+      { id: 'w', name: 'write_file', arguments: args },
+      { signal: new AbortController().signal, approve: async () => true },
+    );
+  await writeFile(path.join(ctx.root, 'a.txt'), 'old');
+  const refused = await call({ path: 'a.txt', content: 'new' });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content, /overwrite: true/);
+  // Replacing bytes the run never saw is the blind edit the read gate exists to stop.
+  const blind = await call({ path: 'a.txt', content: 'new', overwrite: true });
+  assert.equal(blind.isError, true);
+  assert.equal(await readFile(path.join(ctx.root, 'a.txt'), 'utf8'), 'old');
+  await tools.execute(
+    { id: 'r', name: 'read_file', arguments: { path: 'a.txt' } },
+    { signal: new AbortController().signal, approve: async () => true },
+  );
+  const replaced = await call({ path: 'a.txt', content: 'new\ncontent\n', overwrite: true });
+  assert.equal(replaced.isError, false, replaced.content);
+  assert.equal(replaced.change?.kind, 'edit');
+  assert.equal(await readFile(path.join(ctx.root, 'a.txt'), 'utf8'), 'new\ncontent\n');
+  // A missing path with the flag is an ordinary create.
+  const created = await call({ path: 'b.txt', content: 'fresh', overwrite: true });
+  assert.equal(created.isError, false, created.content);
+  assert.equal(created.change?.kind, 'create');
+
+  // Through the journal, the overwrite is undone like any edit.
+  const journaled = await ctx.edit('write_file', {
+    path: 'a.txt',
+    content: 'third',
+    overwrite: true,
+  });
+  assert.equal(journaled.isError, false, journaled.content);
+  await undoFileChange(ctx.store, ctx.session.id, journaled.change!.id!, ctx.root);
+  assert.equal(await readFile(path.join(ctx.root, 'a.txt'), 'utf8'), 'new\ncontent\n');
+});
+
+test('edits written with LF line breaks apply to a CRLF file and keep its line endings', async (t) => {
+  const ctx = await setup(t);
+  const source = 'def f():\r\n    return 1\r\n\r\nx = 2\r\n';
+  await writeFile(path.join(ctx.root, 'a.py'), source);
+  // `read_file` shows the file without its carriage returns, so this is the text a model copies from it.
+  const edited = await ctx.edit('edit_file', {
+    path: 'a.py',
+    old_text: 'def f():\n    return 1',
+    new_text: 'def f():\n    value = 3\n    return value',
+  });
+  assert.equal(edited.isError, false, edited.content);
+  assert.equal(
+    await readFile(path.join(ctx.root, 'a.py'), 'utf8'),
+    'def f():\r\n    value = 3\r\n    return value\r\n\r\nx = 2\r\n',
+  );
+  const batched = await ctx.edit('batch_edit', {
+    edits: [
+      { path: 'a.py', old_text: '    value = 3\n    return value', new_text: '    return 4' },
+      { path: 'a.py', old_text: '\nx = 2\n', new_text: '\nx = 5\n' },
+    ],
+  });
+  assert.equal(batched.isError, false, batched.content);
+  assert.equal(
+    await readFile(path.join(ctx.root, 'a.py'), 'utf8'),
+    'def f():\r\n    return 4\r\n\r\nx = 5\r\n',
+  );
+});
+
+test('an edit that cannot match says whether it matched nothing or too much, and where', async (t) => {
+  const ctx = await setup(t);
+  await writeFile(path.join(ctx.root, 'a.py'), 'a = 1\nif a:\n    b = 2\na = 1\n');
+  const ambiguous = await ctx.edit('edit_file', {
+    path: 'a.py',
+    old_text: 'a = 1',
+    new_text: 'a = 0',
+  });
+  assert.equal(ambiguous.isError, true);
+  assert.match(ambiguous.content, /matches 2 times \(lines 1, 4\)/);
+  // The first line is there, the indentation of the next one is not: point at the line to re-read.
+  const drifted = await ctx.edit('edit_file', {
+    path: 'a.py',
+    old_text: 'if a:\n  b = 2',
+    new_text: 'if a:\n  b = 3',
+  });
+  assert.equal(drifted.isError, true);
+  assert.match(drifted.content, /not found/);
+  assert.match(drifted.content, /first line \("if a:"\) appears at line 2,/);
+  const absent = await ctx.edit('edit_file', { path: 'a.py', old_text: 'zzz', new_text: 'y' });
+  assert.equal(absent.isError, true);
+  assert.match(absent.content, /matches no line of the file/);
+  assert.equal(
+    await readFile(path.join(ctx.root, 'a.py'), 'utf8'),
+    'a = 1\nif a:\n    b = 2\na = 1\n',
+  );
 });
 
 test('an interrupted grouped undo resumes after restart from exact before/after states', async (t) => {

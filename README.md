@@ -770,12 +770,12 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 70 个 / 40.6 KB | `createTools().specs()` |
+| 工具（空工作区，全部） | 70 个 / 40.7 KB | `createTools().specs()` |
 | 工具（只读运行） | 36 个 / 18.8 KB | `specs({ readOnly: true })` |
-| 工具（默认按需加载，首个请求） | 26 个 / 18.6 KB | `specs({ loaded: new Set() })` |
+| 工具（默认按需加载，首个请求） | 26 个 / 18.7 KB | `specs({ loaded: new Set() })` |
 | `explore` 白名单条目 | 26 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
-| 持久事件类型 / 实时事件类型 | 58 / 53 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
+| 持久事件类型 / 实时事件类型 | 59 / 54 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 24 | `smoke:desktop` 的清单 |
 | 行为测试文件 | 355 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |

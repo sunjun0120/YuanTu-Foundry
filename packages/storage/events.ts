@@ -268,6 +268,8 @@ export const SESSION_EVENT_TYPES = [
    * `packages/protocol/events.ts`). Durable for the same reason: the record is the count the next process reads.
    */
   'llm.reasoning-resend',
+  /** An attempt cut off inside a tool call was re-sent once (`llm.truncated-call-resend`); durable for the same reason. */
+  'llm.truncated-call-resend',
   'provider.degraded',
   /**
    * One write that undid an earlier one in this session's run (`edit-oscillation-warn` in `tool-progress.ts`).
@@ -372,6 +374,8 @@ export const IGNORABLE_SESSION_EVENTS: readonly string[] = [
   'llm.zero-byte-retry',
   /** A re-send of an attempt that only reasoned. Like the two above, superseded by what followed it. */
   'llm.reasoning-resend',
+  /** A re-send of an attempt cut off inside a tool call. Superseded by what followed it, like the three above. */
+  'llm.truncated-call-resend',
   'provider.degraded',
   /**
    * A write that undid an earlier one. It carries no part of the transcript and no state a reader must act on:

@@ -11,6 +11,7 @@ import type {
 } from '../protocol/index.ts';
 import type { Workspace } from './files.ts';
 import type { MutationGates } from './fs-observation.ts';
+import { matchEdit } from './edit-match.ts';
 import { writeAll, atomicWriteFile } from '../platform/write-all.ts';
 
 const MAX_FILE_BYTES = 1_000_000;
@@ -358,11 +359,16 @@ export async function prepareBatchEdit(
       state = { file, before, text: before.toString('utf8') };
       states.set(file, state);
     }
-    const index = state.text.indexOf(edit.old_text);
-    if (index < 0 || state.text.indexOf(edit.old_text, index + 1) >= 0)
-      throw new Error(`${edit.path}: old_text must match exactly once at its batch step`);
+    let match;
+    try {
+      match = matchEdit(state.text, edit.old_text, edit.new_text);
+    } catch (error) {
+      throw new Error(`${edit.path}: ${(error as Error).message} (at its batch step)`);
+    }
     state.text =
-      state.text.slice(0, index) + edit.new_text + state.text.slice(index + edit.old_text.length);
+      state.text.slice(0, match.index) +
+      match.newText +
+      state.text.slice(match.index + match.oldText.length);
     if (Buffer.byteLength(state.text) > MAX_FILE_BYTES || state.text.includes('\0'))
       throw new Error(`${edit.path}: new file content must be UTF-8 text <= 1MB`);
   }

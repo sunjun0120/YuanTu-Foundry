@@ -45,6 +45,17 @@ const REASONING_RESEND_NOTE: Message = {
     'the next tool call or give the answer directly. Keep any single edit small enough to fit.\n' +
     '</runtime-context>',
 };
+const truncatedCallNote = (toolArgumentChars: number): Message => ({
+  role: 'user',
+  content:
+    '<runtime-context source="output-limit">\n' +
+    'The previous attempt at this turn was cut off while writing a tool call (' +
+    String(toolArgumentChars) +
+    ' characters of arguments) by the output allowance, so the call was discarded and nothing ran. Make the ' +
+    'same progress in smaller calls: edit only the lines that change instead of rewriting a file, split a large ' +
+    'new file or edit across several calls, and keep reasoning brief.\n' +
+    '</runtime-context>',
+});
 
 export interface RunRequestOptions {
   store: Pick<
@@ -53,6 +64,7 @@ export interface RunRequestOptions {
     | 'retryCount'
     | 'zeroByteRetryCount'
     | 'reasoningResendCount'
+    | 'truncatedCallResendCount'
     | 'recordEvent'
     | 'renewLease'
     | 'checkpointStream'
@@ -331,7 +343,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
    * re-send would show it twice), reasoning is most of what was billed, and one re-send per round, counted from
    * its own record like the zero-byte allowance.
    */
-  let reasoningNote = false;
+  let resendNote: Message | undefined;
   const reasoningResend = (attempt: ModelResponse): boolean => {
     const reasoning = attempt.outputDiagnostics?.reasoningTokens;
     if (
@@ -355,7 +367,38 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     // The discarded attempt was billed all the same.
     countUsage(attempt.usage);
     resetReasoning();
-    reasoningNote = true;
+    resendNote = REASONING_RESEND_NOTE;
+    return true;
+  };
+  /**
+   * Whether this truncated attempt was cut off inside a tool call, and may be sent once more asking for smaller calls.
+   *
+   * The other way the 2026-10-29 sample lost a task to the allowance: the reasoning fit, the arguments of one large
+   * call did not, and half a JSON document is not a call. The task usually fits as several smaller calls, so the
+   * request goes again once with a note saying so. Same narrowing as the reasoning re-send — nothing visible was
+   * streamed, one re-send per round on its own record — and the same note-only-on-this-request shape.
+   */
+  const truncatedCallResend = (attempt: ModelResponse): boolean => {
+    const chars = attempt.outputDiagnostics?.toolArgumentChars ?? 0;
+    if (
+      attempt.finishReason !== 'length' ||
+      attempt.truncation === 'context-window' ||
+      streamedText ||
+      chars <= 0
+    )
+      return false;
+    if (store.truncatedCallResendCount(runId, round, sessionId) >= 1) return false;
+    const record = {
+      runId,
+      round,
+      outputTokens: attempt.usage.outputTokens,
+      toolArgumentChars: chars,
+    };
+    store.recordEvent(sessionId, 'llm.truncated-call-resend', record);
+    emit('llm.truncated-call-resend', record);
+    countUsage(attempt.usage);
+    resetReasoning();
+    resendNote = truncatedCallNote(chars);
     return true;
   };
   const retryRequest = async (cause: unknown): Promise<boolean> => {
@@ -482,7 +525,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
             : {}),
           ...(recoveringArguments ? { toolArgumentsRecovery: true, degradedFrom } : {}),
           // The note rides on this request only: it is about the attempt that was discarded, not the conversation.
-          messages: reasoningNote ? [...context.messages, REASONING_RESEND_NOTE] : context.messages,
+          messages: resendNote ? [...context.messages, resendNote] : context.messages,
           tools: specs,
           // The key of the request this is, from the prompt this request carries — see `cacheKeyOf`.
           cacheKey: cacheKeyOf(context.system, specs),
@@ -624,7 +667,8 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
             : 'Provider context window exceeded; the overflow recovery allowance is spent',
         );
       }
-      if (!recoveringArguments && reasoningResend(attempt)) continue;
+      if (!recoveringArguments && (reasoningResend(attempt) || truncatedCallResend(attempt)))
+        continue;
       /**
        * A turn that carried nothing at all goes through the same retry decision as a broken stream.
        *

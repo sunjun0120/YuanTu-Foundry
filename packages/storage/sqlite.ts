@@ -855,6 +855,9 @@ export class SessionStore implements PlanRepository {
   reasoningResendCount(runId: string, round: number, sessionId?: string): number {
     return this.parts.runs.reasoningResendCount(runId, round, sessionId);
   }
+  truncatedCallResendCount(runId: string, round: number, sessionId?: string): number {
+    return this.parts.runs.truncatedCallResendCount(runId, round, sessionId);
+  }
   /** Record a compaction summary over the transcript (see `./session-context.ts`). */
   applyCompaction(id: string, input: Parameters<SessionContext['applyCompaction']>[1]): void {
     return this.parts.context.applyCompaction(id, input);

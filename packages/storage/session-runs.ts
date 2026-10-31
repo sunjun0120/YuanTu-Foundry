@@ -505,8 +505,14 @@ export class SessionRuns {
     return this.countRoundEvents('llm.reasoning-resend', runId, round, sessionId);
   }
 
+  /** How many attempts this round re-sent because the output allowance cut off a tool call; its own allowance. */
+  truncatedCallResendCount(runId: string, round: number, sessionId?: string): number {
+    return this.countRoundEvents('llm.truncated-call-resend', runId, round, sessionId);
+  }
+
   private countRoundEvents(
-    type: 'llm.retry' | 'llm.zero-byte-retry' | 'llm.reasoning-resend',
+    type:
+      'llm.retry' | 'llm.zero-byte-retry' | 'llm.reasoning-resend' | 'llm.truncated-call-resend',
     runId: string,
     round: number,
     sessionId?: string,

@@ -1934,31 +1934,81 @@ test('an attempt that only reasoned to the output limit is re-sent once with a n
   assert.equal(result.usage?.outputTokens, 120);
 });
 
-test('a truncated attempt that showed text or was mostly a tool call is not re-sent', async (t) => {
-  for (const shape of ['visible', 'tool-arguments'] as const) {
-    let requests = 0;
-    const provider: Provider = {
-      async complete(request) {
-        requests++;
-        if (shape === 'visible') request.onText('Partial answer');
-        return {
-          ...reply(shape === 'visible' ? 'Partial answer' : ''),
-          finishReason: 'length',
-          usage: { inputTokens: 9, outputTokens: 100 },
-          outputDiagnostics: {
-            reasoningTokens: shape === 'visible' ? 95 : 40,
-            reasoningChars: 10,
-            toolArgumentChars: shape === 'visible' ? 0 : 900,
-            visibleChars: shape === 'visible' ? 14 : 0,
-          },
-        };
-      },
-    };
-    const { session, agent } = await fixture(t, provider, { maxOutputTokens: 100 });
-    const result = await agent.run({ sessionId: session.id, prompt: 'Work' });
-    assert.equal(result.status, 'limited', shape);
-    assert.equal(requests, 1, shape);
-  }
+test('a truncated attempt that showed text is not re-sent', async (t) => {
+  let requests = 0;
+  const provider: Provider = {
+    async complete(request) {
+      requests++;
+      request.onText('Partial answer');
+      return {
+        ...reply('Partial answer'),
+        finishReason: 'length',
+        usage: { inputTokens: 9, outputTokens: 100 },
+        outputDiagnostics: {
+          reasoningTokens: 40,
+          reasoningChars: 10,
+          toolArgumentChars: 900,
+          visibleChars: 14,
+        },
+      };
+    },
+  };
+  const { session, agent } = await fixture(t, provider, { maxOutputTokens: 100 });
+  const result = await agent.run({ sessionId: session.id, prompt: 'Work' });
+  assert.equal(result.status, 'limited');
+  assert.equal(requests, 1);
+});
+
+test('an attempt cut off inside a tool call is re-sent once with a note to split the change', async (t) => {
+  const seen: Message[][] = [];
+  const truncatedCall: ModelResponse = {
+    ...reply(''),
+    finishReason: 'length',
+    usage: { inputTokens: 9, outputTokens: 100 },
+    outputDiagnostics: {
+      reasoningTokens: 40,
+      reasoningChars: 10,
+      toolArgumentChars: 900,
+      visibleChars: 0,
+    },
+  };
+  const provider: Provider = {
+    async complete(request) {
+      seen.push(request.messages);
+      if (seen.length === 1) return truncatedCall;
+      return { ...reply('Split it'), usage: { inputTokens: 9, outputTokens: 20 } };
+    },
+  };
+  const { session, agent, events, store } = await fixture(t, provider, { maxOutputTokens: 100 });
+  const result = await agent.run({ sessionId: session.id, prompt: 'Work' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.text, 'Split it');
+  assert.equal(seen.length, 2);
+  const note = seen[1]!.at(-1)!;
+  assert.ok(note.role === 'user' && /cut off while writing a tool call/.test(note.content));
+  assert.match(note.content, /900 characters/);
+  assert.ok(
+    !store
+      .messages(session.id)
+      .some((m) => m.role === 'user' && /cut off while writing/.test(m.content)),
+  );
+  assert.equal(events.filter((event) => event.type === 'llm.truncated-call-resend').length, 1);
+  assert.equal(events.filter((event) => event.type === 'llm.reasoning-resend').length, 0);
+  assert.equal(result.usage?.outputTokens, 120);
+
+  // The allowance is one per round: a second cut-off call is the limit it is.
+  let requests = 0;
+  const stubborn: Provider = {
+    async complete() {
+      requests++;
+      return truncatedCall;
+    },
+  };
+  const again = await fixture(t, stubborn, { maxOutputTokens: 100 });
+  const limited = await again.agent.run({ sessionId: again.session.id, prompt: 'Work' });
+  assert.equal(limited.status, 'limited');
+  assert.match(limited.error!, /900 tool argument characters/);
+  assert.equal(requests, 2);
 });
 
 // ---- merged from run-queue.test.ts ----

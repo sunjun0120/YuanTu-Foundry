@@ -208,7 +208,7 @@ test('DSML validates every call before returning any executable batch', async (t
   }
 });
 
-test('DSML never enables absent or disabled tools and refuses mixed native calls', async (t) => {
+test('DSML never enables absent or disabled tools and yields to native calls', async (t) => {
   for (const input of [request({ tools: [] }), request({ toolChoice: 'none' })]) {
     // A conclusion-only round: the prose is the answer, the block is dropped, nothing runs.
     let shown = '';
@@ -228,8 +228,32 @@ test('DSML never enables absent or disabled tools and refuses mixed native calls
     assert.deepEqual(bare.toolCalls, []);
     assert.equal(bare.text, block());
   }
-  const mixed = await endpoint(t, block(), 'tool_calls', true);
-  await assert.rejects(mixed.complete(request()), /DSML/);
+  // Mixed output: the native calls run, the DSML block is neither executed nor kept as answer text.
+  let shown = '';
+  const mixed = await (
+    await endpoint(t, 'Reading both.\n\n' + block(), 'tool_calls', true)
+  ).complete(
+    request({
+      onText: (part) => {
+        shown += part;
+      },
+    }),
+  );
+  assert.deepEqual(mixed.toolCalls, [
+    { id: 'native-1', name: 'read_file', arguments: { path: 'native.py' } },
+  ]);
+  assert.equal(mixed.finishReason, 'tool_calls');
+  assert.equal(mixed.text, 'Reading both.\n\n');
+  assert.equal(shown, mixed.text);
+  // A mixed turn whose DSML block is malformed is still the native turn: the block was never going to run.
+  const broken = await (
+    await endpoint(t, block().replace('</｜｜DSML｜｜ invoke>', ''), 'tool_calls', true)
+  ).complete(request());
+  assert.deepEqual(
+    broken.toolCalls.map((call) => call.id),
+    ['native-1'],
+  );
+  assert.equal(broken.text, '');
 });
 
 test('DSML examples and non-DeepSeek routes keep their text without executing it', async (t) => {

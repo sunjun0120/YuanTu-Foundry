@@ -124,6 +124,11 @@ export const AGENT_EVENT_TYPES = [
    * note asking for the action instead of more deliberation. Its own allowance, for the same reason as above.
    */
   'llm.reasoning-resend',
+  /**
+   * An attempt the output allowance cut off inside a tool call, with nothing shown, was sent again once with a
+   * note to split the change. Its own allowance: a round may need both this and the reasoning re-send.
+   */
+  'llm.truncated-call-resend',
   'provider.degraded',
   /**
    * A write that undid an earlier one in the same run: the whole file went back to a state it already had, or

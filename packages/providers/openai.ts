@@ -466,9 +466,14 @@ export class OpenAIProvider implements Provider {
         const held = contentBuffer!.flush();
         if (prose.trim()) text = prose;
         else if (held) request.onText(held);
+      } else if (calls.size) {
+        // Native calls are the protocol's own answer and win. The block is not run alongside them — that could
+        // run one intent twice — and not kept as answer text either; a call it held that the native batch
+        // lacked is the model's to send again once it reads the results. Failing the run here lost whole tasks.
+        text = text.slice(0, dsmlStart(text));
+        contentBuffer!.flush();
       } else
         try {
-          if (calls.size) throw new Error('DSML calls conflict with native calls');
           const normalized = parseDsml(text, request.tools)!;
           text = normalized.text;
           toolCalls = normalized.toolCalls;
