@@ -10,6 +10,15 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-31-remove-office-tools-design.md`
 
+## 本轮执行范围（2026-10-31 调整）
+
+本轮只执行 **Task 5**、**Task 4 中删除 `office-documents` 的部分**和 **Task 6**；Task 1–3 与新增内置技能留作后续独立任务。与下文的差异：
+
+- Task 4：只删 `OFFICE_DOCUMENTS`、i18n 键 `skill.officeDocumentsDescription` 与 `command-model.ts` 的映射，改 `CODE_ANALYSIS_REPORT` 第 4 步为"有 Word 相关技能就按技能写，否则临时写脚本生成 Word 报告"。`notices.ts` 那句改为：`For Word, Excel and PowerPoint files, load a matching skill when one is offered; otherwise write a temporary script with the libraries the task needs, and check the file before delivering it.` 测试里引用 `office-documents` 的断言改为断言它不存在，或改用 `code-analysis-report`。
+- Task 5 照写执行（含 `clean-paused-builds.mjs`、安装包反向检查、PPT 夹具的类型适配）。
+- 依赖审计：`docx`、`pptxgenjs` 只剩测试使用，从 `check-audit.mjs` 的 `SHIPPED_DEV` 删除，两条 `image-size` 豁免一并删除，跑 `npm run audit:check`。`check-windows-package.mjs` 的 "bundled dependency" 循环保留。
+- Task 6 的 README 只写本轮的事实：不提自带库与 `docx`/`pptx`/`xlsx` 内置技能，"文档生成"一段改为通用规则。
+
 ## Global Constraints
 
 - 分阶段只跑定向测试：`node scripts/run-tests.mjs <文件>`；全量 `npm test` 只在最后一个任务跑。

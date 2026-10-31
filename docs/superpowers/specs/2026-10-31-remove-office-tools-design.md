@@ -14,6 +14,12 @@ Claude 与 Codex 的做法都是：有合适的技能就加载技能，没有就
 
 **不变**：通用命令执行、`run_code`、`verify_file_delivery`、`present` 与交付工具。不再为文档操作单独设计工具接口。
 
+### 范围调整（2026-10-31）
+
+本轮只做第 1、2 节（删除生成工具、保留只读能力），以及第 4 节里删除 `office-documents` 的部分。系统提示改为通用规则：有合适的技能就加载；没有就临时写脚本，用任务需要的库生成文件，检查后再交付。第 3 节（随应用附带文档库）和第 4 节里新增的 `docx` / `pptx` / `xlsx` 内置技能，留到后续单独的任务，按 `docs/superpowers/plans/2026-10-31-remove-office-tools.md` 里的 Task 1–4 执行。
+
+`docx`、`pptxgenjs` 删除后不再进入任何发布产物，只剩测试夹具使用，所以从 `scripts/check-audit.mjs` 的 `SHIPPED_DEV` 中移除；依附它们的两条 `image-size` 豁免随之删除。
+
 ## 设计
 
 ### 1. 删除生成工具
