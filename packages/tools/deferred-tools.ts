@@ -66,8 +66,18 @@ export const DEFERRED_GROUPS: readonly {
   { namespace: 'delivery', hint: 'file delivery checks', names: ['verify_file_delivery'] },
   {
     namespace: 'knowledge',
-    hint: 'knowledge base indexing',
-    names: ['index_document', 'remove_indexed_document'],
+    hint: 'knowledge base (recall memories and indexed documents, index, remove)',
+    names: ['recall_knowledge', 'index_document', 'remove_indexed_document'],
+  },
+  /**
+   * Reading and tidying memories. Saving stays sent — "remember this" is common, and a real-model comparison
+   * showed the load round costing more than the schema — but reading, listing, forgetting and restoring were
+   * never called in the 16 sessions sampled for this change, and with recall they were a quarter of every request.
+   */
+  {
+    namespace: 'memory',
+    hint: 'saved memories (read, list, forget, restore; save_memory is always available)',
+    names: ['read_memory', 'list_memories', 'forget_memory', 'restore_memory'],
   },
   { namespace: 'web', hint: 'web', names: ['web_search', 'web_fetch'] },
   {
@@ -89,12 +99,13 @@ export const DEFERRED_GROUPS: readonly {
   },
   /**
    * The rarer file operations. `edit_file` and `write_file` cover almost every change, so a patch, a multi-edit,
-   * a delete or a move pays one load round instead of four schemas on every request.
+   * a delete or a move pays one load round instead of four schemas on every request. The repository map joins
+   * them: `search_files` and `read_file` answer what it does, and it was never called in the sessions sampled.
    */
   {
     namespace: 'files',
-    hint: 'more file operations (unified-diff patch, multi-edit, delete, move)',
-    names: ['apply_patch', 'batch_edit', 'delete_file', 'move_file'],
+    hint: 'more file operations (unified-diff patch, multi-edit, delete, move, repository map)',
+    names: ['apply_patch', 'batch_edit', 'delete_file', 'move_file', 'repo_map'],
   },
   // Manifest-driven validation and stdin to a managed command: `run_command` covers the common case of both.
   {

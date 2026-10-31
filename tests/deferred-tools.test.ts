@@ -92,7 +92,8 @@ test('a deferred catalog holds back the listed subsystems and names them in load
   const held = full.filter((spec) => DEFERRED_TOOLS.has(spec.name));
   assert.ok(held.length > 20, 'the empty workspace registers the deferred subsystems');
   for (const spec of held) assert.ok(!sentNames.includes(spec.name), spec.name);
-  // Memory is always sent: a plain "remember this" reaches it, and a load would cost a whole extra round.
+  // Saving a memory is always sent: a plain "remember this" reaches it, and a load would cost a whole extra round.
+  // Reading, listing, forgetting, restoring and recall wait for a load: none was called in the sampled sessions.
   for (const name of [
     'read_file',
     'edit_file',
@@ -100,12 +101,23 @@ test('a deferred catalog holds back the listed subsystems and names them in load
     'search_files',
     'git_diff',
     'save_memory',
-    'list_memories',
-    'read_memory',
-    'recall_knowledge',
-    'forget_memory',
   ])
     assert.ok(sentNames.includes(name), name);
+  for (const name of [
+    'list_memories',
+    'read_memory',
+    'forget_memory',
+    'restore_memory',
+    'recall_knowledge',
+    'repo_map',
+  ])
+    assert.ok(!sentNames.includes(name), name);
+  assert.deepEqual([...DEFERRED_NAMESPACES.get('memory')!].sort(), [
+    'forget_memory',
+    'list_memories',
+    'read_memory',
+    'restore_memory',
+  ]);
   const loader = sent.find((spec) => spec.name === LOAD_TOOLS);
   assert.ok(loader);
   const listed = new Set(loader.description.split(/[\s,:]+/));
