@@ -210,7 +210,9 @@ test(
     const cdp = await app.context().newCDPSession(page);
     await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
     assert.equal(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), true);
+    await row.locator('.project-disclosure').waitFor({ state: 'visible' });
     const target = await row.locator('.project-disclosure').boundingBox();
+    assert.ok(target, 'the expanded workspace disclosure must have a rendered box');
     assert.ok(target.width >= 36 && target.height >= 36);
     assert.equal(
       await row

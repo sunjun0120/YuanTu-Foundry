@@ -258,6 +258,7 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   await page.locator('#open-subagents').click();
   assert.equal(await page.locator('#subagents-popover').isVisible(), true);
   await mkdir(artifactPath('subagents'), { recursive: true });
+  await catalogRows.nth(1).hover();
   await page.screenshot({ path: artifactPath('subagents/catalog.png') });
   await catalogRows.nth(1).click();
   await page.locator('#subagent-transcript').waitFor();

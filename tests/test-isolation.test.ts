@@ -47,6 +47,42 @@ async function fixture(t: test.TestContext) {
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   return root;
 }
+
+test(
+  'macOS desktop fixtures use a mock keychain unless real credentials are explicitly leased',
+  {
+    skip: process.platform !== 'darwin' && 'macOS keychain isolation',
+  },
+  async (t) => {
+    const parent = await fixture(t);
+    for (const resources of [['desktop-ui'], ['desktop-ui', 'os-credentials'], []]) {
+      const isolation = await createIsolation(
+        parent,
+        'electron-keychain.test.ts',
+        resources,
+        process.env,
+      );
+      const result = run(
+        isolation,
+        `
+      import fs from 'node:fs';
+      import path from 'node:path';
+      import {spawn} from 'node:child_process';
+      const executable=path.join(process.env.TMP,'Electron.app/Contents/MacOS/Electron');
+      fs.mkdirSync(path.dirname(executable),{recursive:true});
+      fs.writeFileSync(executable, '#!/bin/sh\\nprintf "%s\\n" "$@"\\n', {mode:0o755});
+      const child=spawn(executable,['fixture.cjs'],{stdio:['ignore','pipe','inherit']});
+      child.stdout.pipe(process.stdout);
+    `,
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(
+        result.stdout.trim().split('\n'),
+        resources.length === 1 ? ['--use-mock-keychain', 'fixture.cjs'] : ['fixture.cjs'],
+      );
+    }
+  },
+);
 function run(isolation: Awaited<ReturnType<typeof createIsolation>>, code: string) {
   return spawnSync(process.execPath, ['--input-type=module', '-e', code], {
     env: isolation.env,
@@ -511,6 +547,55 @@ test(
         const { settleProcesses } = await import(${JSON.stringify(module)});
         const processPath = process.env.TMP + '/failed-proof.ndjson';
         fs.writeFileSync(processPath, JSON.stringify({event:'owner-start',pid:process.pid,started:1,at:2})+'\\n');
+        const settled = await settleProcesses({processPath}, {
+          terminate: () => { throw Error('termination without identity proof'); },
+          timeoutMs: 0,
+        });
+        console.log(JSON.stringify({clean:settled.clean,remaining:settled.remaining,verified:settled.verified,terminated:settled.terminated,pid:process.pid}));
+      `,
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const observed = JSON.parse(result.stdout);
+      assert.deepEqual(observed, {
+        clean: false,
+        remaining: [observed.pid],
+        verified: [],
+        terminated: [],
+        pid: observed.pid,
+      });
+    }
+  },
+);
+
+test(
+  'macOS settlement fails closed when the process identity query fails',
+  { skip: process.platform !== 'darwin' && 'needs macOS process creation identity' },
+  async (t) => {
+    const parent = await fixture(t);
+    const module = new URL(
+      '../scripts/test-isolation/processes.mjs?failed-macos-proof',
+      import.meta.url,
+    ).href;
+    for (const proof of [
+      { status: 1, stdout: 'original-start' },
+      { status: null, stdout: '', error: { code: 'ETIMEDOUT' } },
+      { status: 0, stdout: '' },
+    ]) {
+      const isolation = await createIsolation(
+        parent,
+        'failed-macos-proof.test.ts',
+        [],
+        process.env,
+      );
+      const result = run(
+        isolation,
+        `
+        import childProcess from 'node:child_process';
+        import fs from 'node:fs';
+        childProcess.spawnSync = () => (${JSON.stringify(proof)});
+        const { settleProcesses } = await import(${JSON.stringify(module)});
+        const processPath = process.env.TMP + '/failed-proof.ndjson';
+        fs.writeFileSync(processPath, JSON.stringify({event:'owner-start',pid:process.pid,identity:'original-start'})+'\\n');
         const settled = await settleProcesses({processPath}, {
           terminate: () => { throw Error('termination without identity proof'); },
           timeoutMs: 0,

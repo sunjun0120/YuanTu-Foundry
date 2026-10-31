@@ -479,7 +479,10 @@ test('the protocol refuses a row this build cannot interpret', () => {
 
 test('paths are compared by what they name, not by how they are spelled', () => {
   const base = path.resolve('repo');
-  assert.equal(samePath(base, base.toUpperCase()), process.platform === 'win32');
+  assert.equal(
+    samePath(base, base.toUpperCase()),
+    process.platform === 'win32' || process.platform === 'darwin',
+  );
   assert.equal(samePath(base, path.join(base, '.')), true);
   assert.equal(isWithin(base, path.join(base, 'sub')), true);
   assert.equal(isWithin(base, base), true);

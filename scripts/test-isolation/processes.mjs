@@ -21,6 +21,17 @@ export function windowsSandboxStateDirectory(root) {
 }
 
 function processIdentity(pid) {
+  if (process.platform === 'darwin') {
+    // Use the captured primitive: querying through the installed probe would
+    // recursively try to identify the query process itself.
+    const result = spawnSyncOriginal('/bin/ps', ['-p', String(pid), '-o', 'lstart='], {
+      encoding: 'utf8',
+      env: { LC_ALL: 'C', TZ: 'UTC' },
+      timeout: 5000,
+    });
+    const started = result.stdout?.trim();
+    return result.status === 0 && started ? started : undefined;
+  }
   if (process.platform === 'linux') {
     try {
       return readOriginal(`/proc/${pid}/stat`, 'utf8').split(') ')[1].split(' ')[19];
@@ -108,6 +119,18 @@ export function installProcessProbe(config, violate) {
     const method = childProcess[name];
     childProcess[name] = function (...args) {
       validate(args);
+      // A temporary HOME does not isolate the system Keychain. Electron's
+      // native test switch prevents unsigned fixtures from opening OS dialogs.
+      if (
+        process.platform === 'darwin' &&
+        name === 'spawn' &&
+        config.resources.includes('desktop-ui') &&
+        !config.resources.includes('os-credentials') &&
+        /\.app\/Contents\/MacOS\/Electron$/.test(String(args[0])) &&
+        Array.isArray(args[1]) &&
+        !args[1].includes('--use-mock-keychain')
+      )
+        args[1] = ['--use-mock-keychain', ...args[1]];
       // Normal application children inherit the worker environment. Guest allowlists remain real.
       const started = Date.now();
       return track(Reflect.apply(method, this, args), started);

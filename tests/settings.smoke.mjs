@@ -139,6 +139,7 @@ test(
     page.setDefaultTimeout(8000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator('#open-settings').click();
+    await page.locator('#settings-page').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#settings-page').isVisible(), true);
     assert.equal(await page.locator('.settings-dialog[role="dialog"]').isVisible(), true);
     assert.equal(await page.locator('#chat-page').isVisible(), true);

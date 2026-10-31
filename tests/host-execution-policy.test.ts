@@ -240,7 +240,7 @@ test(
   },
 );
 
-test('the Host selects the visible session policy without changing another session or falling back from an unavailable backend', async (t) => {
+test('the Host keeps session sandbox selections separate and never falls back from an unavailable backend', async (t) => {
   const results: Array<{ is_error?: boolean; content: unknown }> = [];
   const systems: string[] = [];
   const url = await httpFixture(t, (body, response) => {
@@ -286,9 +286,16 @@ test('the Host selects the visible session policy without changing another sessi
   assert.match(JSON.stringify(results[0]?.content), /SESSION_POLICY_COMMAND/);
   assert.match(systems[0]!, /Command environment: host/);
   assert.equal((await client.run(b.id, 'run b')).status, 'completed');
-  assert.equal(results[1]?.is_error, true);
-  assert.doesNotMatch(JSON.stringify(results[1]?.content), /SESSION_POLICY_COMMAND/);
+  if (process.platform === 'darwin') {
+    assert.notEqual(results[1]?.is_error, true);
+    assert.match(JSON.stringify(results[1]?.content), /SESSION_POLICY_COMMAND/);
+  } else {
+    assert.equal(results[1]?.is_error, true);
+    assert.doesNotMatch(JSON.stringify(results[1]?.content), /SESSION_POLICY_COMMAND/);
+  }
   assert.match(systems.at(-1)!, /macOS native Seatbelt/);
+  assert.equal((await client.run(a.id, 'run a again')).status, 'completed');
+  assert.match(systems.at(-1)!, /Command environment: host/);
 });
 
 test(

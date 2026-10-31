@@ -59,7 +59,7 @@ npm.cmd run desktop -- --workspace E:\your-project
 
 Windows 打包后可运行 `npm.cmd run smoke:windows-package`，用独立测试数据验证沙箱开启的窗口启动、工作区与会话恢复及 Host 退出；该命令不执行安装或卸载。构建时只将生成目录设为可继承的 Medium 完整性级别，防止受 Low 标签影响的开发目录产出无法启动的程序。
 
-Windows 自动发布由 [Windows installation 工作流](.github/workflows/windows-package.yml) 执行：推送 `v` 开头的版本标签后，先检查标签与 `package.json` 版本严格一致，再执行测试、打包以及安装、卸载、升级和回滚验证；全部成功后，将安装包和 SHA-256 校验清单发布到 [GitHub Releases](https://github.com/sunjun0120/YuanTu-Foundry/releases)。普通代码提交不触发此打包流程；在 Actions 页面手动运行只生成构建产物，不发布 Release。
+Windows/macOS 自动发布由 [Desktop releases 工作流](.github/workflows/windows-package.yml) 执行：每次推送 `main` 后，测试与打包成功会发布一个独立的预发布版（标签格式 `v<版本>-preview.<运行编号>.<重试编号>`）；推送与 `package.json` 版本严格一致的 `v*` 标签则发布正式版。Windows 保留安装、卸载、升级和回滚验证，macOS 在 Apple Silicon 与 Intel runner 上分别验证原生沙箱并构建 DMG/ZIP。全部成功后，Windows x64 安装包、macOS arm64/x64 安装包和 `SHA256SUMS.txt` 一起发布到 [GitHub Releases](https://github.com/sunjun0120/YuanTu-Foundry/releases)。预发布版绑定本次推送的提交，不设为 Latest；在 Actions 页面手动运行只生成构建产物，不发布 Release。macOS 当前产物未签名、未公证，Apple 签名及公证仍需单独配置。
 
 合入并推送需要发布的代码（首次包含上述工作流修改）后，以下以发布 `0.1.1` 为例。在干净的工作区执行：
 
@@ -72,7 +72,7 @@ git tag v0.1.1
 git push origin v0.1.1
 ```
 
-发布成功后，用户进入 Releases，在对应版本的 Assets 中下载 `YuanTu-Agent-<版本>-windows-x64-setup.exe` 即可安装，无需下载源码或自行编译。当前自动发行沿用升级验证的要求，仅接受 `主版本.次版本.修订号` 格式的稳定版本（如 `0.1.1`）。已有 Release 不会被流程覆盖；若发布中断留下草稿，需先检查并处理该草稿后再重跑发布任务。公开仓库可供所有人下载，私有仓库仍要求下载者具有访问权限。
+发布成功后，用户进入 Releases，在对应版本的 Assets 中下载 Windows 的 `YuanTu-Agent-<版本>-windows-x64-setup.exe`，或按 Mac 芯片选择 `YuanTu-Agent-<版本>-macos-arm64.dmg`（Apple Silicon）/`YuanTu-Agent-<版本>-macos-x64.dmg`（Intel），也可下载对应 ZIP；无需下载源码或自行编译。预发布版中的安装包版本仍取自 `package.json`，预发布标签用于区分不同提交。当前自动发行沿用升级验证的要求，仅接受 `主版本.次版本.修订号` 格式的稳定版本（如 `0.1.1`）。已有 Release 不会被流程覆盖；若发布中断留下草稿，需先检查并处理该草稿后再重跑发布任务。公开仓库可供所有人下载，私有仓库仍要求下载者具有访问权限。
 
 ---
 
