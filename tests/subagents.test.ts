@@ -14,6 +14,7 @@ import {
   type SubAgentOptions,
 } from '../packages/core/subagents/delegation.ts';
 import { CHILD_DENIED_TOOLS } from '../packages/core/subagents/contract.ts';
+import { scopeAllowlist } from '../packages/protocol/tool-families.ts';
 import {
   SUBAGENT_CAPABILITIES,
   SubAgentProviderRegistry,
@@ -1090,6 +1091,7 @@ test('a sub-agent answers through a structured report, and the tool never leaks 
 
 test('an explore child cannot reach tools that manage its parent resources', async (t) => {
   let childTools: string[] = [];
+  let childCatalog = '';
   let refusal = '';
   const provider: Provider = {
     async complete(request) {
@@ -1122,15 +1124,25 @@ test('an explore child cannot reach tools that manage its parent resources', asy
   assert.equal(childTools.includes('job_kill'), false);
   assert.match(refusal, /"job_kill" is not available in this run/);
   assert.match(refusal, /excluded by a restriction/);
-  // Every allowlisted name must exist and be permission-free, or the list has rotted.
-  const readOnlyNames = tools.specs({ readOnly: true }).map((tool) => tool.name);
+  // Every allowlisted tool and action must exist and be permission-free, or the list has rotted. Entries are read
+  // the way the registry reads them: `lsp.hover` is the `hover` action of `lsp`.
+  const readOnly = tools.specs({ readOnly: true });
+  const readOnlyNames = readOnly.map((tool) => tool.name);
   const registered = new Set(tools.specs().map((tool) => tool.name));
-  for (const name of EXPLORE_TOOLS) {
+  const scoped = scopeAllowlist(EXPLORE_TOOLS);
+  for (const name of scoped.tools) {
     assert.ok(registered.has(name), `explore allowlist names an unknown tool: ${name}`);
     assert.ok(readOnlyNames.includes(name), `${name} must be readable without a permission`);
   }
+  for (const [name, actions] of scoped.actions) {
+    const schema = readOnly.find((tool) => tool.name === name)!.inputSchema as {
+      properties: { action: { enum: string[] } };
+    };
+    for (const action of actions)
+      assert.ok(schema.properties.action.enum.includes(action), `${name} has no action ${action}`);
+  }
   // The trimming has to be real: the allowlist is smaller than what read-only already left.
-  assert.ok(EXPLORE_TOOLS.length < readOnlyNames.length);
+  assert.ok(scoped.tools.length < readOnlyNames.length);
   // A write-capable child keeps the broader surface, since its job is to act.
   const { session: generalSession, agent: generalAgent } = await fixture(t, {
     async complete(request) {
@@ -1140,6 +1152,7 @@ test('an explore child cannot reach tools that manage its parent resources', asy
         return reply(toolResults(request));
       }
       childTools = request.tools.map((tool) => tool.name);
+      childCatalog = request.tools.find((tool) => tool.name === 'load_tools')?.description ?? '';
       return reply('child report');
     },
   });
@@ -1148,8 +1161,9 @@ test('an explore child cannot reach tools that manage its parent resources', asy
   // But not to memory: a child reads the delegator's memories and reports what it learned instead.
   for (const name of CHILD_DENIED_TOOLS)
     assert.equal(childTools.includes(name), false, `${name} reached a child`);
-  assert.ok(childTools.includes('read_memory'));
-  assert.ok(childTools.includes('list_memories'));
+  // Reading memories waits for a load, like every deferred tool; the child is offered it in the catalogue.
+  assert.match(childCatalog, /read_memory/);
+  assert.match(childCatalog, /list_memories/);
 });
 
 test('a child that calls a memory write is refused, not quietly allowed', async (t) => {

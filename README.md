@@ -245,17 +245,22 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 
 ### 语言服务器
 
-| 工具                                              | 行为                                               | 审批 |
-| ------------------------------------------------- | -------------------------------------------------- | ---- |
-| `lsp_servers`                                     | 列出已配置的服务器、可执行文件是否可用及运行状态   | —    |
-| `lsp_start`                                       | 通过 host 或 Windows 执行后端启动语言服务器        | 命令 |
-| `lsp_stop`                                        | 停止服务器并释放进程                               | —    |
-| `lsp_diagnostics`                                 | 返回诊断；给定路径会同步该文件并等待其发布         | —    |
-| `lsp_definition` / `lsp_references` / `lsp_hover` | 跳转定义 / 查找引用 / 类型签名与文档               | —    |
-| `lsp_symbols` / `lsp_workspace_symbols`           | 单文件符号 / 全工作区按名检索                      | —    |
-| `lsp_rename`                                      | 重命名符号，跨文件原子写入并记入文件日志           | 写入 |
-| `lsp_code_action`                                 | 列出该位置的快速修复/重构/源操作，带编号与可应用性 | —    |
-| `lsp_apply_code_action`                           | 按编号应用代码操作，跨文件原子写入并记入文件日志   | 写入 |
+| 工具        | 行为                                                                                                                                                                                                                                                                                                                                                                                              | 审批 |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| `lsp`       | 按 `action` 执行：`diagnostics`（返回诊断；给定路径会同步该文件并等待其发布）、`definition` / `references` / `hover`（跳转定义 / 查找引用 / 类型签名与文档）、`symbols` / `workspace_symbols`（单文件符号 / 全工作区按名检索）、`code_actions`（列出该位置的快速修复、重构与源操作，带编号与可应用性）、`servers`（已配置的服务器、可执行文件是否可用及运行状态）、`stop`（停止服务器并释放进程） | —    |
+| `lsp_start` | 通过 host 或 Windows 执行后端启动语言服务器                                                                                                                                                                                                                                                                                                                                                       | 命令 |
+| `lsp_edit`  | 按 `action` 执行：`rename`（重命名符号）、`apply_code_action`（按编号应用 `code_actions` 列出的操作）；都跨文件原子写入并记入文件日志                                                                                                                                                                                                                                                             | 写入 |
+
+`lsp` 和 `lsp_edit` 的参数平铺在一层，各操作需要的参数在执行前按原来的规则校验，缺了会说明缺什么。只读子代理的 `lsp` 只有查询操作，没有 `servers` 和 `stop`，因为它们管的是父运行的服务器。
+
+**旧工具名**：这三个工具取代了原来的 12 个 LSP 工具。旧名在一个版本内照旧能用：直接调用、`load_tools` 点名、权限策略里的 `tool`、`YUANTU_TOOL_ALLOWLIST` 的条目和钩子 matcher 都会把旧名读成"新工具 + 对应的 `action`"，并且只代表那一个操作，不会扩大到整个工具。历史会话里旧名的工具调用在发给模型前改写成新名，推理内容原样保留。对照：
+
+| 旧名                                                                                                       | 现在                                                   |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `lsp_diagnostics`、`lsp_definition`、`lsp_references`、`lsp_hover`、`lsp_symbols`、`lsp_workspace_symbols` | `lsp`，`action` 为去掉 `lsp_` 前缀的名字               |
+| `lsp_code_action`                                                                                          | `lsp`，`action: "code_actions"`                        |
+| `lsp_servers`、`lsp_stop`                                                                                  | `lsp`，`action: "servers"` / `"stop"`                  |
+| `lsp_rename`、`lsp_apply_code_action`                                                                      | `lsp_edit`，`action: "rename"` / `"apply_code_action"` |
 
 内置四种语言的服务器定义，`.yuantu/lsp.json` 可按语言覆盖 `command`/`args`/`extensions`/`env`/`install`/`notes`/`disabled`，未声明的字段继承内置：
 
@@ -317,6 +322,12 @@ Word、Excel、PowerPoint 文件没有专用工具：有合适的技能（工作
 内置分析服务的正式地址尚未配置；当前防替换句柄实现只支持 Windows：其他平台不注册源码上传与报告下载工具（仍可用 GitHub 仓库地址分析），桌面端也会拒绝暂存源码包。
 
 因此「这次运行到底有哪些工具」取决于装配结果，而不是一个固定清单；发出去的 schema 就是这次运行能用的工具。
+
+### 按需加载
+
+首个请求只带常用工具，其余工具按 namespace 分组，由 `load_tools` 加载：`lsp`、`browser`、`terminal`、`git`、`files`、`memory`、`knowledge`、`web`、`validation`、`jobs`、`delivery`、`sessions`、`goal`。`load_tools` 的描述里，每个 namespace 一行，写明提示和组内工具名；加载有三种写法：`names`（工具名）、`namespace`（整组）、`query`（关键词，同时匹配工具名、namespace、组提示，以及合并工具的操作名和旧名）。加载结果给每个工具附一句用途。按需加载的工具也可以不经加载直接调用。
+
+记忆工具里只有 `save_memory` 首轮就发，"记住这个"很常见；读取、列出、遗忘、恢复记忆（`memory`）以及 `recall_knowledge`（`knowledge`）、`repo_map`（`files`）改为按需加载。`scripts/deferred-tool-usage.mjs` 统计真实会话里每个按需加载工具的加载、调用和未加载直接调用的次数，以及加载失败和调用未知工具的次数，用来调整哪些工具该首轮就发。
 
 ---
 
@@ -402,7 +413,7 @@ Windows 包内运行时使用 Node 官方 `win-x64` 发行版，版本、压缩�
 
 ### 外部钩子桥
 
-工作区里的命令钩子走另一条路：`.claude/settings.json` 与 `.yuantu/hooks.json` 被读成上面管线里的普通钩子，因此顺序、超时与可撤销性自动一致。退出码就是契约：`0` 放行、`2` 拒绝（stderr 是理由）、**其他非零码是「钩子坏了」而不是「拒绝」**，只记录不否决。`permissionDecision: 'ask'` 映射为拒绝——这次调用里没有通道能替 hook 去问人。钩子命令通过所选沙箱执行；运行器故障不触发宿主重试。整座桥可用 `YUANTU_HOOK_BRIDGE=0` 关闭。
+工作区里的命令钩子走另一条路：`.claude/settings.json` 与 `.yuantu/hooks.json` 被读成上面管线里的普通钩子，因此顺序、超时与可撤销性自动一致。退出码就是契约：`0` 放行、`2` 拒绝（stderr 是理由）、**其他非零码是「钩子坏了」而不是「拒绝」**，只记录不否决。`permissionDecision: 'ask'` 映射为拒绝——这次调用里没有通道能替 hook 去问人。钩子命令通过所选沙箱执行；运行器故障不触发宿主重试。整座桥可用 `YUANTU_HOOK_BRIDGE=0` 关闭。合并工具（`lsp`、`lsp_edit`）的 payload 另带 `tool_action`；matcher 写旧工具名（如 `lsp_hover`）时，只在对应的操作上触发。
 
 **钩子只在工作区被信任后才安装。** 声明来自仓库，打开一个克隆来的仓库并发出第一条消息不应就执行其中的 `SessionStart`、`UserPromptSubmit` 等命令（默认原生沙箱在 Windows 上虽然断网，但仍能读取其他磁盘上对普通用户可读的文件）。信任记录按工作区保存为全部声明（来源文件、事件、matcher、命令，按声明顺序）以及命令中引用的工作区内已存在常规文件内容哈希（按 token 出现顺序）的 SHA-256 摘要，存放在用户状态目录的 `hook-trust.json`（默认 `~/.yuantu/hook-trust.json`，随 `YUANTU_STATE_DIR` 移动），从不写入工作区；状态目录落在工作区内时拒绝记录、也不认可其中的记录。只有当前摘要与记录一致时 Host 才安装钩子；任何一处命令、matcher、事件、来源文件或被引用文件内容变化都会使信任失效（超时秒数不计入摘要）。文件读取失败或超过 4 MiB 时拒绝信任，不以截断内容代替完整哈希。命令采用支持引号路径的简单分词，不展开变量，也不递归追踪脚本导入。
 
@@ -723,7 +734,7 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 | `YUANTU_LSP_AFTER_EDIT` | `0` / `1` | 编辑后是否附加诊断 |
 | `YUANTU_GIT_EXCLUDE` | `0` / `1` | 是否把工作区 .yuantu 的运行期状态写入仓库的 .git/info/exclude（缺省开启） |
 | `YUANTU_SUBAGENTS` | `0` / `1` | 是否启用子代理委派 |
-| `YUANTU_TOOL_ALLOWLIST` | `string` | 只提供这些工具（逗号分隔的工具名；不在列表里的工具既不展示也不能调用）。缺省不限制 |
+| `YUANTU_TOOL_ALLOWLIST` | `string` | 只提供这些工具（逗号分隔；不在列表里的工具既不展示也不能调用）。条目可以是工具名、`工具.action`（如 `lsp.hover`，只放开该操作）或旧工具名（只放开它原来的那个操作）。缺省不限制 |
 | `YUANTU_SUBAGENT_CONCURRENCY` | `1–16` | 子代理并发上限 |
 | `YUANTU_WORKSPACE_RETENTION_DAYS` | `1–3650` | 已移除的隔离工作区保留天数；超过后在 Host 启动时彻底清除（不可再恢复）。缺省不清除 |
 | `YUANTU_SUBAGENT_WORKSPACE` | `auto` / `shared` / `worktree` | 子代理执行目录：auto 自动隔离（默认），shared 沿用委派者目录（旧行为，不做隔离），worktree 连只读子代理也隔离 |
@@ -765,14 +776,14 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 66 个 / 36.1 KB | `createTools().specs()` |
-| 工具（只读运行） | 35 个 / 18.6 KB | `specs({ readOnly: true })` |
-| 工具（默认按需加载，首个请求） | 26 个 / 18.6 KB | `specs({ loaded: new Set() })` |
+| 工具（空工作区，全部） | 57 个 / 33.9 KB | `createTools().specs()` |
+| 工具（只读运行） | 27 个 / 16.6 KB | `specs({ readOnly: true })` |
+| 工具（默认按需加载，首个请求） | 20 个 / 15.2 KB | `specs({ loaded: new Set() })` |
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 59 / 54 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 24 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 354 个 | `tests/*.test.ts` |
+| 行为测试文件 | 356 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |

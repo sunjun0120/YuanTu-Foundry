@@ -6,6 +6,31 @@ import { compileToolSchema, toolSchemaErrorsText, type ToolRegistry } from './re
 
 type Properties = Record<string, Record<string, unknown>>;
 
+const sentences = (text: string): string[] =>
+  text
+    .split(/(?<=\.)\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+/**
+ * The summary, the sentences several members share (said once), then one line per action with what is its own.
+ *
+ * The members were written to stand alone, so each repeats what they have in common — how a position is counted,
+ * how an edit is journalled. Joined as they were, the shared sentences were most of the family's description.
+ */
+function familyDescription(summary: string, members: ReadonlyMap<string, Tool>): string {
+  const counts = new Map<string, number>();
+  for (const member of members.values())
+    for (const sentence of new Set(sentences(member.description)))
+      counts.set(sentence, (counts.get(sentence) ?? 0) + 1);
+  const shared = [...counts].filter(([, count]) => count > 1).map(([sentence]) => sentence);
+  const lines = [...members].map(([action, member]) => {
+    const own = sentences(member.description).filter((sentence) => !shared.includes(sentence));
+    return `- ${action}: ${own.join(' ')}`;
+  });
+  return [[summary, ...shared].join(' '), ...lines].join('\n');
+}
+
 /**
  * One tool for a family of tools, told apart by `action`.
  *
@@ -75,10 +100,7 @@ export function composeFamily(
   const effect = effects.size === 1 ? [...effects][0] : undefined;
   return {
     name: family.name,
-    description:
-      summary +
-      '\n' +
-      actions.map((action) => `- ${action}: ${members.get(action)!.description}`).join('\n'),
+    description: familyDescription(summary, members),
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -130,9 +152,7 @@ export function composeFamily(
 
 /** One line per family, in front of the per-action lines `composeFamily` adds. */
 export const FAMILY_SUMMARIES: Readonly<Record<string, string>> = {
-  lsp:
-    'Ask a language server about code: diagnostics, definitions, references, hover, symbols and the code actions ' +
-    'offered at a position; also list running servers or stop one. Start a server with lsp_start first.',
+  lsp: 'Language server queries and server management. Start a server with lsp_start first.',
   lsp_edit:
     'Apply a language server edit: rename a symbol, or apply a code action listed by lsp (action "code_actions").',
 };

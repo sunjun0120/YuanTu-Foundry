@@ -430,7 +430,7 @@ export const ENVIRONMENT = {
   YUANTU_TOOL_ALLOWLIST: {
     kind: 'string',
     description:
-      '只提供这些工具（逗号分隔的工具名；不在列表里的工具既不展示也不能调用）。缺省不限制',
+      '只提供这些工具（逗号分隔；不在列表里的工具既不展示也不能调用）。条目可以是工具名、`工具.action`（如 `lsp.hover`，只放开该操作）或旧工具名（只放开它原来的那个操作）。缺省不限制',
   },
   YUANTU_SUBAGENT_CONCURRENCY: { kind: 'number', range: [1, 16], description: '子代理并发上限' },
   YUANTU_WORKSPACE_RETENTION_DAYS: {

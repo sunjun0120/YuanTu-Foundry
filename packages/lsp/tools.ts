@@ -119,7 +119,7 @@ export function lspTools(
     {
       name: 'lsp_servers',
       description:
-        'List the configured language servers for this workspace with their command, file extensions, whether the executable was found in node_modules/.bin or on PATH, and whether a server is currently running. available only means the command was found; it is not proof the server starts.',
+        'List configured servers: command, extensions, whether the executable was found and whether it runs. available means only that the command was found, not that the server starts.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       async execute() {
         const status = await manager.status();
@@ -159,7 +159,7 @@ export function lspTools(
     {
       name: 'lsp_diagnostics',
       description:
-        'Return current compiler or linter diagnostics from a running language server. Pass paths to synchronise and wait for those files, or omit paths to report every diagnostic the running servers have published so far.',
+        'Current compiler or linter diagnostics. Pass paths to synchronise and wait for those files; omit them for everything published so far.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -291,7 +291,7 @@ export function lspTools(
     },
     {
       name: 'lsp_hover',
-      description: `Return the type signature or documentation the language server reports for a position. ${POSITION_NOTE}`,
+      description: `The type signature or documentation at a position. ${POSITION_NOTE}`,
       inputSchema: {
         type: 'object',
         properties: positionProperties,
@@ -311,8 +311,7 @@ export function lspTools(
     },
     {
       name: 'lsp_symbols',
-      description:
-        'List the symbols declared in one file, with 1-based positions and their kind, as reported by the language server.',
+      description: 'List the symbols declared in one file, with 1-based positions and their kind.',
       inputSchema: {
         type: 'object',
         properties: { path: pathSchema },
@@ -364,7 +363,7 @@ export function lspTools(
     },
     {
       name: 'lsp_code_action',
-      description: `List the code actions the language server offers at a position: quick fixes for the diagnostics there, plus refactors and source actions. Each is numbered; apply one with lsp_edit (action "apply_code_action"). Actions marked command-only cannot be applied because running server commands is not supported. ${POSITION_NOTE}`,
+      description: `Quick fixes, refactors and source actions at a position, numbered; apply one with lsp_edit (action "apply_code_action"). Command-only actions cannot be applied. ${POSITION_NOTE}`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -432,7 +431,7 @@ export function lspTools(
     {
       name: 'lsp_workspace_symbols',
       description:
-        'Search for code symbols by name across the whole workspace using a running language server. More precise than text search for functions, classes and types. Pass language when more than one server is running.',
+        'Find symbols by name across the workspace; more precise than text search for functions, classes and types. Pass language when more than one server is running.',
       inputSchema: {
         type: 'object',
         properties: {
