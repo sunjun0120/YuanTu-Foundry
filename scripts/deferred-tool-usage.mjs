@@ -36,7 +36,9 @@ try {
   if (json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
-    console.log(`${report.sessions} sessions, ${report.loadCalls} load_tools calls`);
+    console.log(
+      `${report.sessions} sessions, ${report.loadCalls} load_tools calls (${report.loadMisses} missed), ${report.unknownCalls} calls to unknown tools`,
+    );
     console.log('sessions  loads  calls  direct  tool');
     for (const tool of report.tools)
       console.log(

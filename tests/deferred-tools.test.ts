@@ -610,3 +610,50 @@ test('a keyword search also matches namespace keys', () => {
   assert.ok(matchDeferredTools('validation', DEFERRED_TOOLS).includes('run_validation'));
   assert.ok(matchDeferredTools('delivery', DEFERRED_TOOLS).includes('verify_file_delivery'));
 });
+
+test('usage counts a namespace load, and counts loads and calls that missed', () => {
+  const usage = deferredToolUsage([
+    [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'l1', name: LOAD_TOOLS, arguments: { namespace: ['web'] } }],
+      },
+      { role: 'tool', toolCallId: 'l1', content: 'Loaded web_search, web_fetch', isError: false },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'f', name: 'web_fetch', arguments: { url: 'https://x' } }],
+      },
+      { role: 'tool', toolCallId: 'f', content: 'ok', isError: false },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'l2', name: LOAD_TOOLS, arguments: { query: 'zzzz' } }],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'l2',
+        content: 'No loadable tool matches "zzzz".',
+        isError: true,
+      },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'u', name: 'web_fetcher', arguments: {} }],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'u',
+        content: 'Unknown tool: web_fetcher. Did you mean: web_fetch?',
+        isError: true,
+      },
+    ],
+  ]);
+  const fetch = usage.tools.find((tool) => tool.name === 'web_fetch')!;
+  assert.equal(fetch.loads, 1);
+  assert.equal(fetch.direct, 0);
+  assert.equal(usage.loadCalls, 2);
+  assert.equal(usage.loadMisses, 1);
+  assert.equal(usage.unknownCalls, 1);
+});

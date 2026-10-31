@@ -403,7 +403,15 @@ export interface DeferredToolUsage {
 export function deferredToolUsage(
   transcripts: Iterable<readonly Message[]>,
   deferrable: ReadonlySet<string> = DEFERRED_TOOLS,
-): { sessions: number; loadCalls: number; tools: DeferredToolUsage[] } {
+): {
+  sessions: number;
+  loadCalls: number;
+  /** `load_tools` calls whose result was an error: nothing they asked for could be loaded. */
+  loadMisses: number;
+  /** Calls answered "Unknown tool": a name the model guessed rather than found. */
+  unknownCalls: number;
+  tools: DeferredToolUsage[];
+} {
   const usage = new Map<string, DeferredToolUsage>();
   const entry = (name: string) => {
     let found = usage.get(name);
@@ -412,19 +420,27 @@ export function deferredToolUsage(
   };
   let sessions = 0;
   let loadCalls = 0;
+  let loadMisses = 0;
+  let unknownCalls = 0;
   for (const messages of transcripts) {
     sessions++;
     const loaded = new Set<string>();
     const touched = new Set<string>();
+    const results = new Map<string, { content: string; isError: boolean }>();
+    for (const message of messages)
+      if (message.role === 'tool') results.set(message.toolCallId, message);
     for (const message of messages) {
       if (message.role !== 'assistant') continue;
       for (const call of message.toolCalls) {
+        const result = results.get(call.id);
         if (call.name === LOAD_TOOLS) {
           loadCalls++;
+          if (result?.isError) loadMisses++;
           const query = call.arguments?.query;
           const names = new Set([
             ...(Array.isArray(call.arguments?.names) ? (call.arguments.names as unknown[]) : []),
             ...(typeof query === 'string' ? matchDeferredTools(query, deferrable) : []),
+            ...namespaceTools(call.arguments?.namespace),
           ]);
           for (const name of names) {
             if (typeof name !== 'string' || !deferrable.has(name)) continue;
@@ -434,6 +450,7 @@ export function deferredToolUsage(
           }
           continue;
         }
+        if (result?.isError && result.content.startsWith('Unknown tool:')) unknownCalls++;
         if (!deferrable.has(call.name)) continue;
         const found = entry(call.name);
         found.calls++;
@@ -447,5 +464,5 @@ export function deferredToolUsage(
   const tools = [...usage.values()].sort(
     (a, b) => b.sessions - a.sessions || b.calls - a.calls || a.name.localeCompare(b.name),
   );
-  return { sessions, loadCalls, tools };
+  return { sessions, loadCalls, loadMisses, unknownCalls, tools };
 }
