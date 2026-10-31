@@ -204,7 +204,7 @@ const MAX_QUERY_MATCHES = 8;
  * The deferred tools a keyword query names, best first.
  *
  * A word counts twice in a tool's name or its group's namespace and once in the group's hint, so "rename" finds
- * `lsp_rename` ahead of the rest of the language-server group, and "browser" loads the browser tools a hint alone
+ * `lsp_edit` (its action `rename`) ahead of the rest of the language-server group, and "browser" loads the browser tools a hint alone
  * could not tell apart.
  * Ties go by name rather than by the set's order, which is what keeps the answer the same for any caller holding
  * the same names.

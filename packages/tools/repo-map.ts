@@ -364,7 +364,9 @@ export function formatRepoMap(map: RepoMap, budgetChars = REPO_MAP_PROMPT_BUDGET
   const clipped = text.length < pathsOnly.length || withSymbols.length > budgetChars;
   const lines = text.split('\n');
   if (clipped && pathsOnly.length > budgetChars) lines.pop();
-  return lines.join('\n') + '\n[outline trimmed; use repo_map or lsp_symbols for detail]';
+  return (
+    lines.join('\n') + '\n[outline trimmed; use repo_map or lsp (action "symbols") for detail]'
+  );
 }
 /**
  * The outline as the conversation is told it, cached per workspace.

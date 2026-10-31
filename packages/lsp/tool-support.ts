@@ -524,7 +524,7 @@ export async function prepareApplyCodeAction(
 ): Promise<PreparedTool> {
   const index = Number(args.index);
   if (!Number.isSafeInteger(index) || index < 1)
-    throw new Error('index must be the 1-based number reported by lsp_code_action');
+    throw new Error('index must be the 1-based number reported by lsp (action "code_actions")');
   const file = await workspace.resolve(String(args.path));
   const client = await requireClient(manager, file);
   context.signal.throwIfAborted();
@@ -534,7 +534,7 @@ export async function prepareApplyCodeAction(
   const action = actions.find((entry) => entry.index === index);
   if (!action)
     throw new Error(
-      `The language server offered ${actions.length} code action(s) here; index ${index} is out of range. Run lsp_code_action again.`,
+      `The language server offered ${actions.length} code action(s) here; index ${index} is out of range. Run lsp with action "code_actions" again.`,
     );
   if (action.disabled) throw new Error(`Code action "${action.title}" is disabled by the server`);
   if (!action.hasEdit)

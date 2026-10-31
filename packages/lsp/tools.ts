@@ -364,7 +364,7 @@ export function lspTools(
     },
     {
       name: 'lsp_code_action',
-      description: `List the code actions the language server offers at a position: quick fixes for the diagnostics there, plus refactors and source actions. Each is numbered; apply one with lsp_apply_code_action. Actions marked command-only cannot be applied because running server commands is not supported. ${POSITION_NOTE}`,
+      description: `List the code actions the language server offers at a position: quick fixes for the diagnostics there, plus refactors and source actions. Each is numbered; apply one with lsp_edit (action "apply_code_action"). Actions marked command-only cannot be applied because running server commands is not supported. ${POSITION_NOTE}`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -411,7 +411,7 @@ export function lspTools(
     {
       name: 'lsp_apply_code_action',
       permission: 'write',
-      description: `Apply one code action listed by lsp_code_action, identified by its number. Every affected file is shown in the approval, written atomically and recorded in the file journal so it can be undone. Actions that only carry a server command are refused. ${POSITION_NOTE}`,
+      description: `Apply one code action listed by lsp (action "code_actions"), identified by its number. Every affected file is shown in the approval, written atomically and recorded in the file journal so it can be undone. Actions that only carry a server command are refused. ${POSITION_NOTE}`,
       inputSchema: {
         type: 'object',
         properties: {
