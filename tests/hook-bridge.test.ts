@@ -701,3 +701,23 @@ test('the trust record lives in the user state directory, never in the workspace
   assert.equal(planted.trusted, false, 'a record planted inside the workspace is not honoured');
   assert.equal(planted.trusted === false && planted.reason, 'unavailable');
 });
+
+test('a matcher for an old language server name matches that action of lsp only', async (t) => {
+  const { tools, seen } = await fixture(t, (root) => preToolUse(root, 'hook.mjs', 'lsp_hover'), {
+    'hook.mjs': SCRIPTS.blocking,
+  });
+  const hover = await tools.execute(
+    { id: 'h', name: 'lsp', arguments: { action: 'hover', path: 'a.ts', line: 1, character: 1 } },
+    context(),
+  );
+  assert.equal(hover.isError, true);
+  assert.match(hover.content, /Operation denied by guard/);
+  const payload = (await seen())[0]!;
+  assert.equal(payload.tool_name, 'lsp');
+  assert.equal(payload.tool_action, 'hover');
+  const servers = await tools.execute(
+    { id: 's', name: 'lsp', arguments: { action: 'servers' } },
+    context(),
+  );
+  assert.doesNotMatch(servers.content, /Operation denied by guard/);
+});

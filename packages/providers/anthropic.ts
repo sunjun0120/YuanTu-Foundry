@@ -1,3 +1,4 @@
+import { currentNativeOutput, currentToolCalls } from './tool-history.ts';
 import type {
   Message,
   ModelRequest,
@@ -50,7 +51,7 @@ function serialize(
     const role = message.role === 'assistant' ? 'assistant' : 'user';
     const content: Record<string, unknown>[] = [];
     const replay = route ? nativeState(message, route) : undefined;
-    if (replay) content.push(...structuredClone(replay.output));
+    if (replay) content.push(...structuredClone(currentNativeOutput(replay)));
     else if (message.role === 'tool') {
       /**
        * A tool result carries its pictures *inside* the result, which is the one shape Anthropic supports
@@ -81,7 +82,7 @@ function serialize(
             source: { type: 'base64', media_type: image.mimeType, data: image.data },
           });
       if (message.role === 'assistant')
-        for (const call of message.toolCalls)
+        for (const call of currentToolCalls(message.toolCalls))
           content.push({ type: 'tool_use', id: call.id, name: call.name, input: call.arguments });
     }
     if (!content.length) continue;

@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
+import { TOOL_ALIASES } from './tool-families.ts';
 import type { Approval } from './index.ts';
 import type {
   PermissionDecision,
@@ -106,6 +107,19 @@ function matches(
     return globMatches(tokens, folded) || globMatches(tokens, normalizedPath(folded));
   });
 }
+/**
+ * A rule written for a tool name a family replaced (`./tool-families.ts`), read as the one action that tool was.
+ *
+ * The old tool did one thing, so its rule is narrowed to that action — never widened to the family. No family keeps
+ * an old member's name, so a rule for a current name is never touched here.
+ */
+function currentToolRule(rule: PermissionRule): PermissionRule {
+  const alias = rule.tool === undefined ? undefined : TOOL_ALIASES.get(rule.tool);
+  if (!alias) return rule;
+  return rule.arguments
+    ? { ...rule, tool: alias.tool, arguments: { action: alias.action, ...rule.arguments } }
+    : { ...rule, tool: alias.tool, match: { ...(rule.match ?? {}), action: alias.action } };
+}
 export class PermissionPolicy implements PermissionPolicyView {
   private rules: PermissionRule[];
   private compiled: (CompiledMatch | undefined)[];
@@ -151,7 +165,7 @@ export class PermissionPolicy implements PermissionPolicyView {
       )
         throw new Error('Invalid permission rule');
     }
-    this.rules = structuredClone(input.rules) as PermissionRule[];
+    this.rules = (structuredClone(input.rules) as PermissionRule[]).map(currentToolRule);
     this.compiled = this.rules.map(compileMatch);
   }
   toJSON(): PermissionPolicySource {

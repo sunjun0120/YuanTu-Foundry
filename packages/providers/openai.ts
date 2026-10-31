@@ -1,3 +1,4 @@
+import { currentNativeOutput, currentToolCalls } from './tool-history.ts';
 import type { ModelRequest, ModelResponse, Provider, ToolCall } from '../protocol/index.ts';
 import type { ProviderConfig } from './config.ts';
 import { assertUsableCredential } from './credentials.ts';
@@ -140,7 +141,7 @@ export class OpenAIProvider implements Provider {
               ...(prompt.updates.has(index)
                 ? [{ role: 'system', content: prompt.updates.get(index) }]
                 : []),
-              ...structuredClone(replay.output),
+              ...structuredClone(currentNativeOutput(replay)),
             ];
           return {
             role: 'assistant',
@@ -150,7 +151,7 @@ export class OpenAIProvider implements Provider {
             ...(capabilities.reasoning ? { reasoning_content: '' } : {}),
             ...(message.toolCalls.length
               ? {
-                  tool_calls: message.toolCalls.map((call) => ({
+                  tool_calls: currentToolCalls(message.toolCalls).map((call) => ({
                     id: call.id,
                     type: 'function',
                     function: { name: call.name, arguments: JSON.stringify(call.arguments) },

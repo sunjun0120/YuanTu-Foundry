@@ -1,3 +1,4 @@
+import { TOOL_FAMILIES, hookSubjects } from '../protocol/tool-families.ts';
 import { spawn } from 'node:child_process';
 import type { HookRegistry, ExtensionHooks } from '../tools/hooks.ts';
 import type { ToolCall, ToolResult } from '../protocol/index.ts';
@@ -228,9 +229,14 @@ function toolPayload(
   workspace: string,
   call: ToolCall,
 ): Record<string, unknown> {
+  const action = TOOL_FAMILIES.some((family) => family.name === call.name)
+    ? call.arguments.action
+    : undefined;
   return basePayload(hookEventName, sessionId ?? '', workspace, {
     tool_name: call.name,
     tool_input: call.arguments,
+    // A family tool (`lsp`) names its operation here, so a hook can branch on it without reading the input.
+    ...(typeof action === 'string' ? { tool_action: action } : {}),
   });
 }
 function withFeedback(result: ToolResult, reason: string): string {
@@ -251,8 +257,14 @@ async function dispatch(
   onFailure: HookFailureReporter,
 ): Promise<Outcome> {
   const context: string[] = [];
+  // A matcher written before a tool family replaced its name (`lsp_hover`) still matches that one action.
+  const action = (payload.tool_input as Record<string, unknown> | undefined)?.action;
+  const subjects =
+    subject === undefined
+      ? [undefined]
+      : hookSubjects(subject, typeof action === 'string' ? action : undefined);
   for (const declaration of declarations) {
-    if (!hookMatcherMatches(declaration.matcher, subject)) continue;
+    if (!subjects.some((name) => hookMatcherMatches(declaration.matcher, name))) continue;
     const verdict = await runCommand(declaration, payload, workspace, signal, onFailure);
     if (verdict.kind === 'block') return { verdict, context };
     if (verdict.kind === 'failed') onFailure(`${declaration.file}: ${verdict.reason}`);

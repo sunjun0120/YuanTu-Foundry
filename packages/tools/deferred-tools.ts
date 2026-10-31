@@ -1,6 +1,9 @@
 import type { Message, Tool } from '../protocol/index.ts';
 import { similarNames } from '../protocol/similar-names.ts';
-import { TOOL_FAMILIES } from '../protocol/tool-families.ts';
+import { TOOL_ALIASES, TOOL_FAMILIES } from '../protocol/tool-families.ts';
+
+/** A tool name as the current catalog has it: a name a family replaced is read as the family. */
+const currentName = (name: string): string => TOOL_ALIASES.get(name)?.tool ?? name;
 
 /**
  * Deferred tool loading: the catalog a request carries is the tools a turn usually needs, plus one `load_tools`
@@ -174,13 +177,15 @@ export function addLoadedTools(
     if (message.role !== 'assistant') continue;
     for (const call of message.toolCalls) {
       if (call.name !== LOAD_TOOLS) {
-        if (deferrable.has(call.name)) loaded.add(call.name);
+        const name = currentName(call.name);
+        if (deferrable.has(name)) loaded.add(name);
         continue;
       }
       const names = call.arguments?.names;
       if (Array.isArray(names))
         for (const name of names)
-          if (typeof name === 'string' && deferrable.has(name)) loaded.add(name);
+          if (typeof name === 'string' && deferrable.has(currentName(name)))
+            loaded.add(currentName(name));
       // A search loads what it matches, and the match is a pure function of the query and the set, so the
       // transcript alone still answers "what is loaded" — the same after a restart as in the run that searched.
       const query = call.arguments?.query;
@@ -335,9 +340,14 @@ export function loadToolsTool(
           isError: true,
           content: `No loadable tool matches "${query}". Pick a name from this tool's list, or try other keywords.`,
         };
+      // A name a family replaced loads the family, and the answer says what to call it from now on.
+      const renamed = ((args.names as string[]) ?? []).flatMap((name) => {
+        const alias = TOOL_ALIASES.get(name);
+        return alias ? [` ${name} is now ${alias.tool} (action: ${alias.action}).`] : [];
+      });
       const names = [
         ...new Set([
-          ...((args.names as string[]) ?? []),
+          ...((args.names as string[]) ?? []).map(currentName),
           ...matched.filter(offers),
           ...fromNamespaces,
         ]),
@@ -376,6 +386,7 @@ export function loadToolsTool(
           already +
           unknown +
           strays +
+          renamed.join('') +
           introductions.join(''),
       };
     },
@@ -438,7 +449,11 @@ export function deferredToolUsage(
           if (result?.isError) loadMisses++;
           const query = call.arguments?.query;
           const names = new Set([
-            ...(Array.isArray(call.arguments?.names) ? (call.arguments.names as unknown[]) : []),
+            ...(Array.isArray(call.arguments?.names)
+              ? (call.arguments.names as unknown[]).map((name) =>
+                  typeof name === 'string' ? currentName(name) : name,
+                )
+              : []),
             ...(typeof query === 'string' ? matchDeferredTools(query, deferrable) : []),
             ...namespaceTools(call.arguments?.namespace),
           ]);
@@ -451,12 +466,13 @@ export function deferredToolUsage(
           continue;
         }
         if (result?.isError && result.content.startsWith('Unknown tool:')) unknownCalls++;
-        if (!deferrable.has(call.name)) continue;
-        const found = entry(call.name);
+        const name = currentName(call.name);
+        if (!deferrable.has(name)) continue;
+        const found = entry(name);
         found.calls++;
-        if (!loaded.has(call.name)) found.direct++;
-        loaded.add(call.name);
-        touched.add(call.name);
+        if (!loaded.has(name)) found.direct++;
+        loaded.add(name);
+        touched.add(name);
       }
     }
     for (const name of touched) entry(name).sessions++;

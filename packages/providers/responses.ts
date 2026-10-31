@@ -1,3 +1,4 @@
+import { currentNativeOutput, currentToolCalls } from './tool-history.ts';
 import type { ModelRequest, ModelResponse, Provider, ToolCall } from '../protocol/index.ts';
 import type { ProviderConfig } from './config.ts';
 import { assertUsableCredential } from './credentials.ts';
@@ -116,12 +117,12 @@ export class ResponsesProvider implements Provider {
           state.model === effectiveModel &&
           state.endpoint === this.endpoint
         ) {
-          input.push(...state.output);
+          input.push(...currentNativeOutput(state));
           continue;
         }
         if (message.content) input.push({ role: 'assistant', content: message.content });
         input.push(
-          ...message.toolCalls.map((call) => ({
+          ...currentToolCalls(message.toolCalls).map((call) => ({
             type: 'function_call',
             call_id: call.id,
             name: call.name,

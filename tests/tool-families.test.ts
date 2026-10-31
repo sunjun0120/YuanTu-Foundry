@@ -267,3 +267,69 @@ test('the language server queries stay queries for the repeated-query guard', ()
   assert.equal(isQueryAction({ name: 'lsp', arguments: { action: 'stop' } }), false);
   assert.equal(isQueryAction({ name: 'lsp', arguments: { action: 'code_actions' } }), false);
 });
+
+import { PermissionPolicy } from '../packages/protocol/permission-policy.ts';
+import {
+  DEFERRED_TOOLS,
+  deferredToolUsage,
+  loadToolsTool,
+  loadedTools,
+  matchDeferredTools,
+} from '../packages/tools/deferred-tools.ts';
+
+const editApproval = (action: string) => ({
+  kind: 'write' as const,
+  description: '',
+  toolCall: {
+    id: 'x',
+    name: 'lsp_edit',
+    arguments: { action, path: 'a.ts', line: 1, character: 1 },
+  },
+});
+
+test('a rule for an old language server name governs only that action', () => {
+  // Precedence is deny > ask > allow, so the fixture holds only the rule under test.
+  const policy = new PermissionPolicy({
+    version: 1,
+    rules: [{ effect: 'allow', tool: 'lsp_rename' }],
+  });
+  assert.equal(policy.decide(editApproval('rename')), 'allow');
+  // Not covered by the old rule: nothing matches, so the policy has no answer and the caller asks.
+  assert.equal(policy.decide(editApproval('apply_code_action')), undefined);
+});
+
+test('a deny written for one old name does not hide the whole tool', () => {
+  const policy = new PermissionPolicy({
+    version: 1,
+    rules: [{ effect: 'deny', tool: 'lsp_rename' }],
+  });
+  assert.equal(policy.deniesEveryCall({ name: 'lsp_edit', permission: 'write' }), false);
+  assert.equal(policy.decide(editApproval('rename')), 'deny');
+  assert.equal(policy.decide(editApproval('apply_code_action')), undefined);
+});
+
+test('load_tools takes an old name, and the transcript and usage read it as the current one', async () => {
+  const loader = loadToolsTool(() => true);
+  const loaded = await loader.execute({ names: ['lsp_hover'] }, { signal } as never);
+  assert.equal(loaded.isError, false);
+  assert.match(loaded.content, /^Loaded lsp;/);
+  assert.match(loaded.content, /lsp_hover is now lsp \(action: hover\)/);
+  const transcript = [
+    {
+      role: 'assistant' as const,
+      content: '',
+      toolCalls: [{ id: 'l', name: 'load_tools', arguments: { names: ['lsp_hover'] } }],
+    },
+    {
+      role: 'assistant' as const,
+      content: '',
+      toolCalls: [{ id: 'h', name: 'lsp_hover', arguments: {} }],
+    },
+  ];
+  assert.deepEqual([...loadedTools(transcript, DEFERRED_TOOLS)], ['lsp']);
+  const usage = deferredToolUsage([transcript]).tools.find((tool) => tool.name === 'lsp')!;
+  assert.equal(usage.loads, 1);
+  assert.equal(usage.calls, 1);
+  assert.equal(usage.direct, 0);
+  assert.equal(matchDeferredTools('hover', DEFERRED_TOOLS)[0], 'lsp');
+});
